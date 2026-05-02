@@ -1,0 +1,18 @@
+{
+  "name": "movie-cover-downloader",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev:web": "pnpm --dir apps/desktop dev",
+    "dev:desktop": "pnpm --dir apps/desktop tauri dev",
+    "build:web": "pnpm --dir apps/desktop build",
+    "build:desktop": "pnpm --dir apps/desktop tauri build",
+    "dev:sidecar": "pnpm --dir apps/sidecar dev",
+    "build:sidecar": "pnpm --dir apps/sidecar build",
+    "lint": "echo \"待初始化\"",
+    "typecheck": "pnpm --dir apps/desktop exec vue-tsc --noEmit",
+    "typecheck:sidecar": "pnpm --dir apps/sidecar typecheck",
+    "prepare:sidecar-bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-sidecar-bundle.ps1"
+  }
+}
