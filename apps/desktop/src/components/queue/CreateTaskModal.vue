@@ -4,6 +4,7 @@ import ActionButton from "../common/ActionButton.vue";
 import type {
   DoubanAssetType,
   ImageCountMode,
+  ImageAspectRatio,
   OutputImageFormat,
   RequestIntervalSeconds,
   TaskDraft,
@@ -23,6 +24,7 @@ const form = reactive({
   imageCountMode: "limited" as ImageCountMode,
   maxImagesInput: "10",
   outputImageFormat: "jpg" as OutputImageFormat,
+  imageAspectRatio: "original" as ImageAspectRatio,
   requestIntervalSeconds: "1" as "1" | "2" | "3" | "4" | "5",
 });
 const alertMessage = ref("");
@@ -33,7 +35,9 @@ const strategySummary = computed(() => {
   const countSummary =
     form.imageCountMode === "unlimited" ? "不限制抓取数量" : `最多下载 ${form.maxImagesInput || 10} 张图片`;
 
-  return `豆瓣抓图类型为${assetTypeLabel}，请求间隔 ${form.requestIntervalSeconds} 秒；${countSummary}，并按当前表单配置加入队列`;
+  const ratioLabel = form.imageAspectRatio === "original" ? "原图尺寸" : form.imageAspectRatio;
+
+  return `豆瓣抓图类型为${assetTypeLabel}，图片尺寸 ${ratioLabel}，请求间隔 ${form.requestIntervalSeconds} 秒；${countSummary}，并按当前表单配置加入队列`;
 });
 
 function showAlert(message: string) {
@@ -146,6 +150,7 @@ function submit() {
       imageCountMode: form.imageCountMode,
       maxImages: validation.maxImages,
       outputImageFormat: form.outputImageFormat,
+      imageAspectRatio: form.imageAspectRatio,
       requestIntervalSeconds: Number(form.requestIntervalSeconds) as RequestIntervalSeconds,
     });
   }
@@ -241,63 +246,96 @@ function submit() {
                   壁纸
                 </button>
               </div>
+              <p class="field-hint field-hint--spacer" aria-hidden="true">&nbsp;</p>
             </div>
 
             <div class="strategy-panel">
               <span class="create-task-modal__field-label">数量（张）</span>
+              <div class="quantity-control-row">
+                <div class="segmented-control">
+                  <button
+                    type="button"
+                    class="segmented-control__item"
+                    :class="{ 'segmented-control__item--active': form.imageCountMode === 'limited' }"
+                    @click="form.imageCountMode = 'limited'"
+                  >
+                    限制
+                  </button>
+                  <button
+                    type="button"
+                    class="segmented-control__item"
+                    :class="{ 'segmented-control__item--active': form.imageCountMode === 'unlimited' }"
+                    @click="form.imageCountMode = 'unlimited'"
+                  >
+                    无限制
+                  </button>
+                </div>
+                <div v-if="form.imageCountMode === 'limited'" class="quantity-field">
+                  <div class="number-stepper">
+                    <button
+                      type="button"
+                      class="number-stepper__control"
+                      :disabled="!canDecreaseMaxImages"
+                      aria-label="减少下载数量"
+                      @click="stepMaxImages(-1)"
+                    >
+                      -
+                    </button>
+                    <input
+                      :value="form.maxImagesInput"
+                      type="text"
+                      min="1"
+                      max="100"
+                      step="1"
+                      inputmode="numeric"
+                      placeholder="默认 10"
+                      @blur="handleMaxImagesBlur"
+                      @input="handleMaxImagesInput"
+                      @keydown="handleMaxImagesKeydown"
+                    />
+                    <button
+                      type="button"
+                      class="number-stepper__control"
+                      :disabled="!canIncreaseMaxImages"
+                      aria-label="增加下载数量"
+                      @click="stepMaxImages(1)"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p v-if="form.imageCountMode === 'unlimited'" class="field-hint">将抓取当前分类页可发现的全部图片，不再显示数量输入。</p>
+              <p v-else class="field-hint field-hint--spacer" aria-hidden="true">&nbsp;</p>
+            </div>
+            <div class="strategy-panel">
+              <span class="create-task-modal__field-label">图片尺寸</span>
               <div class="segmented-control">
                 <button
                   type="button"
                   class="segmented-control__item"
-                  :class="{ 'segmented-control__item--active': form.imageCountMode === 'limited' }"
-                  @click="form.imageCountMode = 'limited'"
+                  :class="{ 'segmented-control__item--active': form.imageAspectRatio === 'original' }"
+                  @click="form.imageAspectRatio = 'original'"
                 >
-                  限制
+                  原图尺寸
                 </button>
                 <button
                   type="button"
                   class="segmented-control__item"
-                  :class="{ 'segmented-control__item--active': form.imageCountMode === 'unlimited' }"
-                  @click="form.imageCountMode = 'unlimited'"
+                  :class="{ 'segmented-control__item--active': form.imageAspectRatio === '9:16' }"
+                  @click="form.imageAspectRatio = '9:16'"
                 >
-                  无限制
+                  9:16
+                </button>
+                <button
+                  type="button"
+                  class="segmented-control__item"
+                  :class="{ 'segmented-control__item--active': form.imageAspectRatio === '3:4' }"
+                  @click="form.imageAspectRatio = '3:4'"
+                >
+                  3:4
                 </button>
               </div>
-              <div v-if="form.imageCountMode === 'limited'" class="field quantity-field">
-                <div class="number-stepper">
-                  <button
-                    type="button"
-                    class="number-stepper__control"
-                    :disabled="!canDecreaseMaxImages"
-                    aria-label="减少下载数量"
-                    @click="stepMaxImages(-1)"
-                  >
-                    -
-                  </button>
-                  <input
-                    :value="form.maxImagesInput"
-                    type="text"
-                    min="1"
-                    max="100"
-                    step="1"
-                    inputmode="numeric"
-                    placeholder="默认 10"
-                    @blur="handleMaxImagesBlur"
-                    @input="handleMaxImagesInput"
-                    @keydown="handleMaxImagesKeydown"
-                  />
-                  <button
-                    type="button"
-                    class="number-stepper__control"
-                    :disabled="!canIncreaseMaxImages"
-                    aria-label="增加下载数量"
-                    @click="stepMaxImages(1)"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              <p v-else class="field-hint">将抓取当前分类页可发现的全部图片，不再显示数量输入。</p>
             </div>
           </div>
         </section>
@@ -368,7 +406,6 @@ function submit() {
 
 .strategy-panel {
   display: grid;
-  grid-template-rows: auto auto;
   align-content: start;
   gap: 12px;
   min-width: 0;
@@ -383,9 +420,29 @@ function submit() {
 }
 
 .field-hint {
+  min-height: 1.65em;
+  margin: 0;
   color: var(--muted);
   font-size: 0.84rem;
   line-height: 1.65;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-hint--spacer {
+  visibility: hidden;
+}
+
+.quantity-control-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.quantity-control-row .segmented-control {
+  flex: 0 0 auto;
 }
 
 .segmented-control {
@@ -423,9 +480,9 @@ function submit() {
 }
 
 .quantity-field {
-  gap: 10px;
-  width: 186px;
-  max-width: 100%;
+  flex: 1 1 180px;
+  min-width: 176px;
+  max-width: 186px;
 }
 .number-stepper {
   display: grid;
@@ -487,7 +544,9 @@ function submit() {
 }
 
 .create-task-modal textarea {
-  min-height: 108px;
+  height: 124px;
+  min-height: 124px;
+  line-height: 1.25;
 }
 
 @media (max-width: 1480px) {
@@ -500,3 +559,4 @@ function submit() {
   }
 }
 </style>
+

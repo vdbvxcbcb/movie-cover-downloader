@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { DownloaderService } from "./downloader.js";
 import { buildResumeArtifacts, saveResumeMetadata } from "./resume-store.js";
 import { FileTaskControl } from "./task-control.js";
@@ -51,6 +52,7 @@ function createTask(): SidecarTask {
     imageCountMode: "limited",
     maxImages: 50,
     outputImageFormat: "png",
+    imageAspectRatio: "original",
     requestIntervalMs: 0,
     phase: "downloading",
     attempts: 1,
@@ -175,7 +177,7 @@ test("豆瓣壁纸任务会按 wallpaper 写入文件名而不是 still", async 
     const result = await downloader.download(createTask(), discovery);
 
     assert.equal(result.saved.length, 1);
-    assert.match(path.basename(result.saved[0]!.outputPath), /Test Title - wallpaper - 1x1\.png$/);
+    assert.match(path.basename(result.saved[0]!.outputPath), /Test Title - wallpaper - 1x1 - 原图\.png$/);
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -381,6 +383,54 @@ test("暂停后会保留当前 part 文件并在继续时带 Range 恢复下载"
     assert.deepEqual(seenRanges, [null, `bytes=${firstChunk.length}-`]);
     await assert.rejects(() => fs.stat(artifacts.partPath), /ENOENT/);
     await assert.rejects(() => fs.stat(artifacts.metadataPath), /ENOENT/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("选择图片比例时只裁剪不放大缩放", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcd-downloader-ratio-"));
+  const { logger } = createLogger();
+  const downloader = new DownloaderService(createConfig(), logger);
+  const originalFetch = globalThis.fetch;
+  const sourceBuffer = await sharp({
+    create: {
+      width: 1600,
+      height: 900,
+      channels: 3,
+      background: "#4dd4c6",
+    },
+  })
+    .jpeg({ quality: 100 })
+    .toBuffer();
+
+  globalThis.fetch = async () =>
+    new Response(new Uint8Array(sourceBuffer), {
+      status: 200,
+      headers: {
+        "content-type": "image/jpeg",
+      },
+    });
+
+  try {
+    const discovery = createDiscovery(tempDir);
+    discovery.images = [discovery.images[1]!];
+    const result = await downloader.download(
+      {
+        ...createTask(),
+        outputImageFormat: "jpg",
+        imageAspectRatio: "9:16",
+      },
+      discovery,
+    );
+    const metadata = await sharp(result.saved[0]!.outputPath).metadata();
+
+    assert.equal(metadata.width, 506);
+    assert.equal(metadata.height, 900);
+    assert.equal(result.saved[0]!.width, 506);
+    assert.equal(result.saved[0]!.height, 900);
+    assert.match(path.basename(result.saved[0]!.outputPath), /Test Title - wallpaper - 506x900 - 9x16\.jpg$/);
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(tempDir, { recursive: true, force: true });

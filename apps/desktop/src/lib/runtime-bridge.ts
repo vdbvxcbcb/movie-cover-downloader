@@ -160,6 +160,14 @@ class RuntimeBridge {
     return directoryPath;
   }
 
+  async revealFilePath(filePath: string) {
+    if (isTauriRuntime()) {
+      await invoke("reveal_file_path", { filePath });
+    }
+
+    return filePath;
+  }
+
   async pickOutputDirectory(initialPath?: string) {
     if (isTauriRuntime()) {
       return invoke<string | null>("pick_output_directory", { initialPath });
@@ -209,6 +217,31 @@ class RuntimeBridge {
     return directoryPath;
   }
 
+  async readLocalImageFile(filePath: string) {
+    if (!isTauriRuntime()) {
+      throw new Error("拖拽读取本地图片仅在 Tauri 桌面环境可用");
+    }
+
+    const bytes = await invoke<number[]>("read_local_image_file", { filePath });
+    return new Uint8Array(bytes);
+  }
+  async saveCustomCroppedImage(outputRootDir: string, fileName: string, imageBytes: Uint8Array) {
+    if (isTauriRuntime()) {
+      return invoke<string>("save_custom_cropped_image", {
+        outputRootDir,
+        fileName,
+        imageBytes: Array.from(imageBytes),
+      });
+    }
+
+    const url = URL.createObjectURL(new Blob([imageBytes], { type: "image/png" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    return fileName;
+  }
   async openDoubanLoginWindow(windowLabel: string) {
     if (!isTauriRuntime()) {
       throw new Error("豆瓣登录自动导入仅在 Tauri 桌面环境可用");
@@ -319,3 +352,4 @@ class RuntimeBridge {
 }
 
 export const runtimeBridge = new RuntimeBridge();
+

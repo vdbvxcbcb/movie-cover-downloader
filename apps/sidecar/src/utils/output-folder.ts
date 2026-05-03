@@ -13,6 +13,12 @@ export function buildOutputDir(rootDir: string, folderName: string) {
   return path.join(rootDir, folderName);
 }
 
+export type FileNameImageAspectRatio = "original" | "9:16" | "3:4";
+
+function formatFileNameImageAspectRatio(imageAspectRatio: FileNameImageAspectRatio) {
+  return imageAspectRatio === "original" ? "原图" : imageAspectRatio.replace(":", "x");
+}
+
 export function buildFileName(
   title: string,
   category: "poster" | "still" | "wallpaper",
@@ -20,9 +26,11 @@ export function buildFileName(
   height?: number,
   index?: number,
   extension = ".jpg",
+  imageAspectRatio: FileNameImageAspectRatio = "original",
 ) {
   const size = width && height ? `${width}x${height}` : "unknown";
+  const ratio = formatFileNameImageAspectRatio(imageAspectRatio);
   const suffix = index && index > 1 ? ` (${index})` : "";
   const normalizedExtension = extension.startsWith(".") ? extension : `.${extension}`;
-  return `${sanitizeNameSegment(title)} - ${category} - ${size}${suffix}${normalizedExtension}`;
+  return `${sanitizeNameSegment(title)} - ${category} - ${size} - ${ratio}${suffix}${normalizedExtension}`;
 }

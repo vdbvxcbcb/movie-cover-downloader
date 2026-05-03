@@ -19,15 +19,16 @@ const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder)
   <div class="view-stack">
     <PanelSection eyebrow="Control Center" title="控制中心">
       <template #aside>
-        <div class="topbar__actions">
+        <div class="topbar__actions control-center-actions">
           <ActionButton
             label="1、导入Cookie"
             :disabled="appStore.isActionPending('cookies.import')"
             @click="void appStore.importCookie()"
           />
           <ActionButton label="2、添加链接任务" @click="appStore.openCreateTask()" />
+          <ActionButton label="3、自定义裁剪" @click="appStore.openCustomCrop()" />
           <PopConfirmAction
-            label="3、清空队列任务"
+            label="4、清空队列任务"
             title="清空全部任务？"
             description="队列记录和已生成的本地输出目录会一起删除。"
             confirm-label="清空"
@@ -93,3 +94,9 @@ const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder)
     </PanelSection>
   </div>
 </template>
+
+<style scoped>
+.control-center-actions {
+  justify-content: flex-start;
+}
+</style>

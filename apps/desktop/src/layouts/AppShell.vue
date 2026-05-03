@@ -6,6 +6,7 @@ import AppTopbar from "../components/chrome/AppTopbar.vue";
 import ImportCookieModal from "../components/cookies/ImportCookieModal.vue";
 import ToastNotice from "../components/common/ToastNotice.vue";
 import CreateTaskModal from "../components/queue/CreateTaskModal.vue";
+import CustomCropModal from "../components/queue/CustomCropModal.vue";
 import { useAppStore } from "../stores/app";
 import type { CookieDraft, TaskDraft, TopAction } from "../types/app";
 
@@ -90,6 +91,12 @@ watch(
     @submit="handleCreateTask"
   />
 
+
+  <CustomCropModal
+    v-if="appStore.customCropOpen"
+    :output-root-dir="appStore.customCropOutputRootDir"
+    @close="appStore.closeCustomCrop"
+  />
   <ImportCookieModal
     v-if="appStore.importCookieOpen"
     @close="appStore.closeImportCookie"

@@ -2,6 +2,7 @@ export type LogLevel = "INFO" | "WARN" | "ERROR";
 export type SourceSite = "douban";
 export type SourceHint = "auto" | SourceSite;
 export type OutputImageFormat = "jpg" | "png";
+export type ImageAspectRatio = "original" | "9:16" | "3:4";
 export type AssetCategory = "poster" | "still";
 export type AssetOrientation = "vertical" | "horizontal";
 export type DoubanAssetType = "still" | "poster" | "wallpaper";
@@ -17,6 +18,7 @@ export interface SidecarTask {
   imageCountMode: ImageCountMode;
   maxImages: number;
   outputImageFormat: OutputImageFormat;
+  imageAspectRatio: ImageAspectRatio;
   requestIntervalMs: number;
   phase: TaskPhase;
   attempts: number;

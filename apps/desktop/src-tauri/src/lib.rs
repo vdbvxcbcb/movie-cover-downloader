@@ -1,6 +1,8 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -62,6 +64,7 @@ struct DownloadTaskPayload {
     image_count_mode: String,
     max_images: u32,
     output_image_format: String,
+    image_aspect_ratio: String,
     request_interval_seconds: Option<u32>,
     douban_cookie: Option<String>,
 }
@@ -441,7 +444,10 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
         .map_err(|error| format!("提交 SQLite 事务失败: {error}"))
 }
 
-fn migrate_json_snapshot_if_needed(app: &AppHandle, connection: &mut Connection) -> Result<(), String> {
+fn migrate_json_snapshot_if_needed(
+    app: &AppHandle,
+    connection: &mut Connection,
+) -> Result<(), String> {
     if sqlite_has_any_state(connection)? {
         return Ok(());
     }
@@ -628,11 +634,18 @@ fn resolve_dev_sidecar_root() -> PathBuf {
         .join("sidecar")
 }
 
+#[cfg(not(debug_assertions))]
 fn resolve_bundled_sidecar_root(app: &AppHandle) -> Option<PathBuf> {
     let root = app.path().resource_dir().ok()?.join("sidecar");
     root.join("dist").join("index.js").exists().then_some(root)
 }
 
+#[cfg(debug_assertions)]
+fn resolve_sidecar_root(_app: &AppHandle) -> PathBuf {
+    resolve_dev_sidecar_root()
+}
+
+#[cfg(not(debug_assertions))]
 fn resolve_sidecar_root(app: &AppHandle) -> PathBuf {
     resolve_bundled_sidecar_root(app).unwrap_or_else(resolve_dev_sidecar_root)
 }
@@ -982,11 +995,10 @@ fn read_login_window_cookie_status_blocking(
 #[tauri::command]
 fn load_persisted_state(app: AppHandle) -> Result<Option<String>, String> {
     let db_path = sqlite_db_path(&app)?;
-    let snapshot = match open_state_db(&app)
-        .and_then(|mut connection| {
-            migrate_json_snapshot_if_needed(&app, &mut connection)?;
-            load_snapshot_from_sqlite(&connection)
-        }) {
+    let snapshot = match open_state_db(&app).and_then(|mut connection| {
+        migrate_json_snapshot_if_needed(&app, &mut connection)?;
+        load_snapshot_from_sqlite(&connection)
+    }) {
         Ok(snapshot) => snapshot,
         Err(error) if is_recoverable_sqlite_error(&error) => {
             let _ = rotate_corrupted_state_db(&db_path)?;
@@ -1120,7 +1132,10 @@ fn clear_download_tasks(
 }
 
 #[tauri::command]
-fn delete_directory_path(directory_path: String, root_directory_path: String) -> Result<bool, String> {
+fn delete_directory_path(
+    directory_path: String,
+    root_directory_path: String,
+) -> Result<bool, String> {
     let directory = PathBuf::from(directory_path.trim());
     if directory.as_os_str().is_empty() || !directory.exists() {
         return Ok(false);
@@ -1130,8 +1145,8 @@ fn delete_directory_path(directory_path: String, root_directory_path: String) ->
         return Err("输出根目录不存在，已取消删除".to_string());
     }
 
-    let directory = fs::canonicalize(&directory)
-        .map_err(|error| format!("解析输出目录失败: {error}"))?;
+    let directory =
+        fs::canonicalize(&directory).map_err(|error| format!("解析输出目录失败: {error}"))?;
     let root_directory = fs::canonicalize(&root_directory)
         .map_err(|error| format!("解析输出根目录失败: {error}"))?;
     if !directory.is_dir() {
@@ -1235,6 +1250,7 @@ fn run_download_task_blocking(
         .env("MCD_IMAGE_COUNT_MODE", &payload.image_count_mode)
         .env("MCD_BOOTSTRAP_MAX_IMAGES", payload.max_images.to_string())
         .env("MCD_BOOTSTRAP_OUTPUT_FORMAT", &payload.output_image_format)
+        .env("MCD_IMAGE_ASPECT_RATIO", &payload.image_aspect_ratio)
         .env(
             "MCD_TASK_CONTROL_FILE",
             control_file_path.to_string_lossy().into_owned(),
@@ -1251,6 +1267,7 @@ fn run_download_task_blocking(
 
     #[cfg(windows)]
     {
+        #[cfg(target_os = "windows")]
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
@@ -1268,8 +1285,11 @@ fn run_download_task_blocking(
     if let Some(parent) = control_file_path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建任务控制目录失败: {error}"))?;
     }
-    fs::write(task_pid_file_path(&control_file_path), child.id().to_string())
-        .map_err(|error| format!("写入任务进程标记失败: {error}"))?;
+    fs::write(
+        task_pid_file_path(&control_file_path),
+        child.id().to_string(),
+    )
+    .map_err(|error| format!("写入任务进程标记失败: {error}"))?;
 
     let stdout = child
         .stdout
@@ -1355,11 +1375,79 @@ async fn run_download_task(
     let control_file_path = task_control_file_path(&app, &task_id)?;
     registry.register_control_file(task_id.clone(), control_file_path.clone())?;
 
-    let result = run_blocking_job(move || run_download_task_blocking(app, payload, control_file_path)).await;
+    let result =
+        run_blocking_job(move || run_download_task_blocking(app, payload, control_file_path)).await;
     registry.unregister_task(&task_id);
     result
 }
 
+fn is_supported_local_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn read_local_image_file(file_path: String) -> Result<Vec<u8>, String> {
+    let path = PathBuf::from(file_path.trim());
+    if !path.is_file() {
+        return Err("拖拽的不是可读取的图片文件".to_string());
+    }
+
+    if !is_supported_local_image_path(&path) {
+        return Err("仅支持 JPG、PNG、WEBP、GIF、BMP 图片文件".to_string());
+    }
+
+    let metadata = fs::metadata(&path).map_err(|error| format!("读取图片信息失败: {error}"))?;
+    if metadata.len() > 100 * 1024 * 1024 {
+        return Err("图片文件超过 100MB，暂不支持拖拽上传".to_string());
+    }
+
+    fs::read(&path).map_err(|error| format!("读取拖拽图片失败: {error}"))
+}
+fn sanitize_output_file_name(file_name: &str) -> String {
+    let sanitized = file_name
+        .chars()
+        .map(|ch| match ch {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            _ => ch,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if sanitized.is_empty() {
+        "custom-crop.png".to_string()
+    } else {
+        sanitized
+    }
+}
+
+#[tauri::command]
+fn save_custom_cropped_image(
+    output_root_dir: String,
+    file_name: String,
+    image_bytes: Vec<u8>,
+) -> Result<String, String> {
+    if image_bytes.is_empty() {
+        return Err("裁剪图片内容为空".to_string());
+    }
+
+    let output_dir = PathBuf::from(output_root_dir).join("custom-crop-photo");
+    fs::create_dir_all(&output_dir).map_err(|error| format!("创建输出目录失败: {error}"))?;
+
+    let output_path = output_dir.join(sanitize_output_file_name(&file_name));
+    fs::write(&output_path, image_bytes).map_err(|error| format!("保存裁剪图片失败: {error}"))?;
+
+    Ok(output_path.to_string_lossy().into_owned())
+}
 #[tauri::command]
 fn open_output_dir(app: AppHandle) -> Result<String, String> {
     let output_dir = app
@@ -1404,6 +1492,44 @@ fn open_directory_path(directory_path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn reveal_file_path(file_path: String) -> Result<(), String> {
+    let path = PathBuf::from(file_path.trim());
+    if !path.is_file() {
+        return Err("图片文件不存在，无法定位".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let reveal_path = path.to_string_lossy().replace('/', "\\");
+        Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{}\"", reveal_path))
+            .spawn()
+            .map_err(|error| format!("定位图片失败: {error}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|error| format!("定位图片失败: {error}"))?;
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "无法获取图片所在目录".to_string())?;
+        Command::new("xdg-open")
+            .arg(parent)
+            .spawn()
+            .map_err(|error| format!("打开图片所在目录失败: {error}"))?;
+    }
+
+    Ok(())
+}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1420,9 +1546,12 @@ pub fn run() {
             clear_download_tasks,
             delete_directory_path,
             pick_output_directory,
+            read_local_image_file,
+            save_custom_cropped_image,
             run_download_task,
             open_output_dir,
-            open_directory_path
+            open_directory_path,
+            reveal_file_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1431,11 +1560,11 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        delete_directory_path, format_sidecar_exit_error, is_recoverable_sqlite_error, load_snapshot_from_sqlite,
-        next_runtime_log_seed, open_state_db_path, resolve_douban_login_cookie_status,
-        resolve_sidecar_entry_arg, resolve_sidecar_event_task_id, resolve_sidecar_node,
-        rotate_corrupted_state_db, run_blocking_job, save_snapshot_to_sqlite_path_with_recovery,
-        TaskControlRegistry,
+        delete_directory_path, format_sidecar_exit_error, is_recoverable_sqlite_error,
+        load_snapshot_from_sqlite, next_runtime_log_seed, open_state_db_path,
+        resolve_douban_login_cookie_status, resolve_sidecar_entry_arg,
+        resolve_sidecar_event_task_id, resolve_sidecar_node, rotate_corrupted_state_db,
+        run_blocking_job, save_snapshot_to_sqlite_path_with_recovery, TaskControlRegistry,
     };
     use std::{
         fs,
@@ -1610,6 +1739,7 @@ mod tests {
                         "imageCountMode": "limited",
                         "maxImages": 50,
                         "outputImageFormat": "jpg",
+                        "imageAspectRatio": "original",
                         "requestIntervalSeconds": 1
                     },
                     "lifecycle": {
@@ -1654,22 +1784,15 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        assert!(sibling_files.iter().any(|name| name.starts_with("runtime-state.corrupt-")));
+        assert!(sibling_files
+            .iter()
+            .any(|name| name.starts_with("runtime-state.corrupt-")));
 
         let connection = open_state_db_path(&db_path).unwrap();
         let loaded = load_snapshot_from_sqlite(&connection).unwrap().unwrap();
-        assert_eq!(
-            loaded["tasks"][0]["id"].as_str(),
-            Some("task-1")
-        );
-        assert_eq!(
-            loaded["cookies"][0]["id"].as_str(),
-            Some("300")
-        );
-        assert_eq!(
-            loaded["logs"][0]["id"].as_i64(),
-            Some(10001)
-        );
+        assert_eq!(loaded["tasks"][0]["id"].as_str(), Some("task-1"));
+        assert_eq!(loaded["cookies"][0]["id"].as_str(), Some("300"));
+        assert_eq!(loaded["logs"][0]["id"].as_i64(), Some(10001));
 
         let _ = fs::remove_dir_all(temp_dir);
     }

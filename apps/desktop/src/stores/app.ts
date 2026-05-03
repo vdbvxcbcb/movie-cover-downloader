@@ -92,6 +92,7 @@ function rehydrateTasks(tasks: TaskItem[]) {
         doubanAssetType: task.target.doubanAssetType ?? "still",
         imageCountMode: task.target.imageCountMode ?? "limited",
         outputImageFormat: task.target.outputImageFormat ?? "jpg",
+        imageAspectRatio: task.target.imageAspectRatio ?? "original",
         requestIntervalSeconds: task.target.requestIntervalSeconds ?? 1,
       },
     };
@@ -387,6 +388,7 @@ export const useAppStore = defineStore("app", () => {
   const queueBusy = ref(false);
   const createTaskOpen = ref(false);
   const importCookieOpen = ref(false);
+  const customCropOpen = ref(false);
   const logOnlyErrors = ref(false);
   const progressTick = ref(0);
   const tasks = ref<TaskItem[]>(seed.tasks);
@@ -396,6 +398,10 @@ export const useAppStore = defineStore("app", () => {
   const notice = ref<NoticePayload | null>(null);
   const pendingActionIds = ref<string[]>([]);
   const activeTaskIds = ref<string[]>([]);
+  const customCropOutputRootDir = computed(() => {
+    const latestTask = tasks.value[tasks.value.length - 1];
+    return latestTask?.target.outputRootDir ?? "D:/cover";
+  });
 
   let persistenceTimer: number | null = null;
   let logPersistenceTimer: number | null = null;
@@ -668,6 +674,14 @@ export const useAppStore = defineStore("app", () => {
 
   function closeImportCookie() {
     importCookieOpen.value = false;
+  }
+
+  function openCustomCrop() {
+    customCropOpen.value = true;
+  }
+
+  function closeCustomCrop() {
+    customCropOpen.value = false;
   }
 
   function isActionPending(actionId: string) {
@@ -959,6 +973,7 @@ export const useAppStore = defineStore("app", () => {
         imageCountMode: task.target.imageCountMode,
         maxImages: task.target.maxImages,
         outputImageFormat: task.target.outputImageFormat,
+        imageAspectRatio: task.target.imageAspectRatio,
         requestIntervalSeconds: task.target.requestIntervalSeconds,
         doubanCookie: cookie?.value,
       });
@@ -1374,6 +1389,7 @@ export const useAppStore = defineStore("app", () => {
     queueBusy,
     createTaskOpen,
     importCookieOpen,
+    customCropOpen,
     logOnlyErrors,
     progressTick,
     tasks,
@@ -1381,6 +1397,7 @@ export const useAppStore = defineStore("app", () => {
     logs,
     queueConfig,
     visibleLogs,
+    customCropOutputRootDir,
     notice,
     pendingActionIds,
     activeTaskIds,
@@ -1390,6 +1407,8 @@ export const useAppStore = defineStore("app", () => {
     closeCreateTask,
     openImportCookie,
     closeImportCookie,
+    openCustomCrop,
+    closeCustomCrop,
     createTasks,
     importCookie,
     startDoubanLoginImport,

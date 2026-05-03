@@ -46,6 +46,18 @@ function parseImageCountMode(value: string | undefined): SidecarTask["imageCount
   throw new Error(`invalid MCD_IMAGE_COUNT_MODE: "${value}", expected limited/unlimited`);
 }
 
+
+function parseImageAspectRatio(value: string | undefined): SidecarTask["imageAspectRatio"] {
+  if (value === undefined) {
+    return "original";
+  }
+
+  if (value === "original" || value === "9:16" || value === "3:4") {
+    return value;
+  }
+
+  throw new Error(`invalid MCD_IMAGE_ASPECT_RATIO: "${value}", expected original/9:16/3:4`);
+}
 function createBootstrapTask(configOutputDir: string): SidecarTask | null {
   const detailUrl = process.env.MCD_BOOTSTRAP_TASK_URL;
   if (!detailUrl) {
@@ -68,6 +80,7 @@ function createBootstrapTask(configOutputDir: string): SidecarTask | null {
       process.env.MCD_BOOTSTRAP_OUTPUT_FORMAT,
       "MCD_BOOTSTRAP_OUTPUT_FORMAT",
     ),
+    imageAspectRatio: parseImageAspectRatio(process.env.MCD_IMAGE_ASPECT_RATIO),
     requestIntervalMs,
     phase: "queued",
     attempts: 0,

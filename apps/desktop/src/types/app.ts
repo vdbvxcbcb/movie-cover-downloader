@@ -4,6 +4,7 @@ export type LogLevel = "INFO" | "WARN" | "ERROR";
 export type SourceSite = "douban";
 export type SourceHint = "auto" | SourceSite;
 export type OutputImageFormat = "jpg" | "png";
+export type ImageAspectRatio = "original" | "9:16" | "3:4";
 export type DoubanAssetType = "still" | "poster" | "wallpaper";
 export type ImageCountMode = "limited" | "unlimited";
 export type RequestIntervalSeconds = 1 | 2 | 3 | 4 | 5;
@@ -43,6 +44,7 @@ export interface TaskTarget {
   imageCountMode: ImageCountMode;
   maxImages: number;
   outputImageFormat: OutputImageFormat;
+  imageAspectRatio: ImageAspectRatio;
   requestIntervalSeconds: RequestIntervalSeconds;
 }
 
@@ -146,6 +148,7 @@ export interface TaskDraft {
   imageCountMode: ImageCountMode;
   maxImages: number;
   outputImageFormat: OutputImageFormat;
+  imageAspectRatio: ImageAspectRatio;
   requestIntervalSeconds: RequestIntervalSeconds;
 }
 
@@ -197,6 +200,7 @@ export interface RuntimeDownloadTaskPayload {
   imageCountMode: ImageCountMode;
   maxImages: number;
   outputImageFormat: OutputImageFormat;
+  imageAspectRatio: ImageAspectRatio;
   requestIntervalSeconds: RequestIntervalSeconds;
   doubanCookie?: string;
 }

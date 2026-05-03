@@ -51,6 +51,7 @@ function createDraft(overrides: Partial<TaskDraft> = {}): TaskDraft {
     imageCountMode: "limited",
     maxImages: 50,
     outputImageFormat: "jpg",
+    imageAspectRatio: "original",
     requestIntervalSeconds: 1,
     ...overrides,
   };

@@ -25,6 +25,7 @@ function createTask(overrides: Partial<SidecarTask> = {}): SidecarTask {
     imageCountMode: "limited",
     maxImages: 10,
     outputImageFormat: "jpg",
+    imageAspectRatio: "original",
     requestIntervalMs: 100,
     phase: "queued",
     attempts: 0,

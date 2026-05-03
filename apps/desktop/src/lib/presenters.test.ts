@@ -15,6 +15,7 @@ function createTask(overrides: Partial<TaskItem> = {}): TaskItem {
       imageCountMode: "limited",
       maxImages: 50,
       outputImageFormat: "jpg",
+      imageAspectRatio: "original",
       requestIntervalSeconds: 1,
     },
     lifecycle: {

@@ -100,19 +100,84 @@ function inferExtension(imageUrl: string, contentType?: string | null) {
   return undefined;
 }
 
-async function normalizeImageBuffer(buffer: Buffer, targetFormat: SidecarTask["outputImageFormat"]) {
-  ensureSupportedOutputImageFormat(targetFormat);
+interface NormalizedImageBuffer {
+  buffer: Buffer;
+  extension: ".jpg" | ".png";
+  width?: number;
+  height?: number;
+}
 
-  if (targetFormat === "png") {
+function ensureSupportedImageAspectRatio(aspectRatio: string): asserts aspectRatio is SidecarTask["imageAspectRatio"] {
+  if (aspectRatio !== "original" && aspectRatio !== "9:16" && aspectRatio !== "3:4") {
+    throw new Error(`unsupported image aspect ratio: "${aspectRatio}"`);
+  }
+}
+
+function resolveAspectRatioSize(aspectRatio: Exclude<SidecarTask["imageAspectRatio"], "original">) {
+  return aspectRatio === "3:4" ? { width: 3, height: 4 } : { width: 9, height: 16 };
+}
+
+function calculateCenteredCrop(width: number, height: number, aspectRatio: Exclude<SidecarTask["imageAspectRatio"], "original">) {
+  const target = resolveAspectRatioSize(aspectRatio);
+  const targetRatio = target.width / target.height;
+  const sourceRatio = width / height;
+
+  if (sourceRatio > targetRatio) {
+    const cropWidth = Math.max(1, Math.floor(height * targetRatio));
     return {
-      buffer: await sharp(buffer).png().toBuffer(),
-      extension: ".png" as const,
+      left: Math.max(0, Math.floor((width - cropWidth) / 2)),
+      top: 0,
+      width: cropWidth,
+      height,
     };
   }
 
+  const cropHeight = Math.max(1, Math.floor(width / targetRatio));
   return {
-    buffer: await sharp(buffer).jpeg({ quality: 92 }).toBuffer(),
-    extension: ".jpg" as const,
+    left: 0,
+    top: Math.max(0, Math.floor((height - cropHeight) / 2)),
+    width,
+    height: cropHeight,
+  };
+}
+
+async function normalizeImageBuffer(
+  buffer: Buffer,
+  targetFormat: SidecarTask["outputImageFormat"],
+  imageAspectRatio: SidecarTask["imageAspectRatio"],
+): Promise<NormalizedImageBuffer> {
+  ensureSupportedOutputImageFormat(targetFormat);
+  ensureSupportedImageAspectRatio(imageAspectRatio);
+
+  let pipeline = sharp(buffer);
+  if (imageAspectRatio !== "original") {
+    const metadata = await pipeline.metadata();
+    if (metadata.width && metadata.height) {
+      pipeline = pipeline.extract(calculateCenteredCrop(metadata.width, metadata.height, imageAspectRatio));
+    }
+  }
+
+  if (targetFormat === "png") {
+    const result = await pipeline.png().toBuffer({ resolveWithObject: true });
+    return {
+      buffer: result.data,
+      extension: ".png",
+      width: result.info.width,
+      height: result.info.height,
+    };
+  }
+
+  const result = await pipeline
+    .jpeg({
+      quality: imageAspectRatio === "original" ? 92 : 100,
+      chromaSubsampling: "4:4:4",
+    })
+    .toBuffer({ resolveWithObject: true });
+  return {
+    buffer: result.data,
+    extension: ".jpg",
+    width: result.info.width,
+    height: result.info.height,
   };
 }
 
@@ -336,6 +401,7 @@ export class DownloaderService {
   ): Promise<DownloadResult> {
     await fs.mkdir(discovery.outputDir, { recursive: true });
     ensureSupportedOutputImageFormat(task.outputImageFormat);
+    ensureSupportedImageAspectRatio(task.imageAspectRatio);
 
     const saved = [];
     for (const [index, image] of discovery.images.entries()) {
@@ -367,17 +433,18 @@ export class DownloaderService {
         const canKeepOriginalFormat =
           (sourceExtension === ".jpg" || sourceExtension === ".png") && sourceExtension === targetExtension;
         const finalImage =
-          canKeepOriginalFormat
-            ? { buffer: sourceImage.buffer, extension: targetExtension }
-            : await normalizeImageBuffer(sourceImage.buffer, task.outputImageFormat);
+          canKeepOriginalFormat && task.imageAspectRatio === "original"
+            ? { buffer: sourceImage.buffer, extension: targetExtension, width, height }
+            : await normalizeImageBuffer(sourceImage.buffer, task.outputImageFormat, task.imageAspectRatio);
         const namingCategory = task.doubanAssetType;
         const fileName = buildFileName(
           discovery.normalizedTitle,
           namingCategory,
-          width,
-          height,
+          finalImage.width ?? width,
+          finalImage.height ?? height,
           imageIndex,
           finalImage.extension,
+          task.imageAspectRatio,
         );
         const outputPath = path.join(discovery.outputDir, fileName);
         await fs.writeFile(outputPath, finalImage.buffer);
@@ -388,8 +455,8 @@ export class DownloaderService {
           outputPath,
           category: image.category,
           orientation: image.orientation,
-          width,
-          height,
+          width: finalImage.width ?? width,
+          height: finalImage.height ?? height,
         });
         emitTaskProgress(task.id, "downloading", discovery.images.length, saved.length);
         this.logger.info(`saved image: ${outputPath}`, task.id);

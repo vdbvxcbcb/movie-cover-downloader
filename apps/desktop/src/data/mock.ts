@@ -40,6 +40,7 @@ export function createTaskFromDraft(id: string, draft: TaskDraft): TaskItem {
       imageCountMode: draft.imageCountMode,
       maxImages: draft.maxImages,
       outputImageFormat: draft.outputImageFormat,
+      imageAspectRatio: draft.imageAspectRatio,
       requestIntervalSeconds: draft.requestIntervalSeconds,
     },
     lifecycle: {
