@@ -6,7 +6,7 @@
 - 如何本地启动桌面版
 - 控制中心现在有哪些功能
 - 豆瓣 `Cookie` 该怎么提供
-- 后续做安装包时还缺什么
+- 如何构建安装包和发布 Release 安装包
 
 ## 1. 当前形态
 
@@ -413,25 +413,66 @@ dbcl2="177473297:xxxxxx"; ck=hb-J; bid=DYDcN1_PDPs; ll="118289"; ap_v=0,6.0
 - `sharp` 是当前图片转码链路依赖
 - 还没有做浏览器 Cookie 自动同步
 
-## 10. 安装包阶段必须补的一步
+## 10. 构建安装包和 Release 安装包说明
 
-后面做安装包时，不能只打包 Tauri 前端壳。
-
-因为当前真实下载依赖：
+当前安装包已经不是只打包 Tauri 前端壳。`pnpm build:desktop` 会先构建 sidecar，再把真实下载所需资源一起放进安装包：
 
 - `apps/sidecar/dist/index.js`
 - Node 运行时
 - `sharp` 运行时依赖
+- Tauri 桌面端程序
+- WebView2 离线安装器
 
-所以安装包阶段还必须补：
+安装后的应用会从用户本机应用数据目录初始化状态，不会把开发机已有的任务、日志、Cookie 或输出图片打包进去。
 
-1. 把 sidecar 一起打包进安装包资源
-2. 把 sidecar / Node 运行方式一起打包
+### 10.1 构建安装包
 
-这一步没补完之前：
+在项目根目录执行：
 
-- 开发环境可以跑
-- 但安装包还不能算完整交付
+```bash
+pnpm build:desktop
+```
+
+构建成功后，Windows 安装包默认输出到：
+
+```text
+apps/desktop/src-tauri/target/release/bundle/nsis/Movie Cover Downloader_0.1.0_x64-setup.exe
+apps/desktop/src-tauri/target/release/bundle/msi/Movie Cover Downloader_0.1.0_x64_en-US.msi
+```
+
+推荐优先发布和安装 NSIS 版本：
+
+```text
+Movie Cover Downloader_0.1.0_x64-setup.exe
+```
+
+每次打包后建议确认文件真实存在，例如：
+
+```powershell
+Test-Path "apps/desktop/src-tauri/target/release/bundle/nsis/Movie Cover Downloader_0.1.0_x64-setup.exe"
+```
+
+### 10.2 Release 安装包说明
+
+GitHub Release 建议使用当前版本号作为 tag，例如：
+
+```text
+v0.1.0
+```
+
+Release 资产上传：
+
+```text
+Movie Cover Downloader_0.1.0_x64-setup.exe
+```
+
+发布前检查：
+
+- `pnpm typecheck` 通过
+- `pnpm typecheck:sidecar` 通过
+- `pnpm build:desktop` 通过
+- Release 里的安装包文件大小不是 `0`
+- 安装后首次启动是干净初始状态
 
 ## 11. 排查建议
 
@@ -466,3 +507,4 @@ cargo check
   说明当前请求被豆瓣保护机制拦截，建议等待一段时间后再试
 - `豆瓣页面结构异常，暂时无法解析`
   说明当前页面结构和程序预期不一致，需要结合日志进一步排查
+
