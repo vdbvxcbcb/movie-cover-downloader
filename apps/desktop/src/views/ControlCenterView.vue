@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { storeToRefs } from "pinia";
 import ActionButton from "../components/common/ActionButton.vue";
 import PanelSection from "../components/common/PanelSection.vue";
@@ -7,9 +8,11 @@ import StatusPill from "../components/common/StatusPill.vue";
 import TaskTable from "../components/queue/TaskTable.vue";
 import { describeCookieStatus, formatCookieExpiry, formatSourceSite } from "../lib/presenters";
 import { useAppStore } from "../stores/app";
+import { compareTaskAddedOrder } from "../lib/task-order";
 
 const appStore = useAppStore();
 const { tasks, cookies, queueRunning } = storeToRefs(appStore);
+const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder));
 </script>
 
 <template>
@@ -53,7 +56,7 @@ const { tasks, cookies, queueRunning } = storeToRefs(appStore);
 
     <PanelSection eyebrow="Queue" title="下载队列">
       <TaskTable
-        :tasks="tasks"
+        :tasks="orderedTasks"
         @retry="void appStore.retryTask($event)"
         @pause="void appStore.pauseTask($event)"
         @resume="void appStore.resumeTask($event)"

@@ -4,6 +4,7 @@ import { createInitialAppSeed, createTaskFromDraft } from "../data/mock";
 import { extractDoubanEmptyCategoryTitle, formatDoubanAssetTypeLabel } from "../lib/douban-empty-category";
 import { runTaskLifecycle } from "../lib/queue-runtime";
 import { runtimeBridge } from "../lib/runtime-bridge";
+import { compareTaskAddedOrder } from "../lib/task-order";
 import type {
   AppSeedState,
   CookieDraft,
@@ -181,6 +182,26 @@ function extractSavedImagePathFromLogMessage(message: string) {
 
   const outputPath = match[1]?.trim();
   return outputPath || null;
+}
+
+function normalizeComparablePath(path: string) {
+  return path.trim().replace(/[\\/]+$/, "").toLowerCase();
+}
+
+function getTaskGeneratedOutputDirectory(task: TaskItem) {
+  const directoryPath = task.outputDirectory ?? task.download?.directory;
+  if (!directoryPath) {
+    return null;
+  }
+
+  if (normalizeComparablePath(directoryPath) === normalizeComparablePath(task.target.outputRootDir)) {
+    return null;
+  }
+
+  return {
+    directoryPath,
+    rootDirectoryPath: task.target.outputRootDir,
+  };
 }
 
 function directoryFromFilePath(filePath: string) {
@@ -877,7 +898,7 @@ export const useAppStore = defineStore("app", () => {
     const batch: TaskItem[] = [];
     let batchHasDouban = false;
 
-    for (const task of tasks.value) {
+    for (const task of [...tasks.value].sort(compareTaskAddedOrder)) {
       if (batch.length >= queueConfig.value.batchSize) {
         break;
       }
@@ -1086,7 +1107,7 @@ export const useAppStore = defineStore("app", () => {
   async function createTasks(drafts: TaskDraft[]) {
     await withPending("queue.create-task", async () => {
       const createdTasks = drafts.map((draft) => createTaskFromDraft(nextTaskId(), draft));
-      tasks.value = [...createdTasks, ...tasks.value];
+      tasks.value = [...tasks.value, ...createdTasks];
       schedulePersist();
       await emitLog(
         "INFO",
@@ -1201,10 +1222,23 @@ export const useAppStore = defineStore("app", () => {
     await withPending("queue.clear-all", async () => {
       const count = tasks.value.length;
       const taskIds = tasks.value.map((task) => task.id);
+      const outputDirectories: { directoryPath: string; rootDirectoryPath: string }[] = [];
+      for (const task of tasks.value) {
+        const outputDirectory = getTaskGeneratedOutputDirectory(task);
+        if (!outputDirectory) continue;
+        if (outputDirectories.some((item) => item.directoryPath === outputDirectory.directoryPath)) continue;
+
+        outputDirectories.push(outputDirectory);
+      }
       queueRunning.value = false;
 
       if (runtimeBridge.isNativeRuntime() && taskIds.length > 0) {
         await runtimeBridge.clearDownloadTasks(taskIds);
+        for (const outputDirectory of outputDirectories) {
+          if (outputDirectory) {
+            await runtimeBridge.deleteDirectoryPath(outputDirectory.directoryPath, outputDirectory.rootDirectoryPath);
+          }
+        }
       }
 
       activeTaskIds.value = [];
