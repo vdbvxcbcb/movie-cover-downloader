@@ -34,16 +34,6 @@ function sanitizeFolderSegment(input: string) {
   return input.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function titleFromImpAwardsUrl(detailUrl: string) {
-  const path = detailUrl.split("/").pop() ?? "impawards-item";
-  return path
-    .replace(/\.html?$/i, "")
-    .replace(/^\d{4}_?/, "")
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
 
 function titleFromDoubanUrl(detailUrl: string) {
   const match = detailUrl.match(/subject\/(\d+)/);
@@ -51,17 +41,12 @@ function titleFromDoubanUrl(detailUrl: string) {
 }
 
 function detectSource(sourceHint: SourceHint, detailUrl: string): SourceSite {
-  if (sourceHint !== "auto") return sourceHint;
-  if (detailUrl.includes("movie.douban.com")) return "douban";
-  return "impawards";
+  if (sourceHint === "douban" || detailUrl.includes("movie.douban.com")) return "douban";
+  throw new Error(`unsupported source url: ${detailUrl}`);
 }
 
-function resolveImagePageUrl(source: SourceSite, detailUrl: string) {
-  if (source === "impawards") {
-    return detailUrl;
-  }
-
-  if (/\/all_photos\/?$/i.test(detailUrl)) {
+function resolveImagePageUrl(_source: SourceSite, detailUrl: string) {
+if (/\/all_photos\/?$/i.test(detailUrl)) {
     return detailUrl.replace(/\?.*$/, "");
   }
 
@@ -73,12 +58,12 @@ function resolveImagePageUrl(source: SourceSite, detailUrl: string) {
   return `${subjectMatch[1]}/all_photos`;
 }
 
-function deriveTitle(task: TaskItem, source: SourceSite) {
+function deriveTitle(task: TaskItem) {
   if (task.title !== "待解析标题") {
     return task.title;
   }
 
-  return source === "douban" ? titleFromDoubanUrl(task.target.detailUrl) : titleFromImpAwardsUrl(task.target.detailUrl);
+  return titleFromDoubanUrl(task.target.detailUrl);
 }
 
 function buildOutputFolderName(title: string) {
@@ -116,19 +101,12 @@ function createDiscoveredAsset(
 }
 
 function buildDiscoverySet(source: SourceSite, title: string, imagePageUrl: string, maxImages: number) {
-  const discovered =
-    source === "douban"
-      ? [
-          createDiscoveredAsset("dbposter", 1, source, title, "poster", "vertical", 2000, 3000, imagePageUrl),
-          createDiscoveredAsset("dbstill", 1, source, title, "still", "horizontal", 1920, 1080, imagePageUrl),
-          createDiscoveredAsset("dbstill", 2, source, title, "still", "horizontal", 1920, 1080, imagePageUrl),
-          createDiscoveredAsset("dbposter", 2, source, title, "poster", "vertical", 1500, 2250, imagePageUrl),
-        ]
-      : [
-          createDiscoveredAsset("impposter", 1, source, title, "poster", "vertical", 2000, 3000, imagePageUrl),
-          createDiscoveredAsset("impposter", 2, source, title, "poster", "vertical", 2000, 3000, imagePageUrl),
-          createDiscoveredAsset("impbanner", 1, source, title, "poster", "horizontal", 3000, 1688, imagePageUrl),
-        ];
+  const discovered = [
+    createDiscoveredAsset("dbposter", 1, source, title, "poster", "vertical", 2000, 3000, imagePageUrl),
+    createDiscoveredAsset("dbstill", 1, source, title, "still", "horizontal", 1920, 1080, imagePageUrl),
+    createDiscoveredAsset("dbstill", 2, source, title, "still", "horizontal", 1920, 1080, imagePageUrl),
+    createDiscoveredAsset("dbposter", 2, source, title, "poster", "vertical", 1500, 2250, imagePageUrl),
+  ];
   const limited = discovered.slice(0, maxImages);
 
   return {
@@ -159,10 +137,10 @@ export async function* runTaskLifecycle(
   let nextTask = cloneTask(task);
   const source = detectSource(task.target.sourceHint, task.target.detailUrl);
   const imagePageUrl = resolveImagePageUrl(source, task.target.detailUrl);
-  const title = deriveTitle(task, source);
+  const title = deriveTitle(task);
   const outputFolderName = buildOutputFolderName(title);
   const outputDirectory = buildOutputDirectory(task, outputFolderName);
-  const confidence = source === "douban" ? 93 : 97;
+  const confidence = 93;
   const activeCookie = pickActiveCookie(cookies);
 
   if (nextTask.lifecycle.phase === "queued" || nextTask.lifecycle.phase === "retrying") {
@@ -189,7 +167,7 @@ export async function* runTaskLifecycle(
     await runtimeBridge.emitLog({
       level: "INFO",
       scope: "resolver",
-      message: `已识别站点 ${source === "douban" ? "豆瓣" : "ImpAwards"}，图片页: ${imagePageUrl}`,
+      message: `已识别站点 豆瓣，图片页: ${imagePageUrl}`,
       taskId: task.id,
     });
 
@@ -199,7 +177,7 @@ export async function* runTaskLifecycle(
       detection: {
         site: source,
         confidence,
-        reason: source === "douban" ? "详情页已自动推导到 all_photos 图片页" : "ImpAwards 页面本身就是图片抓取入口",
+        reason: "详情页已自动推导到 all_photos 图片页",
         detailUrl: task.target.detailUrl,
         imagePageUrl,
       },
@@ -244,7 +222,6 @@ export async function* runTaskLifecycle(
     yield { task: nextTask };
     await wait(220);
   }
-
   if (nextTask.lifecycle.phase === "downloading") {
     const shouldFail = source === "douban" && nextTask.title.includes("夜魔") && nextTask.lifecycle.attempts < 2;
     if (shouldFail && activeCookie) {

@@ -10,7 +10,6 @@ import { isDoubanEmptyCategoryTask } from "./douban-empty-category";
 
 const sourceSiteLabels: Record<SourceSite, string> = {
   douban: "豆瓣",
-  impawards: "ImpAwards",
 };
 
 const taskPhaseDescriptors: Record<TaskPhase, { label: string; tone: StatusTone }> = {

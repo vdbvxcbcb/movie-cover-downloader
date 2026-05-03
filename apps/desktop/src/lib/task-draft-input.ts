@@ -36,18 +36,11 @@ function isDoubanMovieDetailUrl(url: URL) {
   return /^\/subject\/\d+\/?$/i.test(url.pathname);
 }
 
-function isImpAwardsMovieDetailUrl(url: URL) {
-  if (url.protocol !== "http:" || url.hostname !== "www.impawards.com") {
-    return false;
-  }
-
-  return /^\/[^/]+\/[^/]+$/i.test(url.pathname);
-}
 
 function isSupportedDetailUrl(detailUrl: string) {
   try {
     const url = new URL(detailUrl);
-    return isDoubanMovieDetailUrl(url) || isImpAwardsMovieDetailUrl(url);
+    return isDoubanMovieDetailUrl(url);
   } catch {
     return false;
   }
@@ -84,7 +77,7 @@ export function validateTaskDraftInput(input: TaskDraftInputValidation): Validat
   if (unsupportedDetailUrl) {
     return {
       ok: false,
-      message: `不能加入队列：详情页链接中存在不支持的链接“${unsupportedDetailUrl}”，只能填写 https://movie.douban.com/subject/xxx 或 http://www.impawards.com/xxx/xxx 形式的链接。`,
+      message: `不能加入队列：详情页链接中存在不支持的链接“${unsupportedDetailUrl}”，只能填写 https://movie.douban.com/subject/xxx 形式的链接。`,
     };
   }
 

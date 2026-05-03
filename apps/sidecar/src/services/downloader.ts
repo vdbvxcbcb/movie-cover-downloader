@@ -370,7 +370,7 @@ export class DownloaderService {
           canKeepOriginalFormat
             ? { buffer: sourceImage.buffer, extension: targetExtension }
             : await normalizeImageBuffer(sourceImage.buffer, task.outputImageFormat);
-        const namingCategory = discovery.source === "douban" ? task.doubanAssetType : image.category;
+        const namingCategory = task.doubanAssetType;
         const fileName = buildFileName(
           discovery.normalizedTitle,
           namingCategory,

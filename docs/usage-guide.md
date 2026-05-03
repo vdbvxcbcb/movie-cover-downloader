@@ -197,13 +197,11 @@ cargo check
 - 支持批量添加
 - 一行一个详情页链接
 - 支持豆瓣详情页
-- 支持 `ImpAwards` 详情页
 
 示例：
 
 ```text
 https://movie.douban.com/subject/35010610/
-http://www.impawards.com/2024/joker_folie_a_deux.html
 ```
 
 当前弹窗支持这些任务级选项：
@@ -229,7 +227,6 @@ http://www.impawards.com/2024/joker_folie_a_deux.html
 - `海报` 对应 `photos?type=R`
 - `壁纸` 对应 `photos?type=W`
 - 如果填的是 `subject`、`all_photos` 或已经带 `photos?type=...` 的豆瓣链接，程序仍然会以弹窗里的抓图类型为准
-- 这个选项只对豆瓣链接生效，`ImpAwards` 会忽略
 
 数量模式规则：
 
@@ -251,15 +248,8 @@ http://www.impawards.com/2024/joker_folie_a_deux.html
 
 其中：
 
-- `ImpAwards` 会直接输出到 `片名 + 日期`
-- 豆瓣会先创建 `片名 + 日期`，再按抓图类型进入对应子目录：
+- 会根据豆瓣创建 `片名 + 日期`，再按抓图类型进入对应子目录：
   `still / poster / wallpaper`
-
-例如 `ImpAwards`：
-
-```text
-D:\cover\Joker Folie à Deux - 2026-05-01
-```
 
 例如豆瓣剧照：
 
@@ -315,7 +305,6 @@ D:\cover\示例电影 - 2026-05-01\wallpaper
 
 - 豆瓣请求间隔最低会提升到 `3 秒`
 - 豆瓣任务在桌面端会按串行执行
-- `ImpAwards` 不受这个串行限制
 
 这样做是为了降低连续请求触发豆瓣风控的概率。
 
@@ -387,15 +376,7 @@ dbcl2="177473297:xxxxxx"; ck=hb-J; bid=DYDcN1_PDPs; ll="118289"; ap_v=0,6.0
 
 ## 8. 当前真实链路状态
 
-### 8.1 ImpAwards
-
-当前已经做到：
-
-- 从详情页发现图片
-- 自动创建“片名 + 日期”子目录
-- 真实下载到本地目录
-
-### 8.2 豆瓣
+### 8.1 豆瓣
 
 当前已经做到：
 
@@ -485,17 +466,3 @@ cargo check
   说明当前请求被豆瓣保护机制拦截，建议等待一段时间后再试
 - `豆瓣页面结构异常，暂时无法解析`
   说明当前页面结构和程序预期不一致，需要结合日志进一步排查
-
-### 11.3 ImpAwards 下载失败
-
-优先检查：
-
-- 输入的是详情页 URL，不是图片 CDN URL
-- 输出目录是否可写
-- 网络是否被代理或安全软件拦截
-
-## 12. 相关文档
-
-- [architecture.md](./architecture.md)
-- [database.md](./database.md)
-- [mvp-plan.md](./mvp-plan.md)

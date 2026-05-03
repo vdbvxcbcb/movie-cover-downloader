@@ -19,7 +19,6 @@ const emit = defineEmits<{
 const form = reactive({
   detailUrls: "",
   outputRootDir: "D:/cover",
-  sourceHint: "auto" as const,
   doubanAssetType: "still" as DoubanAssetType,
   imageCountMode: "limited" as ImageCountMode,
   maxImagesInput: "10",
@@ -54,6 +53,22 @@ async function browseOutputDirectory() {
 
 function clampMaxImages(value: number) {
   return Math.min(100, Math.max(1, value));
+}
+
+const currentMaxImagesValue = computed(() => {
+  if (!/^\d+$/.test(form.maxImagesInput)) {
+    return 10;
+  }
+
+  return clampMaxImages(Number(form.maxImagesInput));
+});
+
+const canDecreaseMaxImages = computed(() => currentMaxImagesValue.value > 1);
+const canIncreaseMaxImages = computed(() => currentMaxImagesValue.value < 100);
+
+function stepMaxImages(delta: -1 | 1) {
+  form.maxImagesInput = String(clampMaxImages(currentMaxImagesValue.value + delta));
+  clearAlert();
 }
 
 function handleMaxImagesKeydown(event: KeyboardEvent) {
@@ -126,7 +141,7 @@ function submit() {
     drafts.push({
       detailUrl,
       outputRootDir: form.outputRootDir.trim(),
-      sourceHint: form.sourceHint,
+      sourceHint: "auto",
       doubanAssetType: form.doubanAssetType,
       imageCountMode: form.imageCountMode,
       maxImages: validation.maxImages,
@@ -164,7 +179,7 @@ function submit() {
           <textarea
             v-model="form.detailUrls"
             rows="5"
-            placeholder="链接可自动换行，每行一个链接，例如：&#10;https://movie.douban.com/subject/35010610/&#10;http://www.impawards.com/2024/joker_folie_a_deux.html"
+            placeholder="链接可自动换行，每行一个链接，例如：&#10;https://movie.douban.com/subject/35010610/&#10;https://movie.douban.com/subject/1292064/"
             @blur="handleDetailUrlsBlur"
             @input="handleDetailUrlsInput"
           />
@@ -177,16 +192,6 @@ function submit() {
             <ActionButton label="浏览" @click="void browseOutputDirectory()" />
           </div>
         </label>
-
-        <label class="field">
-          <span>站点提示</span>
-          <select v-model="form.sourceHint">
-            <option value="auto">自动识别</option>
-            <option value="douban">强制按豆瓣处理</option>
-            <option value="impawards">强制按 ImpAwards 处理</option>
-          </select>
-        </label>
-
         <label class="field">
           <span>输出格式</span>
           <select v-model="form.outputImageFormat">
@@ -236,9 +241,6 @@ function submit() {
                   壁纸
                 </button>
               </div>
-              <p class="field-hint">
-                仅对豆瓣 subject / all_photos / photos 链接生效，ImpAwards 会忽略此项。
-              </p>
             </div>
 
             <div class="strategy-panel">
@@ -261,20 +263,40 @@ function submit() {
                   无限制
                 </button>
               </div>
-              <label v-if="form.imageCountMode === 'limited'" class="field quantity-field">
-                <input
-                  :value="form.maxImagesInput"
-                  type="text"
-                  min="1"
-                  max="100"
-                  step="1"
-                  inputmode="numeric"
-                  placeholder="默认 10"
-                  @blur="handleMaxImagesBlur"
-                  @input="handleMaxImagesInput"
-                  @keydown="handleMaxImagesKeydown"
-                />
-              </label>
+              <div v-if="form.imageCountMode === 'limited'" class="field quantity-field">
+                <div class="number-stepper">
+                  <button
+                    type="button"
+                    class="number-stepper__control"
+                    :disabled="!canDecreaseMaxImages"
+                    aria-label="减少下载数量"
+                    @click="stepMaxImages(-1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    :value="form.maxImagesInput"
+                    type="text"
+                    min="1"
+                    max="100"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="默认 10"
+                    @blur="handleMaxImagesBlur"
+                    @input="handleMaxImagesInput"
+                    @keydown="handleMaxImagesKeydown"
+                  />
+                  <button
+                    type="button"
+                    class="number-stepper__control"
+                    :disabled="!canIncreaseMaxImages"
+                    aria-label="增加下载数量"
+                    @click="stepMaxImages(1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
               <p v-else class="field-hint">将抓取当前分类页可发现的全部图片，不再显示数量输入。</p>
             </div>
           </div>
@@ -346,12 +368,18 @@ function submit() {
 
 .strategy-panel {
   display: grid;
+  grid-template-rows: auto auto;
+  align-content: start;
   gap: 12px;
   min-width: 0;
   padding: 14px;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: rgba(4, 16, 19, 0.44);
+}
+
+.strategy-panel:first-child .segmented-control {
+  align-self: start;
 }
 
 .field-hint {
@@ -364,11 +392,16 @@ function submit() {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: flex-start;
 }
 
 .segmented-control__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
   min-width: 88px;
-  padding: 11px 16px;
+  padding: 0 16px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.03);
@@ -391,6 +424,66 @@ function submit() {
 
 .quantity-field {
   gap: 10px;
+  width: 186px;
+  max-width: 100%;
+}
+.number-stepper {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: stretch;
+  width: 100%;
+  min-height: 50px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.number-stepper:focus-within {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 3px rgba(77, 212, 198, 0.12);
+}
+
+.number-stepper__control {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 0;
+  border-right: 1px solid var(--line);
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.number-stepper__control:last-child {
+  border-right: 0;
+  border-left: 1px solid var(--line);
+}
+
+.number-stepper__control:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(77, 212, 198, 0.1);
+}
+
+.number-stepper__control:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.quantity-field .number-stepper input {
+  min-width: 0;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: center;
+}
+
+.quantity-field .number-stepper input:focus {
+  box-shadow: none;
+  text-align: center;
 }
 
 .create-task-modal textarea {

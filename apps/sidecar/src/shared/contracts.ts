@@ -1,5 +1,5 @@
 export type LogLevel = "INFO" | "WARN" | "ERROR";
-export type SourceSite = "douban" | "impawards";
+export type SourceSite = "douban";
 export type SourceHint = "auto" | SourceSite;
 export type OutputImageFormat = "jpg" | "png";
 export type AssetCategory = "poster" | "still";

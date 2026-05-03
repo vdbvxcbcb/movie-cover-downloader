@@ -6,14 +6,8 @@ const doubanTypeParamMap = {
   wallpaper: "W",
 } as const;
 
-function stripQuery(url: string) {
-  return url.replace(/[?#].*$/, "");
-}
-
 export function detectSource(sourceHint: SourceHint, detailUrl: string): SourceSite {
-  if (sourceHint !== "auto") return sourceHint;
-  if (detailUrl.includes("movie.douban.com")) return "douban";
-  if (detailUrl.includes("impawards.com")) return "impawards";
+  if (sourceHint === "douban" || detailUrl.includes("movie.douban.com")) return "douban";
   throw new Error(`unsupported source url: ${detailUrl}`);
 }
 
@@ -32,27 +26,15 @@ function resolveDoubanPhotoPageUrl(detailUrl: string, doubanAssetType: SidecarTa
   return `${subjectDetailUrl}photos?type=${doubanTypeParamMap[doubanAssetType]}`;
 }
 
-export function resolveImagePageUrl(source: SourceSite, task: SidecarTask) {
-  if (source === "impawards") {
-    return stripQuery(task.detailUrl);
-  }
-
+export function resolveImagePageUrl(_source: SourceSite, task: SidecarTask) {
   return resolveDoubanPhotoPageUrl(task.detailUrl, task.doubanAssetType);
 }
 
 export function createResolvedSkeleton(task: SidecarTask): Omit<ResolvedSource, "title" | "confidence" | "reason"> {
   const source = detectSource(task.sourceHint, task.detailUrl);
-  if (source === "douban") {
-    return {
-      source,
-      detailUrl: resolveDoubanSubjectDetailUrl(task.detailUrl),
-      imagePageUrl: resolveDoubanPhotoPageUrl(task.detailUrl, task.doubanAssetType),
-    };
-  }
-
   return {
     source,
-    detailUrl: stripQuery(task.detailUrl),
-    imagePageUrl: resolveImagePageUrl(source, task),
+    detailUrl: resolveDoubanSubjectDetailUrl(task.detailUrl),
+    imagePageUrl: resolveDoubanPhotoPageUrl(task.detailUrl, task.doubanAssetType),
   };
 }

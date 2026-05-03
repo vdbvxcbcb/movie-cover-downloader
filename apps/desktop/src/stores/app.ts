@@ -135,7 +135,7 @@ function inferTaskSource(task: TaskItem) {
     return task.target.sourceHint;
   }
 
-  return task.target.detailUrl.includes("movie.douban.com") ? "douban" : "impawards";
+  return "douban";
 }
 
 function fileNameFromPath(filePath: string) {
@@ -731,11 +731,8 @@ export const useAppStore = defineStore("app", () => {
       },
       detection: {
         site: result.discovery.source,
-        confidence: result.discovery.source === "douban" ? 93 : 97,
-        reason:
-          result.discovery.source === "douban"
-            ? "已从详情页自动推导到豆瓣 all_photos 图片页"
-            : "ImpAwards 详情页已直接解析为图片抓取入口",
+        confidence: 93,
+        reason: "已从详情页自动推导到豆瓣 all_photos 图片页",
         detailUrl: result.discovery.detailUrl,
         imagePageUrl: result.discovery.imagePageUrl,
       },

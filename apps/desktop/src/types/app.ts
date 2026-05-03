@@ -1,7 +1,7 @@
 export type StatusTone = "good" | "warn" | "danger" | "neutral";
 
 export type LogLevel = "INFO" | "WARN" | "ERROR";
-export type SourceSite = "douban" | "impawards";
+export type SourceSite = "douban";
 export type SourceHint = "auto" | SourceSite;
 export type OutputImageFormat = "jpg" | "png";
 export type DoubanAssetType = "still" | "poster" | "wallpaper";

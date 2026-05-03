@@ -20,7 +20,7 @@ test("批量链接输入会把连续链接自动拆成逐行", () => {
   );
 });
 
-test("详情页链接只允许豆瓣 subject 或 ImpAwards 影片页", () => {
+test("详情页链接只允许豆瓣 subject 链接", () => {
   const result = validateTaskDraftInput({
     detailUrls: "https://example.com/movie/1",
     outputRootDir: "D:/cover",
@@ -33,11 +33,11 @@ test("详情页链接只允许豆瓣 subject 或 ImpAwards 影片页", () => {
   assert.match(result.message, /不支持的链接/);
 });
 
-test("详情页链接接受指定形式的豆瓣和 ImpAwards 链接", () => {
+test("详情页链接接受指定形式的豆瓣 subject 链接", () => {
   const result = validateTaskDraftInput({
     detailUrls: [
       "https://movie.douban.com/subject/34780991/",
-      "http://www.impawards.com/2024/joker_folie_a_deux.html",
+      "https://movie.douban.com/subject/1292064/",
     ].join("\n"),
     outputRootDir: "D:/cover",
     imageCountMode: "limited",
@@ -47,40 +47,33 @@ test("详情页链接接受指定形式的豆瓣和 ImpAwards 链接", () => {
   assert.equal(result.ok, true);
 });
 
-test("详情页链接会拒绝豆瓣或 ImpAwards 根站链接", () => {
+test("详情页链接会拒绝豆瓣根站和非豆瓣链接", () => {
   const doubanResult = validateTaskDraftInput({
     detailUrls: "https://movie.douban.com/",
     outputRootDir: "D:/cover",
     imageCountMode: "limited",
     maxImagesInput: "10",
   });
-  const impAwardsResult = validateTaskDraftInput({
-    detailUrls: "https://impawards.com/",
+  const externalResult = validateTaskDraftInput({
+    detailUrls: "https://example.org/movie/1",
     outputRootDir: "D:/cover",
     imageCountMode: "limited",
     maxImagesInput: "10",
   });
 
   assert.equal(doubanResult.ok, false);
-  assert.equal(impAwardsResult.ok, false);
+  assert.equal(externalResult.ok, false);
 });
 
-test("详情页链接会拒绝豆瓣非 subject 链接和 ImpAwards 非 http www 链接", () => {
-  const doubanPhotosResult = validateTaskDraftInput({
+test("详情页链接会拒绝豆瓣非 subject 链接", () => {
+  const result = validateTaskDraftInput({
     detailUrls: "https://movie.douban.com/subject/34780991/photos?type=S",
     outputRootDir: "D:/cover",
     imageCountMode: "limited",
     maxImagesInput: "10",
   });
-  const impAwardsHttpsResult = validateTaskDraftInput({
-    detailUrls: "https://www.impawards.com/2024/joker_folie_a_deux.html",
-    outputRootDir: "D:/cover",
-    imageCountMode: "limited",
-    maxImagesInput: "10",
-  });
 
-  assert.equal(doubanPhotosResult.ok, false);
-  assert.equal(impAwardsHttpsResult.ok, false);
+  assert.equal(result.ok, false);
 });
 
 test("详情页链接会拒绝非字符串类型", () => {

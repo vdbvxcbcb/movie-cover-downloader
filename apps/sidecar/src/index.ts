@@ -94,7 +94,7 @@ async function main() {
   );
 
   logger.info(`sidecar ready: ${formatRuntimeConfig(config)}`);
-  logger.info("real url-driven fetch skeleton is enabled for douban detail pages and impawards pages");
+  logger.info("real url-driven fetch is enabled for douban detail pages");
 
   process.on("SIGINT", async () => {
     logger.warn("received SIGINT, shutting down sidecar");

@@ -56,42 +56,36 @@ function createDraft(overrides: Partial<TaskDraft> = {}): TaskDraft {
   };
 }
 
-function createSuccessResult(source: "douban" | "impawards", imageCount = 1): RuntimeDownloadTaskResult {
-  const normalizedTitle = source === "douban" ? "Douban Title" : "ImpAwards Title";
-  const outputDir = source === "douban" ? "D:/cover/Douban Title - 2026-05-01" : "D:/cover/ImpAwards Title - 2026-05-01";
+function createSuccessResult(imageCount = 1): RuntimeDownloadTaskResult {
+  const normalizedTitle = "Douban Title";
+  const outputDir = "D:/cover/Douban Title - 2026-05-01";
 
   return {
     discovery: {
-      source,
-      detailUrl:
-        source === "douban"
-          ? "https://movie.douban.com/subject/34780991/"
-          : "http://www.impawards.com/2024/joker_folie_a_deux.html",
-      imagePageUrl:
-        source === "douban"
-          ? "https://movie.douban.com/subject/34780991/photos?type=W"
-          : "http://www.impawards.com/2024/joker_folie_a_deux_ver1.html",
+      source: "douban",
+      detailUrl: "https://movie.douban.com/subject/34780991/",
+      imagePageUrl: "https://movie.douban.com/subject/34780991/photos?type=W",
       normalizedTitle,
       outputFolderName: `${normalizedTitle} - 2026-05-01`,
       outputDir,
       images: Array.from({ length: imageCount }, (_, index) => ({
-        id: `${source}-image-${index + 1}`,
-        source,
+        id: `douban-image-${index + 1}`,
+        source: "douban",
         title: normalizedTitle,
-        imageUrl: `https://img.example.com/${source}-${index + 1}.jpg`,
+        imageUrl: `https://img.example.com/douban-${index + 1}.jpg`,
         category: "still" as const,
         orientation: "horizontal" as const,
       })),
     },
     download: {
       outputDir,
-      source,
       saved: Array.from({ length: imageCount }, (_, index) => ({
-        sourceUrl: `https://img.example.com/${source}-${index + 1}.jpg`,
-        outputPath: `D:/cover/${source}-${index + 1}.jpg`,
+        sourceUrl: `https://img.example.com/douban-${index + 1}.jpg`,
+        outputPath: `${outputDir}/douban-${index + 1}.jpg`,
         category: "still" as const,
         orientation: "horizontal" as const,
       })),
+      source: "douban",
     },
   };
 }
@@ -449,29 +443,24 @@ test("豆瓣 unexpected 失败时显示中文摘要且 Cookie 保持 active", as
   assert.equal(appStore.cookies[0]?.coolingUntil, undefined);
 });
 
-test("豆瓣任务在保护模式下串行执行且不阻塞 ImpAwards", async () => {
+test("豆瓣任务在保护模式下串行执行", async () => {
   const { appStore, runtimeBridge } = await setupStore();
   const started: string[] = [];
   let releaseFirstDouban: (() => void) | null = null;
   let secondDoubanStarted = false;
 
   runtimeBridge.runDownloadTask = async (payload) => {
-    if (payload.detailUrl.includes("movie.douban.com")) {
-      started.push(payload.detailUrl);
+    started.push(payload.detailUrl);
 
-      if (releaseFirstDouban === null) {
-        await new Promise<void>((resolve) => {
-          releaseFirstDouban = resolve;
-        });
-      } else {
-        secondDoubanStarted = true;
-      }
-
-      return createSuccessResult("douban");
+    if (releaseFirstDouban === null) {
+      await new Promise<void>((resolve) => {
+        releaseFirstDouban = resolve;
+      });
+    } else {
+      secondDoubanStarted = true;
     }
 
-    started.push(payload.detailUrl);
-    return createSuccessResult("impawards");
+    return createSuccessResult();
   };
 
   await appStore.importCookie({
@@ -481,31 +470,18 @@ test("豆瓣任务在保护模式下串行执行且不阻塞 ImpAwards", async (
   await appStore.createTasks([
     createDraft({ detailUrl: "https://movie.douban.com/subject/34780991/" }),
     createDraft({ detailUrl: "https://movie.douban.com/subject/1292052/" }),
-    createDraft({
-      detailUrl: "http://www.impawards.com/2024/joker_folie_a_deux.html",
-      sourceHint: "impawards",
-    }),
   ]);
 
-  await waitFor(() => started.length >= 2);
+  await waitFor(() => started.length >= 1);
 
-  assert.equal(
-    started.filter((url) => url.includes("movie.douban.com")).length,
-    1,
-  );
-  assert.ok(
-    started.some((url) => url.includes("impawards.com")),
-  );
+  assert.equal(started.length, 1);
   assert.equal(secondDoubanStarted, false);
 
   releaseFirstDouban?.();
 
   await waitFor(() => appStore.tasks.every((task) => task.lifecycle.phase === "completed"));
 
-  assert.equal(
-    started.filter((url) => url.includes("movie.douban.com")).length,
-    2,
-  );
+  assert.equal(started.length, 2);
 });
 
 test("原生任务处理中收到片名解析日志后会立即更新队列标题", async () => {
@@ -517,7 +493,7 @@ test("原生任务处理中收到片名解析日志后会立即更新队列标�
       resolveTask = resolve;
     });
 
-    return createSuccessResult("douban");
+    return createSuccessResult();
   };
 
   await appStore.createTasks([createDraft()]);
@@ -548,7 +524,7 @@ test("原生任务发现总数后进度先显示短横线并在 task-progress �
       resolveTask = resolve;
     });
 
-    return createSuccessResult("douban", 3);
+    return createSuccessResult(3);
   };
 
   await appStore.createTasks([createDraft()]);
@@ -591,7 +567,7 @@ test("原生任务进度结构化日志到达后会立刻刷新下载进度", as
       resolveTask = resolve;
     });
 
-    return createSuccessResult("douban", 3);
+    return createSuccessResult(3);
   };
 
   await appStore.createTasks([createDraft()]);
@@ -646,7 +622,7 @@ test("原生任务仅收到实时下载日志时也会逐张刷新下载进度",
       resolveTask = resolve;
     });
 
-    return createSuccessResult("douban", 3);
+    return createSuccessResult(3);
   };
 
   await appStore.createTasks([createDraft()]);
@@ -707,7 +683,7 @@ test("原生任务收到带作用域前缀的下载日志时也会逐张刷新�
       resolveTask = resolve;
     });
 
-    return createSuccessResult("douban", 3);
+    return createSuccessResult(3);
   };
 
   await appStore.createTasks([createDraft()]);
@@ -748,7 +724,7 @@ test("原生任务进度更新时会替换任务列表引用以触发表格重�
       resolveTask = resolve;
     });
 
-    return createSuccessResult("douban", 3);
+    return createSuccessResult(3);
   };
 
   await appStore.createTasks([createDraft()]);
@@ -780,7 +756,7 @@ test("原生任务进度更新时会递增表格刷新节拍", async () => {
       resolveTask = resolve;
     });
 
-    return createSuccessResult("douban", 3);
+    return createSuccessResult(3);
   };
 
   await appStore.createTasks([createDraft()]);
@@ -806,7 +782,7 @@ test("原生任务进度更新时会递增表格刷新节拍", async () => {
 test("原生任务完成后晚到的进度事件不会把状态改回下载中", async () => {
   const { appStore, runtimeBridge, emitTaskProgress, emitRuntimeLogs } = await setupStore();
 
-  runtimeBridge.runDownloadTask = async () => createSuccessResult("douban", 10);
+  runtimeBridge.runDownloadTask = async () => createSuccessResult(10);
 
   await appStore.createTasks([createDraft()]);
   await waitFor(() => appStore.tasks[0]?.lifecycle.phase === "completed");
@@ -951,7 +927,7 @@ test("任务继续后会回到 retrying 并重开队列", async () => {
     await new Promise<void>((resolve) => {
       releaseTask = resolve;
     });
-    return createSuccessResult("douban");
+    return createSuccessResult();
   };
 
   await appStore.createTasks([createDraft()]);
@@ -1016,7 +992,7 @@ test("清空队列时会调用原生后台清理并清空前端任务列表", as
 
   await appStore.createTasks([
     createDraft(),
-    createDraft({ detailUrl: "http://www.impawards.com/2024/joker_folie_a_deux.html", sourceHint: "impawards" }),
+    createDraft({ detailUrl: "https://movie.douban.com/subject/1292052/" }),
   ]);
 
   await appStore.clearQueueTasks();

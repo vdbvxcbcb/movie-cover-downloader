@@ -1,5 +1,4 @@
 import { DoubanAdapter } from "../adapters/douban.js";
-import { ImpAwardsAdapter } from "../adapters/impawards.js";
 import type { DiscoveryResult, SidecarTask } from "../shared/contracts.js";
 import type { SidecarLogger } from "../shared/logger.js";
 import type { RuntimeConfig } from "../shared/runtime-config.js";
@@ -13,10 +12,7 @@ export class MatcherService {
     private readonly cookiePool: CookiePoolService,
     private readonly logger: SidecarLogger,
   ) {
-    this.adapters = [
-      new DoubanAdapter(),
-      new ImpAwardsAdapter(),
-    ];
+    this.adapters = [new DoubanAdapter()];
   }
 
   async discover(task: SidecarTask): Promise<DiscoveryResult> {

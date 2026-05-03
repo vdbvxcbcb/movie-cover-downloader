@@ -3,7 +3,6 @@
 `apps/sidecar` 是后续真实抓取链路的执行层，目标是承接：
 
 - 豆瓣适配器
-- `ImpAwards` 适配器
 - 匹配评分
 - Cookie 池
 - 下载调度
@@ -17,7 +16,6 @@
 - 事件与任务契约 `src/shared/contracts.ts`
 - 结构化日志器 `src/shared/logger.ts`
 - 调度器、匹配器、下载器、Cookie 池的服务骨架
-- 豆瓣 / `ImpAwards` adapter 骨架
 
 ## 目录结构
 
@@ -26,7 +24,6 @@ src/
   adapters/
     base.ts
     douban.ts
-    impawards.ts
   services/
     cookie-pool.ts
     downloader.ts
@@ -50,7 +47,6 @@ src/
 
 ## 当前限制
 
-- 还没有真正访问豆瓣或 `ImpAwards`
 - 还没有接 SQLite
 - 还没有接标准输入 / IPC / HTTP 控制面
 - 还没有接入真实下载落盘流程

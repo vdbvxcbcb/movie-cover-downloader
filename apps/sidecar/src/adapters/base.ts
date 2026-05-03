@@ -11,7 +11,7 @@ export interface AdapterContext {
 }
 
 export interface SourceAdapter {
-  source: "douban" | "impawards";
+  source: "douban";
   canHandle(task: SidecarTask): boolean;
   discover(task: SidecarTask, context: AdapterContext): Promise<DiscoveryResult>;
 }
