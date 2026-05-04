@@ -1,3 +1,4 @@
+// 前端共享类型定义：队列任务、Cookie、日志、运行时事件和下载结果都在这里约束。
 export type StatusTone = "good" | "warn" | "danger" | "neutral";
 
 export type LogLevel = "INFO" | "WARN" | "ERROR";

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// Cookie 导入弹窗：支持自动登录导入和手动粘贴两种模式。
 import { reactive, ref } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import type { CookieDraft, CookieImportMode } from "../../types/app";
@@ -15,6 +16,7 @@ const form = reactive({
   note: "豆瓣 Cookie",
 });
 
+// 手动导入模式提交：校验 Cookie 内容非空后把草稿交给父组件。
 function submitManual() {
   const value = form.value.trim();
   const note = form.note.trim() || "豆瓣 Cookie";

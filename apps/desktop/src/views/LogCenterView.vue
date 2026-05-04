@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 日志中心页面：展示运行日志，并提供错误过滤与清空操作。
 import ActionButton from "../components/common/ActionButton.vue";
 import LogConsole from "../components/logs/LogConsole.vue";
 import PanelSection from "../components/common/PanelSection.vue";

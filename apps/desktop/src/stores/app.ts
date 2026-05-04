@@ -1,3 +1,4 @@
+// Pinia 核心状态仓库：集中管理任务队列、Cookie、日志、持久化和下载调度。
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { createInitialAppSeed, createTaskFromDraft } from "../data/mock";
@@ -18,17 +19,20 @@ import type {
   TaskItem,
 } from "../types/app";
 
+// 队列阶段集合按行为能力分组：能运行、能恢复、能暂停、以及进度不应再被覆盖的终态。
 const runnablePhases = new Set(["queued", "retrying"]);
 const resumablePhases = new Set(["resolving", "discovering", "downloading"]);
 const pausablePhases = new Set(["resolving", "discovering", "downloading", "retrying"]);
 const terminalProgressPhases = new Set(["completed", "failed", "paused"]);
 const cookieRetentionMs = 30 * 24 * 60 * 60 * 1000;
 
+// store 内部等待工具，用于队列冷却、登录窗口轮询等异步等待场景。
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const resolvedTitleLogPrefix = "片名已解析: ";
 const discoveredImagesLogPattern = /^(?:\[[^\]]+\]\s*)?discovered\s+(\d+)\s+images\s+from\s+\S+\s+->\s+(.+)$/i;
 const savedImageLogPattern = /^(?:\[[^\]]+\]\s*)?saved image:\s*(.+)$/i;
 
+// 生成任务、日志和 Cookie 记录使用的当前本地时间字符串。
 function timestampNow() {
   return new Intl.DateTimeFormat("zh-CN", {
     hour12: false,
@@ -43,10 +47,12 @@ function timestampNow() {
     .replace(/\//g, "-");
 }
 
+// 通过 JSON 深拷贝去掉 Vue 响应式代理，得到可安全持久化的普通对象。
 function clonePersistable<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+// 重新载入本地快照时会裁剪日志并修正重复 id，避免旧数据导致 Vue 列表 key 冲突。
 function normalizeSnapshotLogs(logs: AppSeedState["logs"]) {
   const nextLogs = clonePersistable(logs.slice(0, 200));
   const usedIds = new Set<number>();
@@ -67,11 +73,13 @@ function normalizeSnapshotLogs(logs: AppSeedState["logs"]) {
   });
 }
 
+// 把持久化异常压缩成适合 toast 展示的短提示。
 function buildPersistErrorNotice(message: string) {
   const compactMessage = message.replace(/\s+/g, " ").trim().slice(0, 120);
   return compactMessage ? `本地持久化保存失败：${compactMessage}` : "本地持久化保存失败";
 }
 
+// 把当前 store 状态组装成持久化快照，Rust 会按这个结构写入 SQLite。
 function toSnapshot(tasks: TaskItem[], cookies: CookieProfile[], logs: AppSeedState["logs"], queueConfig: QueueConfig): AppSeedState {
   return {
     schemaVersion: 2,
@@ -132,6 +140,7 @@ function rehydrateTasks(tasks: TaskItem[]) {
   });
 }
 
+// 根据任务 sourceHint 推断站点来源；auto 目前默认按豆瓣处理。
 function inferTaskSource(task: TaskItem) {
   if (task.target.sourceHint !== "auto") {
     return task.target.sourceHint;
@@ -140,14 +149,17 @@ function inferTaskSource(task: TaskItem) {
   return "douban";
 }
 
+// 从完整路径中提取文件名，用于 download.files 列表。
 function fileNameFromPath(filePath: string) {
   return filePath.split(/[/\\]/).pop() ?? filePath;
 }
 
+// 为自动登录导入的 Cookie 生成备注，方便用户区分导入来源和时间。
 function buildAutoImportedCookieNote() {
   return `豆瓣登录导入 ${timestampNow()}`;
 }
 
+// 从 sidecar 片名解析日志中提取影片标题，用于实时更新任务标题。
 function extractResolvedTitleFromLogMessage(message: string) {
   if (!message.startsWith(resolvedTitleLogPrefix)) {
     return null;
@@ -157,6 +169,7 @@ function extractResolvedTitleFromLogMessage(message: string) {
   return title || null;
 }
 
+// 从 discovered images 日志中提取图片总数和输出目录，用于初始化进度分母。
 function extractDiscoveredDownloadSnapshotFromLogMessage(message: string) {
   const match = discoveredImagesLogPattern.exec(message.trim());
   if (!match) {
@@ -175,6 +188,7 @@ function extractDiscoveredDownloadSnapshotFromLogMessage(message: string) {
   };
 }
 
+// 从 saved image 日志中提取已保存图片路径，用作进度事件兜底。
 function extractSavedImagePathFromLogMessage(message: string) {
   const match = savedImageLogPattern.exec(message.trim());
   if (!match) {
@@ -185,10 +199,12 @@ function extractSavedImagePathFromLogMessage(message: string) {
   return outputPath || null;
 }
 
+// 比较目录时统一去掉结尾斜杠并转小写，避免 Windows 路径大小写差异。
 function normalizeComparablePath(path: string) {
   return path.trim().replace(/[\\/]+$/, "").toLowerCase();
 }
 
+// 找出任务真正生成的子输出目录；如果只是输出根目录则拒绝作为删除目标。
 function getTaskGeneratedOutputDirectory(task: TaskItem) {
   const directoryPath = task.outputDirectory ?? task.download?.directory;
   if (!directoryPath) {
@@ -205,6 +221,7 @@ function getTaskGeneratedOutputDirectory(task: TaskItem) {
   };
 }
 
+// 从图片完整路径中提取所在目录，用于补齐任务 outputDirectory。
 function directoryFromFilePath(filePath: string) {
   const separatorIndex = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
   if (separatorIndex === -1) {
@@ -214,6 +231,7 @@ function directoryFromFilePath(filePath: string) {
   return filePath.slice(0, separatorIndex);
 }
 
+// sidecar 会把实时进度同时写成隐藏日志；这里把它还原成进度事件，补齐事件监听可能错过的情况。
 function extractTaskProgressFromRuntimeLog(entry: AppSeedState["logs"][number]) {
   if (entry.scope !== "task-progress" || !entry.taskId) {
     return null;
@@ -237,6 +255,7 @@ function extractTaskProgressFromRuntimeLog(entry: AppSeedState["logs"][number]) 
   }
 }
 
+// 根据失败消息判断是否需要让当前豆瓣 Cookie 冷却，降低连续风控风险。
 function shouldCooldownDoubanCookie(message: string) {
   const normalized = message.toLowerCase();
 
@@ -255,6 +274,7 @@ function shouldCooldownDoubanCookie(message: string) {
   ].some((keyword) => normalized.includes(keyword));
 }
 
+// 判断错误是否属于豆瓣登录失效或未登录，便于提示用户重新导入 Cookie。
 function isDoubanAuthFailure(message: string) {
   const normalized = message.toLowerCase();
 
@@ -278,6 +298,7 @@ function isDoubanAuthFailure(message: string) {
   ].some((keyword) => normalized.includes(keyword));
 }
 
+// 豆瓣失败会按用户可理解的原因分类，决定是否冷却 Cookie 和展示什么提示。
 function classifyDoubanFailure(message: string, task: TaskItem) {
   const normalized = message.toLowerCase();
 
@@ -324,6 +345,7 @@ function classifyDoubanFailure(message: string, task: TaskItem) {
   };
 }
 
+// 失败时尽量保留已解析片名；空分类错误也可以从消息里提取片名。
 function resolveFailureTaskTitle(message: string, task: TaskItem) {
   if (task.title !== "待解析标题") {
     return task.title;
@@ -332,6 +354,7 @@ function resolveFailureTaskTitle(message: string, task: TaskItem) {
   return extractDoubanEmptyCategoryTitle(message) ?? task.title;
 }
 
+// 为新导入 Cookie 生成导入时间和默认过期时间。
 function createCookieLifetime(baseTime = Date.now()) {
   return {
     importedAt: new Date(baseTime).toISOString(),
@@ -339,6 +362,7 @@ function createCookieLifetime(baseTime = Date.now()) {
   };
 }
 
+// 清理过期 Cookie，并补齐缺失或非法的导入/过期时间。
 function normalizeCookieProfiles(rawCookies: CookieProfile[], now = Date.now()) {
   let changed = false;
   let removedCount = 0;
@@ -379,6 +403,7 @@ function normalizeCookieProfiles(rawCookies: CookieProfile[], now = Date.now()) 
   };
 }
 
+// 组合式 store 保留所有业务状态，外部组件只通过这里暴露的动作修改队列。
 export const useAppStore = defineStore("app", () => {
   const seed = createInitialAppSeed();
 
@@ -398,6 +423,7 @@ export const useAppStore = defineStore("app", () => {
   const notice = ref<NoticePayload | null>(null);
   const pendingActionIds = ref<string[]>([]);
   const activeTaskIds = ref<string[]>([]);
+  // 自定义裁剪默认保存到最近任务的输出根目录；没有任务时回退 D:/cover。
   const customCropOutputRootDir = computed(() => {
     const latestTask = tasks.value[tasks.value.length - 1];
     return latestTask?.target.outputRootDir ?? "D:/cover";
@@ -410,10 +436,12 @@ export const useAppStore = defineStore("app", () => {
   let persistInFlight: Promise<void> | null = null;
   let persistRerunRequested = false;
 
+  // 用不可变数组替换单个任务，确保 Vue 能可靠触发列表更新。
   function replaceTaskAtIndex(taskIndex: number, nextTask: TaskItem) {
     tasks.value = tasks.value.map((task, index) => (index === taskIndex ? nextTask : task));
   }
 
+  // 进度事件是下载实时更新的主路径：每保存一张图片都会推进 savedCount 和进度条。
   function applyTaskProgressUpdate(event: RuntimeTaskProgressEvent) {
     const taskIndex = tasks.value.findIndex((task) => task.id === event.taskId);
     if (taskIndex === -1) {
@@ -451,6 +479,7 @@ export const useAppStore = defineStore("app", () => {
     return true;
   }
 
+  // 日志解析是实时进度的兜底路径：解析片名、发现数量和 saved image 日志都能反推任务状态。
   function applyRuntimeLogTaskUpdate(entry: AppSeedState["logs"][number]) {
     if (!entry.taskId) {
       return false;
@@ -555,6 +584,7 @@ export const useAppStore = defineStore("app", () => {
     return true;
   }
 
+  // 批量处理日志带来的任务状态变化，最后只触发一次持久化调度。
   function applyRuntimeLogTaskUpdates(entries: AppSeedState["logs"]) {
     let changed = false;
 
@@ -569,6 +599,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 日志采用批量监听，降低高频下载日志导致的界面和持久化压力。
   void runtimeBridge.onRuntimeLogBatch((entries) => {
     if (entries.length === 0) return;
     applyRuntimeLogTaskUpdates(entries);
@@ -580,12 +611,14 @@ export const useAppStore = defineStore("app", () => {
     applyTaskProgressUpdate(event);
   });
 
+  // 日志中心可见日志：按“仅错误”开关过滤，并隐藏内部 task-progress 兜底日志。
   const visibleLogs = computed(() =>
     (logOnlyErrors.value ? logs.value.filter((entry) => entry.level === "ERROR") : logs.value).filter(
       (entry) => entry.scope !== "task-progress",
     ),
   );
 
+  // 清理待执行的状态/日志保存定时器，避免持久化重入时重复触发。
   function clearPersistTimers() {
     if (persistenceTimer !== null) {
       window.clearTimeout(persistenceTimer);
@@ -598,6 +631,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 持久化串行执行：如果保存过程中又有新状态，当前保存结束后立即补跑一次。
   async function persistState() {
     if (!hydrated.value) return;
 
@@ -628,6 +662,7 @@ export const useAppStore = defineStore("app", () => {
     await persistInFlight;
   }
 
+  // 延迟保存状态：普通状态短防抖，日志保存稍长合并，减少 SQLite 写入频率。
   function schedulePersist(reason: "state" | "logs" = "state") {
     if (!hydrated.value) return;
 
@@ -648,46 +683,57 @@ export const useAppStore = defineStore("app", () => {
     }, 180);
   }
 
+  // 设置全局 toast 提示，供界面右上角统一展示反馈。
   function showNotice(message: string, tone: NoticePayload["tone"] = "info") {
     notice.value = { message, tone };
   }
 
+  // 清除当前 toast，通常由用户点击关闭触发。
   function clearNotice() {
     notice.value = null;
   }
 
+  // 切换日志中心“仅错误”过滤，也支持显式设置为开或关。
   function toggleLogOnlyErrors(force?: boolean) {
     logOnlyErrors.value = typeof force === "boolean" ? force : !logOnlyErrors.value;
   }
 
+  // 打开新增链接任务弹窗。
   function openCreateTask() {
     createTaskOpen.value = true;
   }
 
+  // 关闭新增链接任务弹窗。
   function closeCreateTask() {
     createTaskOpen.value = false;
   }
 
+  // 打开 Cookie 导入弹窗。
   function openImportCookie() {
     importCookieOpen.value = true;
   }
 
+  // 关闭 Cookie 导入弹窗。
   function closeImportCookie() {
     importCookieOpen.value = false;
   }
 
+  // 打开自定义裁剪弹窗。
   function openCustomCrop() {
     customCropOpen.value = true;
   }
 
+  // 关闭自定义裁剪弹窗。
   function closeCustomCrop() {
     customCropOpen.value = false;
   }
 
+  // 判断某个异步动作是否执行中，用于按钮 loading/disabled 状态。
   function isActionPending(actionId: string) {
     return pendingActionIds.value.includes(actionId);
   }
 
+  // 按 taskId 替换任务，供浏览器演示流程和真实下载流程复用。
   function replaceTask(nextTask: TaskItem) {
     const index = tasks.value.findIndex((task) => task.id === nextTask.id);
     if (index === -1) return;
@@ -695,10 +741,12 @@ export const useAppStore = defineStore("app", () => {
     schedulePersist();
   }
 
+  // 根据 id 查找当前最新任务快照，避免异步流程使用过期对象。
   function getTaskById(taskId: string) {
     return tasks.value.find((task) => task.id === taskId);
   }
 
+  // 应用浏览器演示运行时返回的 Cookie 成功/失败/冷却变更。
   function applyCookieMutations(mutations?: CookieMutation[]) {
     if (!mutations?.length) return;
 
@@ -721,11 +769,13 @@ export const useAppStore = defineStore("app", () => {
     schedulePersist();
   }
 
+  // 生成新的任务 id，同时扫描已有任务避免重启后 id 冲突。
   function nextTaskId() {
     taskIdSequence += 1;
     return `task-${Date.now()}-${taskIdSequence}`;
   }
 
+  // 生成新的 Cookie id，保持导入列表的编号递增。
   function nextCookieId() {
     const maxExistingId = cookies.value.reduce((maxId, cookie) => {
       const numericId = Number(cookie.id);
@@ -736,6 +786,7 @@ export const useAppStore = defineStore("app", () => {
     return String(cookieIdSequence);
   }
 
+  // 为豆瓣任务选择一个未过期、未冷却的 Cookie；其他来源不需要 Cookie。
   function pickUsableCookie(task: TaskItem) {
     if (inferTaskSource(task) !== "douban") {
       return null;
@@ -750,6 +801,7 @@ export const useAppStore = defineStore("app", () => {
     return cookies.value.find((cookie) => cookie.source === "douban" && cookie.status !== "cooling" && cookie.value);
   }
 
+  // 根据 sidecar 最终结果构造完成态任务，写入输出目录、文件列表和进度终值。
   function buildCompletedTask(task: TaskItem, result: RuntimeDownloadTaskResult, attempts: number): TaskItem {
     const discovered = result.discovery.images.map((image) => ({
       ...image,
@@ -790,6 +842,7 @@ export const useAppStore = defineStore("app", () => {
     };
   }
 
+  // 重试前清空发现/下载快照和错误信息，让任务重新进入 queued。
   function resetTask(task: TaskItem): TaskItem {
     return {
       ...task,
@@ -807,11 +860,13 @@ export const useAppStore = defineStore("app", () => {
     };
   }
 
+  // 判断失败任务是否仍在冷却时间内，冷却未结束前不重新执行。
   function isCooling(task: TaskItem) {
     if (!task.lifecycle.cooldownUntil) return false;
     return new Date(task.lifecycle.cooldownUntil).getTime() > Date.now();
   }
 
+  // 找出最近一个冷却任务还需要等待多久，队列循环会短暂 sleep 后再检查。
   function nextCooldownDelay() {
     const waiting = tasks.value
       .filter(
@@ -827,6 +882,7 @@ export const useAppStore = defineStore("app", () => {
     return waiting[0] ?? null;
   }
 
+  // 判断当前是否已有豆瓣任务运行，避免多个豆瓣任务并行触发更高风控风险。
   function hasActiveDoubanTask(excludeTaskId?: string) {
     return activeTaskIds.value.some((taskId) => {
       if (taskId === excludeTaskId) return false;
@@ -835,6 +891,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 判断队列是否还有可运行或可重试任务，决定本轮队列是否结束。
   function hasRemainingQueueWork() {
     return tasks.value.some((task) => {
       if (runnablePhases.has(task.lifecycle.phase)) return true;
@@ -843,10 +900,12 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 通过 runtimeBridge 写运行日志，桌面端会由 Rust 统一发回日志事件。
   async function emitLog(level: "INFO" | "WARN" | "ERROR", scope: string, message: string, taskId?: string) {
     await runtimeBridge.emitLog({ level, scope, message, taskId });
   }
 
+  // 应用启动恢复入口：读取本地快照、恢复任务状态、清理过期 Cookie。
   async function bootstrap() {
     if (hydrated.value || bootstrapping.value) return;
 
@@ -881,6 +940,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 将冷却结束且仍有重试次数的失败任务恢复为 retrying。
   function promoteCooledTasks() {
     let promoted = 0;
     tasks.value = tasks.value.map((task) => {
@@ -908,6 +968,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 后台执行顺序独立于界面排序：这里按添加时间正序挑选任务，保证旧任务先处理。
   function nextRunnableBatch() {
     const batch: TaskItem[] = [];
     let batchHasDouban = false;
@@ -935,6 +996,7 @@ export const useAppStore = defineStore("app", () => {
     return batch;
   }
 
+  // 浏览器预览模式下执行模拟任务生命周期，不触碰本地文件系统。
   async function runBrowserTask(task: TaskItem) {
     for await (const frame of runTaskLifecycle(task, cookies.value, queueConfig.value)) {
       replaceTask(frame.task);
@@ -946,6 +1008,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 桌面端真实任务由 Tauri 拉起 sidecar；前端只负责传入任务参数并接收最终结果。
   async function runNativeTask(task: TaskItem) {
     const attempts = task.lifecycle.attempts + 1;
     const cookie = pickUsableCookie(task);
@@ -1053,6 +1116,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 处理单个任务：登记 activeTaskIds，并按运行环境选择真实下载或浏览器模拟。
   async function processTask(task: TaskItem) {
     activeTaskIds.value = [...activeTaskIds.value, task.id];
     try {
@@ -1067,6 +1131,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 队列排水循环会持续拉取可运行批次，直到无任务、冷却等待或用户停止队列。
   async function drainQueue() {
     if (queueBusy.value) return;
     queueBusy.value = true;
@@ -1109,6 +1174,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 包装异步动作，防止同一个按钮或操作被重复点击并发执行。
   async function withPending<T>(actionId: string, run: () => Promise<T>) {
     if (isActionPending(actionId)) return null;
     pendingActionIds.value = [...pendingActionIds.value, actionId];
@@ -1119,6 +1185,7 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // 批量创建链接任务，写日志、关闭弹窗，并自动启动队列。
   async function createTasks(drafts: TaskDraft[]) {
     await withPending("queue.create-task", async () => {
       const createdTasks = drafts.map((draft) => createTaskFromDraft(nextTaskId(), draft));
@@ -1136,6 +1203,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 手动重试失败任务：重置任务状态并重新启动队列循环。
   async function retryTask(taskId: string) {
     await withPending(`queue.retry.${taskId}`, async () => {
       const task = tasks.value.find((item) => item.id === taskId);
@@ -1149,6 +1217,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 请求暂停任务：先把界面切到 pausing，再通知 Tauri/sidecar 暂停。
   async function pauseTask(taskId: string) {
     await withPending(`queue.pause.${taskId}`, async () => {
       const task = getTaskById(taskId);
@@ -1182,6 +1251,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 继续暂停任务：通知 Tauri 清除暂停状态，并把任务放回 retrying。
   async function resumeTask(taskId: string) {
     await withPending(`queue.resume.${taskId}`, async () => {
       const task = getTaskById(taskId);
@@ -1206,6 +1276,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 删除单个任务，同时取消后台进程并删除该任务生成的输出目录。
   async function deleteTask(taskId: string) {
     await withPending(`queue.delete.${taskId}`, async () => {
       const task = tasks.value.find((item) => item.id === taskId);
@@ -1233,6 +1304,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 清空队列时不仅移除记录，也会让 Tauri 取消任务并删除每个任务的输出目录。
   async function clearQueueTasks() {
     await withPending("queue.clear-all", async () => {
       const count = tasks.value.length;
@@ -1265,6 +1337,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 导入 Cookie：无草稿时只打开弹窗，有草稿时保存 Cookie 并写日志。
   async function importCookie(draft?: CookieDraft) {
     await withPending("cookies.import", async () => {
       if (!draft) {
@@ -1295,6 +1368,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 自动登录导入 Cookie：打开豆瓣登录窗口，轮询 Cookie，成功后保存并关闭窗口。
   async function startDoubanLoginImport() {
     await withPending("cookies.import.login", async () => {
       const windowLabel = "douban-login-import";
@@ -1346,6 +1420,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 删除 Cookie 列表中的一条记录，并持久化状态。
   async function deleteCookie(cookieId: string) {
     await withPending(`cookies.delete.${cookieId}`, async () => {
       cookies.value = cookies.value.filter((cookie) => cookie.id !== cookieId);
@@ -1355,6 +1430,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 清空日志中心的全部可见日志，并立即保存状态。
   async function clearAllLogs() {
     await withPending("logs.clear-all", async () => {
       logs.value = [];
@@ -1363,6 +1439,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 打开已完成任务的输出目录，未完成或无目录时忽略。
   async function openTaskOutputDirectory(taskId: string) {
     await withPending(`queue.open-output.${taskId}`, async () => {
       const task = tasks.value.find((item) => item.id === taskId);
@@ -1376,6 +1453,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  // 顶栏通用 action 分发入口，目前用于日志中心的错误过滤切换。
   async function triggerAction(actionId: string) {
     if (actionId === "logs.only-errors") {
       toggleLogOnlyErrors();

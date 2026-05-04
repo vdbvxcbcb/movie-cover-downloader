@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 通用筛选标签：用于可切换的轻量筛选按钮。
 defineProps<{
   label: string;
   active?: boolean;

@@ -1,3 +1,4 @@
+// sidecar 入口：读取环境变量创建一次性下载任务，并驱动调度器执行。
 import { CookiePoolService } from "./services/cookie-pool.js";
 import { DownloaderService } from "./services/downloader.js";
 import { MatcherService } from "./services/matcher.js";
@@ -7,6 +8,8 @@ import { createLogger } from "./shared/logger.js";
 import { createRuntimeConfig, formatRuntimeConfig } from "./shared/runtime-config.js";
 import type { SidecarTask } from "./shared/contracts.js";
 
+// sidecar 参数全部来自环境变量，入口层先做白名单解析，避免非法值进入下载流程。
+// 解析输出图片格式环境变量；未传时使用 jpg，传入非法值时立即失败，避免下载阶段才暴露配置错误。
 function parseOutputImageFormat(
   value: string | undefined,
   variableName: string,
@@ -22,6 +25,7 @@ function parseOutputImageFormat(
   throw new Error(`invalid ${variableName}: "${value}", expected "jpg" or "png"`);
 }
 
+// 解析豆瓣图片分类；只允许剧照、海报、壁纸三类，和前端按钮选项保持一致。
 function parseDoubanAssetType(value: string | undefined): SidecarTask["doubanAssetType"] {
   if (value === undefined) {
     return "still";
@@ -34,6 +38,7 @@ function parseDoubanAssetType(value: string | undefined): SidecarTask["doubanAss
   throw new Error(`invalid MCD_DOUBAN_ASSET_TYPE: "${value}", expected still/poster/wallpaper`);
 }
 
+// 解析数量模式；limited 会使用 maxImages，unlimited 会让适配器返回发现到的全部图片。
 function parseImageCountMode(value: string | undefined): SidecarTask["imageCountMode"] {
   if (value === undefined) {
     return "limited";
@@ -47,6 +52,7 @@ function parseImageCountMode(value: string | undefined): SidecarTask["imageCount
 }
 
 
+// 解析图片比例策略；original 保留原图，9:16 和 3:4 会在下载保存前居中裁剪。
 function parseImageAspectRatio(value: string | undefined): SidecarTask["imageAspectRatio"] {
   if (value === undefined) {
     return "original";
@@ -58,6 +64,8 @@ function parseImageAspectRatio(value: string | undefined): SidecarTask["imageAsp
 
   throw new Error(`invalid MCD_IMAGE_ASPECT_RATIO: "${value}", expected original/9:16/3:4`);
 }
+// Tauri 每次执行任务都会通过环境变量注入一条 bootstrap 任务；没有任务时 sidecar 只启动后退出空闲。
+// 根据 Tauri 注入的 MCD_BOOTSTRAP_* 环境变量创建一次性任务；没有 URL 时返回 null，sidecar 只启动后空闲退出。
 function createBootstrapTask(configOutputDir: string): SidecarTask | null {
   const detailUrl = process.env.MCD_BOOTSTRAP_TASK_URL;
   if (!detailUrl) {
@@ -87,6 +95,8 @@ function createBootstrapTask(configOutputDir: string): SidecarTask | null {
   };
 }
 
+// 主流程组装 Cookie 池、匹配器、下载器和调度器，然后执行一次性任务并把结果写回 stdout。
+// sidecar 主入口：组装配置、Cookie 池、匹配器、下载器和调度器，并把最终结果输出给 Tauri。
 async function main() {
   const logger = createLogger("bootstrap");
   const config = createRuntimeConfig();

@@ -1,5 +1,7 @@
+// 任务排序工具：统一按添加顺序展示和执行队列。
 import type { TaskItem } from "../types/app";
 
+// 队列展示和后台执行都按任务 id 数字部分升序排序，实现旧任务优先。
 export function compareTaskAddedOrder(left: TaskItem, right: TaskItem) {
   const leftMatch = /^task-(\d+)-(\d+)$/.exec(left.id);
   const rightMatch = /^task-(\d+)-(\d+)$/.exec(right.id);

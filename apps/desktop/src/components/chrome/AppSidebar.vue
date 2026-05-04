@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 侧边栏导航组件：根据路由高亮当前页面。
 import { RouterLink, useRoute } from "vue-router";
 import { navItems } from "../../data/mock";
 

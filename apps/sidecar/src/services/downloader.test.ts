@@ -1,3 +1,4 @@
+// 下载服务测试：验证输出命名、图片保存、进度事件和裁剪尺寸。
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -16,20 +17,25 @@ const onePixelPng = Buffer.from(
   "base64",
 );
 
+// 创建下载服务测试用日志器，记录日志方法为空实现。
 function createLogger() {
   const warnings: string[] = [];
 
   const logger: SidecarLogger = {
+    // 下载测试不关心 INFO 日志内容，因此保持空实现。
     info() {},
+    // 收集 WARN 日志，测试可断言单张图片失败时是否被记录。
     warn(message) {
       warnings.push(message);
     },
+    // 下载测试不关心 ERROR 日志内容，因此保持空实现。
     error() {},
   };
 
   return { logger, warnings };
 }
 
+// 创建下载服务默认运行配置，测试时只关注输出目录和请求参数。
 function createConfig(): RuntimeConfig {
   return {
     concurrency: 1,
@@ -42,6 +48,7 @@ function createConfig(): RuntimeConfig {
   };
 }
 
+// 创建下载服务测试任务，覆盖格式、数量、比例和请求间隔等字段。
 function createTask(): SidecarTask {
   return {
     id: "task-1",
@@ -59,6 +66,7 @@ function createTask(): SidecarTask {
   };
 }
 
+// 创建下载服务测试用发现结果，指向临时输出目录和 mock 图片 URL。
 function createDiscovery(outputDir: string): DiscoveryResult {
   return {
     source: "douban",
@@ -339,6 +347,7 @@ test("暂停后会保留当前 part 文件并在继续时带 Range 恢复下载"
     if (fetchAttempt === 1) {
       return new Response(
         new ReadableStream({
+          // 模拟下载流在写入第一段数据后收到暂停信号，用来验证断点续传。
           start(controller) {
             controller.enqueue(firstChunk);
             void fs.writeFile(controlFilePath, "pause");

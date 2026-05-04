@@ -1,3 +1,4 @@
+// 豆瓣适配器测试：覆盖页面分类、分页解析、Cookie 和空分类错误。
 import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
@@ -7,14 +8,19 @@ import type { SidecarLogger } from "../shared/logger.js";
 import { fetchText, resolveRequestIntervalMs } from "./base.js";
 import { classifyDoubanPhotoPage, DoubanAdapter } from "./douban.js";
 
+// 创建测试用空日志器，避免单元测试向 stdout 输出噪声。
 function createLogger(): SidecarLogger {
   return {
+    // 测试中忽略 INFO 日志，避免输出影响断言阅读。
     info() {},
+    // 测试中忽略 WARN 日志，适配器行为由返回值和错误断言验证。
     warn() {},
+    // 测试中忽略 ERROR 日志，避免 mock 场景污染测试输出。
     error() {},
   };
 }
 
+// 创建默认豆瓣任务，并允许每个测试覆盖部分字段。
 function createTask(overrides: Partial<SidecarTask> = {}): SidecarTask {
   return {
     id: "douban-task",
@@ -33,6 +39,7 @@ function createTask(overrides: Partial<SidecarTask> = {}): SidecarTask {
   };
 }
 
+// 创建适配器测试上下文，包含运行配置、日志器和请求间隔状态。
 function createContext() {
   return {
     config: {
@@ -50,6 +57,7 @@ function createContext() {
   };
 }
 
+// 构造 fetch mock 返回值，模拟豆瓣 HTML、最终 URL 和 Content-Type。
 function createFetchResponse(
   overrides: Partial<{
     finalUrl: string;
@@ -67,6 +75,7 @@ function createFetchResponse(
     url: finalUrl,
     status,
     headers: {
+      // 只模拟测试需要的 Content-Type 读取，其他响应头统一返回 null。
       get(name: string) {
         return name.toLowerCase() === "content-type" ? contentType : null;
       },

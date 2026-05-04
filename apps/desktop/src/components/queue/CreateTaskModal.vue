@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 新增链接任务弹窗：收集豆瓣链接、输出目录、抓取类型、数量和图片尺寸。
 import { computed, reactive, ref } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import type {
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   submit: [drafts: TaskDraft[]];
 }>();
 
+// 表单状态保持字符串输入，提交前再统一校验和转换，便于给出明确的用户错误提示。
 const form = reactive({
   detailUrls: "",
   outputRootDir: "D:/cover",
@@ -29,6 +31,7 @@ const form = reactive({
 });
 const alertMessage = ref("");
 
+// 任务说明随表单实时计算，让用户在加入队列前确认抓取类型、数量和尺寸策略。
 const strategySummary = computed(() => {
   const assetTypeLabel =
     form.doubanAssetType === "poster" ? "海报" : form.doubanAssetType === "wallpaper" ? "壁纸" : "剧照";
@@ -40,14 +43,17 @@ const strategySummary = computed(() => {
   return `豆瓣抓图类型为${assetTypeLabel}，图片尺寸 ${ratioLabel}，请求间隔 ${form.requestIntervalSeconds} 秒；${countSummary}，并按当前表单配置加入队列`;
 });
 
+// 显示表单错误提示，阻止用户在校验失败时加入队列。
 function showAlert(message: string) {
   alertMessage.value = message;
 }
 
+// 清除表单提示，通常在用户重新输入或操作成功后调用。
 function clearAlert() {
   alertMessage.value = "";
 }
 
+// 打开系统目录选择器，并把选择结果写回输出目录输入框。
 async function browseOutputDirectory() {
   const selected = await runtimeBridge.pickOutputDirectory(form.outputRootDir);
   if (!selected) return;
@@ -55,10 +61,12 @@ async function browseOutputDirectory() {
   clearAlert();
 }
 
+// 把限制数量固定在 1 到 100 之间，避免输入过小或过大。
 function clampMaxImages(value: number) {
   return Math.min(100, Math.max(1, value));
 }
 
+// 将数量输入框的字符串转换成可用于加减按钮的安全数字。
 const currentMaxImagesValue = computed(() => {
   if (!/^\d+$/.test(form.maxImagesInput)) {
     return 10;
@@ -67,20 +75,25 @@ const currentMaxImagesValue = computed(() => {
   return clampMaxImages(Number(form.maxImagesInput));
 });
 
+// 数量拨轮减号是否可用，最小值为 1。
 const canDecreaseMaxImages = computed(() => currentMaxImagesValue.value > 1);
+// 数量拨轮加号是否可用，最大值为 100。
 const canIncreaseMaxImages = computed(() => currentMaxImagesValue.value < 100);
 
+// 数字拨轮点击一次只增加或减少 1，并同步清除旧错误提示。
 function stepMaxImages(delta: -1 | 1) {
   form.maxImagesInput = String(clampMaxImages(currentMaxImagesValue.value + delta));
   clearAlert();
 }
 
+// 阻止 e、正负号、小数点等非整数输入进入数量输入框。
 function handleMaxImagesKeydown(event: KeyboardEvent) {
   if (["e", "E", "+", "-", ".", ","].includes(event.key)) {
     event.preventDefault();
   }
 }
 
+// 实时记录数量输入内容，并在非数字时立即提示不能加入队列。
 function handleMaxImagesInput(event: Event) {
   const input = event.target as HTMLInputElement;
   form.maxImagesInput = input.value;
@@ -92,6 +105,7 @@ function handleMaxImagesInput(event: Event) {
   }
 }
 
+// 数量输入框失焦时把合法数字归一化到允许范围内。
 function handleMaxImagesBlur(event: Event) {
   const input = event.target as HTMLInputElement;
   if (!form.maxImagesInput || !/^\d+$/.test(form.maxImagesInput)) {
@@ -103,6 +117,8 @@ function handleMaxImagesBlur(event: Event) {
   input.value = String(normalized);
 }
 
+// 粘贴多条链接时自动拆行，减少用户手工整理批量豆瓣链接的成本。
+// 输入详情页链接时自动拆分连续 URL，并在用户继续输入时清理旧提示。
 function handleDetailUrlsInput(event: Event) {
   const input = event.target as HTMLTextAreaElement;
   const protocolMatches = input.value.match(/https?:\/\//g) ?? [];
@@ -118,6 +134,7 @@ function handleDetailUrlsInput(event: Event) {
   clearAlert();
 }
 
+// 链接文本框失焦后统一规范化换行，保证提交时每行一个链接。
 function handleDetailUrlsBlur(event: Event) {
   const input = event.target as HTMLTextAreaElement;
   const normalized = normalizeDetailUrlsInput(input.value);
@@ -125,6 +142,7 @@ function handleDetailUrlsBlur(event: Event) {
   input.value = normalized;
 }
 
+// 提交时只接收通过校验的豆瓣 subject 链接，任何错误都会阻止加入队列并展示原因。
 function submit() {
   const validation = validateTaskDraftInput({
     detailUrls: form.detailUrls,
@@ -434,6 +452,7 @@ function submit() {
   visibility: hidden;
 }
 
+/* 数量输入与限制/无限制按钮同排，宽度受控以避免挤压右侧策略区域。 */
 .quantity-control-row {
   display: flex;
   align-items: flex-start;

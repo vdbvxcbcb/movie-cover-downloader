@@ -1,3 +1,4 @@
+// 前端应用入口：挂载 Vue、Pinia 和路由。
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";

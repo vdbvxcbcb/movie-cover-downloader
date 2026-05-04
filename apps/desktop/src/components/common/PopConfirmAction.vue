@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 气泡确认组件：用于删除、清空等危险操作的二次确认。
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import ActionButton from "./ActionButton.vue";
 
@@ -33,6 +34,8 @@ const rootRef = ref<HTMLElement | null>(null);
 const bubbleRef = ref<HTMLElement | null>(null);
 const bubbleStyle = ref<Record<string, string>>({});
 
+// 气泡定位按触发按钮计算，并限制在视口内，防止确认按钮溢出屏幕。
+// 根据触发按钮和视口宽度计算气泡位置，避免确认按钮溢出屏幕。
 function updateBubblePosition() {
   const root = rootRef.value;
   if (!root) {
@@ -58,25 +61,30 @@ function updateBubblePosition() {
   };
 }
 
+// 打开气泡确认框，并在下一轮渲染后计算定位。
 function open() {
   isOpen.value = true;
   void nextTick(updateBubblePosition);
 }
 
+// 关闭气泡确认框，供取消、确认和外部点击复用。
 function close() {
   isOpen.value = false;
 }
 
+// 用户点击确认时先关闭气泡，再向父组件发出 confirm 事件。
 function confirm() {
   close();
   emit("confirm");
 }
 
+// 用户点击取消时关闭气泡，并向父组件发出 cancel 事件。
 function cancel() {
   close();
   emit("cancel");
 }
 
+// 全局点击监听：点击气泡和触发按钮之外的位置时自动关闭确认框。
 function handleDocumentPointerDown(event: PointerEvent) {
   const target = event.target as Node;
   if (
@@ -90,12 +98,14 @@ function handleDocumentPointerDown(event: PointerEvent) {
   close();
 }
 
+// 键盘 Esc 关闭气泡，符合弹出层的常规交互习惯。
 function handleDocumentKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     close();
   }
 }
 
+// 窗口尺寸或滚动变化时重新计算气泡位置，避免定位漂移。
 function handleViewportChange() {
   if (isOpen.value) {
     updateBubblePosition();

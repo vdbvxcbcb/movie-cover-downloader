@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 自定义裁剪弹窗：上传本地图片、调整裁剪框并保存到输出目录。
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -30,6 +31,7 @@ const alertMessage = ref("");
 const savedOutputPath = ref("");
 const saving = ref(false);
 
+// 图片状态记录原图尺寸、展示尺寸和偏移量，裁剪时需要在展示坐标与原图像素之间换算。
 const imageState = reactive({
   url: "",
   name: "",
@@ -42,6 +44,7 @@ const imageState = reactive({
   y: 0,
 });
 
+// 裁剪框始终以图片展示区域为边界，宽高会随用户选择的 3:4 或 9:16 比例调整。
 const crop = reactive({
   x: 0,
   y: 0,
@@ -69,11 +72,17 @@ const dragState = reactive<{
   cropHeight: 0,
 });
 
+// 是否已经选择图片；模板据此切换上传态和裁剪态。
 const hasImage = computed(() => Boolean(imageState.url));
+// 当前裁剪比例的数字值，拖拽和导出时都使用它计算宽高。
 const ratioValue = computed(() => (selectedRatio.value === "3:4" ? 3 / 4 : 9 / 16));
+// 缩放滑块的展示文案，保留一位小数。
 const zoomLabel = computed(() => `${zoom.value.toFixed(1)}x`);
+// 把当前裁剪框展示尺寸换算回原图像素尺寸，展示给用户确认。
 const cropSizeLabel = computed(() => `${Math.round(crop.width / displayScale())} x ${Math.round(crop.height / displayScale())}`);
+// 自定义裁剪最终保存目录，固定在输出根目录下的 custom-crop-photo。
 const customCropOutputDir = computed(() => `${props.outputRootDir.replace(/[\\/]+$/, "")}/custom-crop-photo`);
+// 遮罩拆成四块固定覆盖图片区域，避免拖拽裁剪框时遮罩跟着整体移动。
 const cropDimStyles = computed(() => {
   const bounds = imageBounds();
   const cropRight = crop.x + crop.width;
@@ -88,16 +97,19 @@ const cropDimStyles = computed(() => {
 });
 
 
+// 显示裁剪弹窗提示；保存成功时会同时记录可点击定位的文件路径。
 function showAlert(message: string, filePath = "") {
   alertMessage.value = message;
   savedOutputPath.value = filePath;
 }
 
+// 清除提示文案和已保存路径，关闭成功提示或错误提示时调用。
 function clearAlert() {
   alertMessage.value = "";
   savedOutputPath.value = "";
 }
 
+// 点击保存路径时请求 Tauri 打开所在目录并选中裁剪结果文件。
 async function revealSavedFile() {
   if (!savedOutputPath.value) return;
 
@@ -108,10 +120,12 @@ async function revealSavedFile() {
   }
 }
 
+// 计算当前展示尺寸和原图尺寸之间的缩放比例，用于坐标换算。
 function displayScale() {
   return imageState.baseScale * zoom.value || 1;
 }
 
+// 返回图片在工作区里的上下左右边界，遮罩和裁剪框都以它为限制范围。
 function imageBounds() {
   return {
     left: imageState.x,
@@ -123,10 +137,12 @@ function imageBounds() {
   };
 }
 
+// 通用数值限制工具，确保拖拽或缩放后的值不越界。
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+// 把遮罩矩形坐标转换成 CSS style，并把负尺寸压到 0。
 function rectStyle(left: number, top: number, width: number, height: number) {
   return {
     width: `${Math.max(0, width)}px`,
@@ -135,6 +151,7 @@ function rectStyle(left: number, top: number, width: number, height: number) {
   };
 }
 
+// 把裁剪框重新限制在图片内部，避免拖拽或窗口变化后越界。
 function clampCropToImage() {
   const bounds = imageBounds();
   const maxWidth = Math.max(80, bounds.width);
@@ -149,6 +166,8 @@ function clampCropToImage() {
   crop.y = clamp(crop.y, bounds.top, bounds.bottom - crop.height);
 }
 
+// 图片加载、窗口变化或缩放后都要重新计算展示区域，确保裁剪框仍贴合图片边界。
+// 根据工作区尺寸、原图尺寸和缩放值计算图片展示位置，可选重置裁剪框。
 function updateImageLayout(resetCrop = false) {
   if (!workspace.value || !imageState.naturalWidth || !imageState.naturalHeight) return;
 
@@ -166,6 +185,7 @@ function updateImageLayout(resetCrop = false) {
   }
 }
 
+// 按当前比例在图片中央创建默认裁剪框，并留出合适边距。
 function resetCropBox() {
   const bounds = imageBounds();
   const ratio = ratioValue.value;
@@ -184,6 +204,8 @@ function resetCropBox() {
   clampCropToImage();
 }
 
+// 切换宽高比时尽量保留当前裁剪中心点，只调整尺寸并重新限制在图片内部。
+// 切换 3:4 或 9:16 时保持裁剪中心尽量不变，只改变裁剪框宽高。
 function adjustCropRatio() {
   if (!hasImage.value) return;
   const centerX = crop.x + crop.width / 2;
@@ -209,10 +231,12 @@ function adjustCropRatio() {
   clampCropToImage();
 }
 
+// 从拖拽路径中提取文件名，作为预览名和导出文件名前缀。
 function fileNameFromPath(filePath: string) {
   return filePath.split(/[\\/]/).pop() ?? "dropped-image";
 }
 
+// 根据文件扩展名推断 MIME，保证本地字节能正确生成预览 Blob。
 function inferImageMimeType(fileName: string) {
   const normalized = fileName.toLowerCase();
   if (normalized.endsWith(".png")) return "image/png";
@@ -222,6 +246,7 @@ function inferImageMimeType(fileName: string) {
   return "image/jpeg";
 }
 
+// 设置当前预览图片 URL 和名称，并清理上一张图片的对象 URL。
 function setImageSource(url: string, name: string) {
   if (imageState.url) {
     URL.revokeObjectURL(imageState.url);
@@ -233,11 +258,14 @@ function setImageSource(url: string, name: string) {
   clearAlert();
 }
 
+// Tauri 拖拽会传入本地路径，浏览器上传会传入 File；两种来源最终都转成对象 URL 预览。
+// 接收 Tauri 读取到的本地图片字节，转换成 Blob URL 给 img 标签预览。
 function acceptImageBytes(bytes: Uint8Array, name: string) {
   const blob = new Blob([bytes], { type: inferImageMimeType(name) });
   setImageSource(URL.createObjectURL(blob), name);
 }
 
+// 处理 Tauri 拖拽事件中的本地文件路径，读取图片字节后进入统一预览流程。
 async function acceptDroppedPath(filePath: string) {
   try {
     const bytes = await runtimeBridge.readLocalImageFile(filePath);
@@ -246,10 +274,12 @@ async function acceptDroppedPath(filePath: string) {
     showAlert(error instanceof Error ? error.message : String(error));
   }
 }
+// 打开隐藏文件选择框，让用户通过浏览本地文件上传图片。
 function openFilePicker() {
   fileInput.value?.click();
 }
 
+// 处理浏览器 File 对象上传，创建对象 URL 并进入统一预览流程。
 function acceptFile(file: File) {
   if (!file.type.startsWith("image/")) {
     showAlert("请选择图片文件。 ");
@@ -259,6 +289,7 @@ function acceptFile(file: File) {
   setImageSource(URL.createObjectURL(file), file.name);
 }
 
+// 文件选择框 change 事件：取第一张图片并清空 input，允许重复选择同一文件。
 function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -266,6 +297,7 @@ function handleFileChange(event: Event) {
   input.value = "";
 }
 
+// 处理拖放上传：浏览器文件优先使用 File，Tauri 路径由全局 drag-drop 事件处理。
 function handleDrop(event: DragEvent) {
   event.preventDefault();
   event.stopPropagation();
@@ -274,12 +306,14 @@ function handleDrop(event: DragEvent) {
   if (file) acceptFile(file);
 }
 
+// 拖拽进入上传区域时切换高亮状态，给用户明确反馈。
 function handleDragEnter(event: DragEvent) {
   event.preventDefault();
   event.stopPropagation();
   isDraggingFile.value = true;
 }
 
+// 拖拽离开上传区域时取消高亮；进入子元素不算真正离开。
 function handleDragLeave(event: DragEvent) {
   event.preventDefault();
   event.stopPropagation();
@@ -288,6 +322,7 @@ function handleDragLeave(event: DragEvent) {
   }
 }
 
+// 图片加载完成后读取原始尺寸，等待 DOM 更新后重新计算布局和默认裁剪框。
 async function handleImageLoaded() {
   if (!imageElement.value) return;
   imageState.naturalWidth = imageElement.value.naturalWidth;
@@ -296,6 +331,7 @@ async function handleImageLoaded() {
   updateImageLayout(true);
 }
 
+// 开始拖拽裁剪框或手柄，记录起点和原始裁剪框尺寸。
 function startCropDrag(event: PointerEvent, mode: DragMode) {
   if (!hasImage.value) return;
   event.preventDefault();
@@ -312,6 +348,8 @@ function startCropDrag(event: PointerEvent, mode: DragMode) {
   window.addEventListener("pointerup", stopCropDrag, { once: true });
 }
 
+// 八个拖拽手柄共用一套尺寸计算，拖拽时按当前比例约束宽高并限制最小尺寸。
+// 根据拖拽方向和位移计算新裁剪框尺寸，并保持当前宽高比。
 function resizeFromDrag(dx: number, dy: number) {
   const ratio = ratioValue.value;
   let width = dragState.cropWidth;
@@ -342,6 +380,7 @@ function resizeFromDrag(dx: number, dy: number) {
   clampCropToImage();
 }
 
+// 拖拽过程更新裁剪框位置或尺寸，最后限制在图片边界内。
 function handleCropDrag(event: PointerEvent) {
   if (!dragState.active) return;
   const dx = event.clientX - dragState.startX;
@@ -357,11 +396,13 @@ function handleCropDrag(event: PointerEvent) {
   resizeFromDrag(dx, dy);
 }
 
+// 结束裁剪框拖拽，清理拖拽状态。
 function stopCropDrag() {
   dragState.active = false;
   window.removeEventListener("pointermove", handleCropDrag);
 }
 
+// 根据当前时间和比例生成自定义裁剪图片文件名。
 function buildOutputFileName() {
   const stamp = new Date()
     .toISOString()
@@ -371,6 +412,8 @@ function buildOutputFileName() {
   return `custom-crop-${stamp}-${selectedRatio.value.replace(":", "x")}.png`;
 }
 
+// 导出前把裁剪框展示坐标映射回原图像素，保证最终图片来自原始清晰度而不是预览截图。
+// 把裁剪框展示坐标映射回原图像素，在 canvas 中绘制并导出 PNG Blob。
 async function renderCropBlob() {
   if (!imageElement.value || !hasImage.value) {
     throw new Error("请先上传图片。 ");
@@ -408,6 +451,8 @@ async function renderCropBlob() {
   });
 }
 
+// 下载动作在桌面端保存到输出根目录下的 custom-crop-photo，并返回可点击定位的完整路径。
+// 渲染裁剪结果并保存到输出根目录/custom-crop-photo，成功后显示可点击路径。
 async function downloadCrop() {
   if (saving.value) return;
   saving.value = true;

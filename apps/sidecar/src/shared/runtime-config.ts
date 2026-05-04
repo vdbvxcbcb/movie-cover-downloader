@@ -1,3 +1,5 @@
+// sidecar 运行配置：从环境变量读取输出目录、并发、请求头和超时。
+// sidecar 运行配置结构，所有字段都来自环境变量或默认值，供服务层统一读取。
 export interface RuntimeConfig {
   concurrency: number;
   batchSize: number;
@@ -9,6 +11,7 @@ export interface RuntimeConfig {
   doubanCookie?: string;
 }
 
+// 从环境变量构造运行配置；Tauri 打开任务时会注入输出目录、并发、Cookie 等参数。
 export function createRuntimeConfig(): RuntimeConfig {
   return {
     concurrency: Number(process.env.MCD_CONCURRENCY ?? 2),
@@ -22,6 +25,7 @@ export function createRuntimeConfig(): RuntimeConfig {
   };
 }
 
+// 把运行配置格式化成启动日志，方便排查 sidecar 是否使用了正确目录和并发参数。
 export function formatRuntimeConfig(config: RuntimeConfig) {
   return [
     `batch=${config.batchSize}`,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 顶栏组件：承载全局操作按钮和当前页面标题。
 import ActionButton from "../common/ActionButton.vue";
 import type { TopAction } from "../../types/app";
 

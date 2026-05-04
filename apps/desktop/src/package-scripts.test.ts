@@ -1,3 +1,4 @@
+// 打包脚本测试：确保安装包脚本会同时构建前端、sidecar 和 Tauri。
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";

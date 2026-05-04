@@ -1,8 +1,10 @@
+// 展示层工具测试：锁定进度、状态和文案格式化行为。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { describeQueueAction, describeTaskStatus, formatTaskProgress, getTaskProgressPercent } from "./presenters";
 import type { TaskItem } from "../types/app";
 
+// 创建展示层测试任务，允许按用例覆盖生命周期或下载快照。
 function createTask(overrides: Partial<TaskItem> = {}): TaskItem {
   return {
     id: "task-1",

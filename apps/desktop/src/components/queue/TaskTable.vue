@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 任务队列表格：负责分页展示任务和触发单任务操作。
 import { computed, ref, watch } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
@@ -32,6 +33,7 @@ const nativeBackgroundPhases = new Set(["resolving", "discovering", "downloading
 const currentPage = ref(1);
 const jumpPageInput = ref("1");
 
+// 表格使用显式渲染依赖，让进度事件推进时即使任务对象引用变化较小也能刷新单元格。
 const taskRenderDependencyKey = computed(() =>
   props.tasks
     .map((task) =>
@@ -47,11 +49,13 @@ const taskRenderDependencyKey = computed(() =>
     .join("|"),
 );
 
+// 分页只负责当前视图切片，任务顺序由父页面传入的排序结果决定。
 const pagination = computed(() => {
   taskRenderDependencyKey.value;
   return paginateItems(props.tasks, currentPage.value);
 });
 
+// 当前页任务的渲染 key，确保分页和进度变化时表格行稳定刷新。
 const visibleTaskRenderKey = computed(() =>
   pagination.value.pageItems
     .map((task) =>
@@ -76,6 +80,7 @@ watch(
   { deep: true, immediate: true },
 );
 
+// 获取任务状态徽标；桌面后台阶段会额外展示“后台处理中”。
 function getStatusDescriptor(task: TaskItem) {
   if (isNativeRuntime && nativeBackgroundPhases.has(task.lifecycle.phase)) {
     return {
@@ -87,24 +92,30 @@ function getStatusDescriptor(task: TaskItem) {
   return describeTaskStatus(task);
 }
 
+// 只有完成且已有输出目录的任务才允许点击打开目录。
 function canOpenOutputDirectory(task: TaskItem) {
   return (task.lifecycle.phase === "completed" || isTaskDownloadComplete(task)) && Boolean(task.outputDirectory);
 }
 
+// 输出目录列的展示文案，未生成时显示 -。
 function getOutputDirectoryLabel(task: TaskItem) {
   return task.outputDirectory ?? task.target.outputRootDir;
 }
 
+// 操作列根据任务生命周期动态切换暂停、继续、重试、完成等按钮状态。
+// 读取当前任务操作按钮文案和动作类型。
 function getQueueActionDescriptor(task: TaskItem) {
   return describeQueueAction(task);
 }
 
+// 跳转到指定页，并同步页码输入框。
 function goToPage(page: number) {
   const nextPage = clampTaskPage(page, pagination.value.totalPages);
   currentPage.value = nextPage;
   jumpPageInput.value = String(nextPage);
 }
 
+// 记录用户输入的页码，只保留纯数字内容。
 function handleJumpPageInput(event: Event) {
   const input = event.target as HTMLInputElement;
   const digitsOnly = input.value.replace(/[^\d]/g, "");
@@ -112,6 +123,7 @@ function handleJumpPageInput(event: Event) {
   input.value = digitsOnly;
 }
 
+// 提交跳页输入，非法或越界页码会被 clamp 到有效范围。
 function submitJumpPage() {
   if (!jumpPageInput.value) {
     jumpPageInput.value = String(currentPage.value);
@@ -121,6 +133,7 @@ function submitJumpPage() {
   goToPage(Number(jumpPageInput.value));
 }
 
+// 操作列按钮分发：根据当前动作触发暂停、继续、重试或打开目录。
 function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueActionDescriptor>["action"]) {
   if (action === "retry") {
     emit("retry", taskId);

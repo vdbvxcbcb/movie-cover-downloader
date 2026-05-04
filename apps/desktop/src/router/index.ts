@@ -1,3 +1,4 @@
+// 路由配置：控制中心和日志中心两个主页面的导航入口。
 import { createRouter, createWebHistory } from "vue-router";
 import AppShell from "../layouts/AppShell.vue";
 import ControlCenterView from "../views/ControlCenterView.vue";
@@ -11,6 +12,7 @@ type RouteMetaPayload = Record<PropertyKey, unknown> & {
   actions: TopAction[];
 };
 
+// 轻量包装路由 meta，给 TypeScript 一个明确结构，同时不改变 Vue Router 的原始数据。
 const makeMeta = (meta: RouteMetaPayload) => meta;
 
 const router = createRouter({

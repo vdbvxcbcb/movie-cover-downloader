@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 任务进度单元格：把下载数量转换成文字和进度条。
 import { computed } from "vue";
 import type { TaskItem } from "../../types/app";
 
@@ -6,11 +7,14 @@ const props = defineProps<{
   task: TaskItem;
 }>();
 
+// 进度单元只读取 download 快照；没有发现总数时显示 -，发现后显示 saved/target。
+// 把任务下载快照提取成当前单元格需要的 saved/target 数据。
 const progress = computed(() => ({
   savedCount: props.task.download?.savedCount ?? 0,
   targetCount: props.task.download?.targetCount ?? 0,
 }));
 
+// 格式化进度文本：没有总数时显示 -，有总数时显示 saved/target。
 const progressText = computed(() => {
   if (!progress.value.targetCount) {
     return "-";
@@ -23,6 +27,7 @@ const progressText = computed(() => {
   return `${progress.value.savedCount}/${progress.value.targetCount}`;
 });
 
+// 根据 saved/target 计算进度条宽度百分比。
 const progressPercent = computed(() => {
   if (!progress.value.targetCount) {
     return 0;

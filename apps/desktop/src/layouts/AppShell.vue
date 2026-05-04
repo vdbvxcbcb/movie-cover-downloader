@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 桌面端主框架：侧边栏、顶栏、弹窗和页面内容在这里组合。
 import { computed, watch } from "vue";
 import { RouterView, useRoute } from "vue-router";
 import AppSidebar from "../components/chrome/AppSidebar.vue";
@@ -13,6 +14,7 @@ import type { CookieDraft, TaskDraft, TopAction } from "../types/app";
 const route = useRoute();
 const appStore = useAppStore();
 
+// 根据当前路由 meta 计算页面标题、副标题和顶栏操作按钮。
 const pageMeta = computed(() => {
   const meta = route.meta as {
     eyebrow?: string;
@@ -29,18 +31,22 @@ const pageMeta = computed(() => {
   };
 });
 
+// 顶栏按钮统一入口：不同 actionId 会打开对应弹窗或交给 store 处理。
 function handleAction(actionId: string) {
   void appStore.triggerAction(actionId);
 }
 
+// 新增链接任务弹窗提交后，把校验完成的草稿交给队列 store 创建任务。
 function handleCreateTask(drafts: TaskDraft[]) {
   void appStore.createTasks(drafts);
 }
 
+// 手动 Cookie 导入弹窗提交后，交给 store 保存 Cookie 并写日志。
 function handleImportCookieManual(draft: CookieDraft) {
   void appStore.importCookie(draft);
 }
 
+// 自动登录导入入口：打开豆瓣登录窗口并等待 Cookie 可用。
 function handleStartLoginImport() {
   void appStore.startDoubanLoginImport();
 }

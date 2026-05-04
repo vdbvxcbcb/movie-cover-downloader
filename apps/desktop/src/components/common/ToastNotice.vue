@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 全局提示组件：展示可关闭的短消息反馈。
 withDefaults(
   defineProps<{
     message: string;

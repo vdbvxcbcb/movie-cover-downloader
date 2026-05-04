@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 通用面板容器：统一页面区块标题和右侧操作区域。
 defineProps<{
   eyebrow: string;
   title: string;

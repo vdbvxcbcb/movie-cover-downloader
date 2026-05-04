@@ -1,3 +1,4 @@
+// 展示层格式化工具：把任务、进度、Cookie 状态转换成界面可读文案。
 import type {
   CookieProfile,
   CookieStatus,
@@ -32,14 +33,17 @@ const cookieStatusDescriptors: Record<CookieStatus, { label: string; tone: Statu
 
 const completeInferencePhases = new Set<TaskPhase>(["resolving", "discovering", "downloading", "retrying"]);
 
+// 把内部站点枚举转换成界面显示文案。
 export function formatSourceSite(site: SourceSite) {
   return sourceSiteLabels[site];
 }
 
+// 任务标题兜底：片名未解析前显示详情页链接。
 export function formatTaskTitle(task: TaskItem) {
   return task.title;
 }
 
+// 判断下载数量是否已经达到目标数量，用于进度显示和完成态兜底。
 export function isTaskDownloadComplete(task: TaskItem) {
   const download = task.download;
   return Boolean(
@@ -51,6 +55,7 @@ export function isTaskDownloadComplete(task: TaskItem) {
   );
 }
 
+// 把 download 快照格式化成 saved/target 文本；未发现总数时显示 -。
 export function formatTaskProgress(task: TaskItem) {
   if (!task.download?.targetCount) {
     return "-";
@@ -63,6 +68,7 @@ export function formatTaskProgress(task: TaskItem) {
   return `${task.download.savedCount}/${task.download.targetCount}`;
 }
 
+// 根据 saved/target 计算进度条百分比，并限制在 0-100。
 export function getTaskProgressPercent(task: TaskItem) {
   const download = task.download;
   if (!download?.targetCount) {
@@ -73,6 +79,7 @@ export function getTaskProgressPercent(task: TaskItem) {
   return Math.round(ratio * 100);
 }
 
+// 根据任务生命周期和下载完成度返回状态徽标文案与颜色。
 export function describeTaskStatus(task: TaskItem) {
   if (task.lifecycle.phase === "completed" || isTaskDownloadComplete(task)) {
     return taskPhaseDescriptors.completed;
@@ -88,6 +95,7 @@ export function describeTaskStatus(task: TaskItem) {
   return taskPhaseDescriptors[task.lifecycle.phase];
 }
 
+// 根据任务阶段决定操作列按钮：暂停、继续、重试、完成或后台处理中。
 export function describeQueueAction(task: TaskItem) {
   if (task.lifecycle.phase === "completed" || isTaskDownloadComplete(task)) {
     return {
@@ -133,10 +141,12 @@ export function describeQueueAction(task: TaskItem) {
   };
 }
 
+// 把 Cookie 内部状态转换成列表里的文案和颜色。
 export function describeCookieStatus(cookie: CookieProfile) {
   return cookieStatusDescriptors[cookie.status];
 }
 
+// 格式化 Cookie 过期时间；缺失时显示未知。
 export function formatCookieExpiry(cookie: CookieProfile) {
   if (!cookie.expiresAt) {
     return "未设置";
@@ -145,6 +155,7 @@ export function formatCookieExpiry(cookie: CookieProfile) {
   return cookie.expiresAt.replace("T", " ").replace(/\.\d+Z$/, "");
 }
 
+// 展示任务来源站点和详情链接，便于用户确认任务来自哪里。
 export function formatTaskOrigin(task: TaskItem) {
   try {
     const url = new URL(task.target.detailUrl);

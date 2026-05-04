@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 控制中心页面：展示任务队列、Cookie 列表和队列级操作。
 import { computed } from "vue";
 import { storeToRefs } from "pinia";
 import ActionButton from "../components/common/ActionButton.vue";
@@ -12,6 +13,7 @@ import { compareTaskAddedOrder } from "../lib/task-order";
 
 const appStore = useAppStore();
 const { tasks, cookies, queueRunning } = storeToRefs(appStore);
+// 控制中心界面按任务添加时间正序展示：旧任务在上，新任务在下。
 const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder));
 </script>
 

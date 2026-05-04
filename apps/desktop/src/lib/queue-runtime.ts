@@ -1,3 +1,4 @@
+// 浏览器演示运行时：在非 Tauri 环境模拟任务生命周期，方便开发预览和测试。
 import { runtimeBridge } from "./runtime-bridge";
 import type {
   CookieMutation,
@@ -10,6 +11,7 @@ import type {
   TaskRuntimeFrame,
 } from "../types/app";
 
+// 浏览器演示运行时的等待工具，用来模拟真实下载耗时。
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const timestampFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -22,29 +24,35 @@ const timestampFormatter = new Intl.DateTimeFormat("zh-CN", {
   second: "2-digit",
 });
 
+// 浏览器演示运行时使用的本地时间字符串。
 function timestampNow() {
   return timestampFormatter.format(new Date()).replace(/\//g, "-");
 }
 
+// 深拷贝任务，避免演示流程直接修改传入的响应式对象。
 function cloneTask(task: TaskItem) {
   return structuredClone(task);
 }
 
+// 清理演示输出目录片段中的非法字符，模拟真实 sidecar 的命名规则。
 function sanitizeFolderSegment(input: string) {
   return input.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 
+// 从豆瓣 subject 链接中构造一个演示片名，避免浏览器模式请求真实网络。
 function titleFromDoubanUrl(detailUrl: string) {
   const match = detailUrl.match(/subject\/(\d+)/);
   return match ? `豆瓣条目 ${match[1]}` : "豆瓣条目";
 }
 
+// 浏览器演示模式的来源识别，auto 当前也默认识别为豆瓣。
 function detectSource(sourceHint: SourceHint, detailUrl: string): SourceSite {
   if (sourceHint === "douban" || detailUrl.includes("movie.douban.com")) return "douban";
   throw new Error(`unsupported source url: ${detailUrl}`);
 }
 
+// 构造演示用图片页 URL，保持和真实任务的字段形态一致。
 function resolveImagePageUrl(_source: SourceSite, detailUrl: string) {
 if (/\/all_photos\/?$/i.test(detailUrl)) {
     return detailUrl.replace(/\?.*$/, "");
@@ -58,6 +66,7 @@ if (/\/all_photos\/?$/i.test(detailUrl)) {
   return `${subjectMatch[1]}/all_photos`;
 }
 
+// 为演示任务推导片名，优先使用已解析标题，否则从链接生成。
 function deriveTitle(task: TaskItem) {
   if (task.title !== "待解析标题") {
     return task.title;
@@ -66,15 +75,18 @@ function deriveTitle(task: TaskItem) {
   return titleFromDoubanUrl(task.target.detailUrl);
 }
 
+// 生成演示输出目录名，格式和真实下载目录保持一致。
 function buildOutputFolderName(title: string) {
   const date = new Date().toISOString().slice(0, 10);
   return `${sanitizeFolderSegment(title)} - ${date}`;
 }
 
+// 生成浏览器演示的输出目录字符串，不实际写入本地磁盘。
 function buildOutputDirectory(task: TaskItem, folderName: string) {
   return `${task.target.outputRootDir.replace(/[\\/]+$/, "")}/${folderName}`;
 }
 
+// 构造一张演示发现图片，填充分类、方向、尺寸和来源 URL。
 function createDiscoveredAsset(
   prefix: string,
   index: number,
@@ -100,6 +112,7 @@ function createDiscoveredAsset(
   };
 }
 
+// 构造演示发现结果集合，数量会受任务 maxImages 限制。
 function buildDiscoverySet(source: SourceSite, title: string, imagePageUrl: string, maxImages: number) {
   const discovered = [
     createDiscoveredAsset("dbposter", 1, source, title, "poster", "vertical", 2000, 3000, imagePageUrl),
@@ -118,6 +131,7 @@ function buildDiscoverySet(source: SourceSite, title: string, imagePageUrl: stri
   };
 }
 
+// 按真实命名风格生成演示图片文件名。
 function createFileName(task: TaskItem, asset: DiscoveredAsset, index: number) {
   const size = asset.width && asset.height ? `${asset.width}x${asset.height}` : "unknown";
   const category = asset.category === "poster" ? "poster" : "still";
@@ -125,10 +139,12 @@ function createFileName(task: TaskItem, asset: DiscoveredAsset, index: number) {
   return `${sanitizeFolderSegment(task.title)} - ${category} - ${size}${suffix}${asset.extension ?? ".jpg"}`;
 }
 
+// 浏览器演示模式下选择一个 active Cookie，用来模拟 Cookie 成功/失败统计。
 function pickActiveCookie(cookies: CookieProfile[]) {
   return cookies.find((cookie) => cookie.status === "active");
 }
 
+// 浏览器演示任务生命周期生成器：逐步 yield 解析、发现、下载和完成状态。
 export async function* runTaskLifecycle(
   task: TaskItem,
   cookies: CookieProfile[],

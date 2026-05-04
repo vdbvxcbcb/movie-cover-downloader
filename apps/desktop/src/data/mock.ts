@@ -1,3 +1,4 @@
+// 前端初始数据工厂：生产干净启动状态和从表单草稿转换出的任务。
 import type {
   AppSeedState,
   LogEntry,
@@ -10,10 +11,12 @@ import type {
 const baseDay = "2026-04-28";
 const schemaVersion = 2;
 
+// 用固定日期拼接时间，主要服务初始日志和测试数据。
 function atTime(time: string) {
   return `${baseDay} ${time}`;
 }
 
+// 生成当前本地时间戳，用于新建任务的 updatedAt。
 function currentStamp() {
   return new Intl.DateTimeFormat("zh-CN", {
     hour12: false,
@@ -28,6 +31,7 @@ function currentStamp() {
     .replace(/\//g, "-");
 }
 
+// 把新增任务弹窗的草稿转换成队列任务实体，并填充默认生命周期和摘要。
 export function createTaskFromDraft(id: string, draft: TaskDraft): TaskItem {
   return {
     id,
@@ -76,6 +80,7 @@ const initialLogs: LogEntry[] = [
   },
 ];
 
+// 生成应用初始状态；真实启动后会被本地持久化快照覆盖。
 export function createInitialAppSeed(): AppSeedState {
   return {
     schemaVersion,

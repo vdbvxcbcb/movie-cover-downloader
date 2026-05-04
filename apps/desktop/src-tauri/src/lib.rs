@@ -1,3 +1,13 @@
+// Tauri 命令层：负责持久化、sidecar 进程、文件系统操作和前端事件转发。
+//
+// 这份文件是桌面端的“后端入口”，前端通过 runtime-bridge.ts 调用这里的 #[tauri::command]。
+// 主要链路可以按下面理解：
+// 1. 前端提交任务 -> run_download_task -> 启动 Node sidecar 执行真实抓取。
+// 2. sidecar 把日志、实时进度、最终结果写到 stdout -> Rust 解析后 emit 给前端。
+// 3. 前端状态快照通过 save_persisted_state/load_persisted_state 存取到 SQLite。
+// 4. 删除/清空任务、打开目录、自定义裁剪保存等本地文件能力也都集中在这里。
+//
+// 注释里说的“前端”通常指 apps/desktop/src，“sidecar”指 apps/sidecar/src。
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,12 +28,15 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 
+// 日志 id 在 Rust 侧生成，避免前端批量接收时出现重复 key。
 static LOG_ID_SEED: AtomicU64 = AtomicU64::new(10_000);
 
+// 持久化快照版本号和前端 AppSeedState.schemaVersion 对齐，用来丢弃不兼容的旧状态。
 const APP_STATE_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+// 前端主动写日志时传入的 payload；字段命名用 camelCase，serde 会映射到 Rust 的 snake_case。
 struct RuntimeLogPayload {
     level: String,
     scope: String,
@@ -34,6 +47,7 @@ struct RuntimeLogPayload {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+// 发回前端的日志事件。Rust 会补齐 id 和 timestamp，前端日志列表直接消费这个结构。
 struct RuntimeLogEvent {
     id: u64,
     level: String,
@@ -45,6 +59,7 @@ struct RuntimeLogEvent {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+// 发回前端的实时下载进度事件，专门驱动队列表格里的 saved/target 和进度条。
 struct RuntimeTaskProgressEvent {
     task_id: String,
     phase: String,
@@ -55,34 +70,49 @@ struct RuntimeTaskProgressEvent {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+// 前端创建下载任务时传给 Rust 的完整参数，Rust 再转换成 sidecar 的环境变量。
 struct DownloadTaskPayload {
+    // 前端任务 id，用于日志、进度、暂停/取消控制文件和最终结果回填。
     task_id: String,
+    // 用户输入的豆瓣详情页链接，sidecar 会由它解析片名和图片分类页。
     detail_url: String,
+    // 用户选择的输出根目录，例如 D:/cover；具体影片/分类目录由 sidecar 继续拼接。
     output_root_dir: String,
+    // 当前界面默认 auto，保留字段是为了和前端类型/sidecar 契约兼容。
     source_hint: String,
+    // 豆瓣图片分类：still/poster/wallpaper，对应剧照、海报、壁纸。
     douban_asset_type: String,
+    // limited/unlimited，决定 max_images 是否作为下载数量上限。
     image_count_mode: String,
     max_images: u32,
+    // 最终保存格式：jpg 或 png。sidecar 会负责必要的转码。
     output_image_format: String,
+    // 图片比例策略：original 保持原图，9:16/3:4 由 sidecar 居中裁剪。
     image_aspect_ratio: String,
+    // 用户设置的请求间隔秒数，进入 sidecar 前会被限制在 1-5 秒。
     request_interval_seconds: Option<u32>,
+    // 可选豆瓣 Cookie；登录页导入或手动导入后由前端传入。
     douban_cookie: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+// 豆瓣登录小窗口的 Cookie 检查结果：pending 表示继续等，ready 表示可以导入，closed 表示用户关窗。
 struct LoginWindowCookieStatus {
     status: String,
     cookie: Option<String>,
 }
 
 #[derive(Default)]
+// 任务控制注册表把前端的暂停/继续/取消意图写入控制文件，sidecar 轮询该文件响应。
 struct TaskControlRegistry {
     paused: Mutex<HashSet<String>>,
     control_files: Mutex<HashMap<String, PathBuf>>,
 }
 
+// Registry 的内存状态负责“当前前端希望暂停哪些任务”，控制文件负责通知已经启动的 sidecar 进程。
 impl TaskControlRegistry {
+    // 只更新内存暂停集合，不直接写文件；写文件由 sync_pause_request 统一完成。
     fn pause(&self, task_id: String) -> Result<(), String> {
         if let Ok(mut paused) = self.paused.lock() {
             paused.insert(task_id);
@@ -92,6 +122,7 @@ impl TaskControlRegistry {
         Err("æ— æ³•å†™å…¥æš‚åœçŠ¶æ€".to_string())
     }
 
+    // 从暂停集合移除任务，下一次写控制文件时 sidecar 会看到 resume。
     fn resume(&self, task_id: &str) -> Result<(), String> {
         if let Ok(mut paused) = self.paused.lock() {
             paused.remove(task_id);
@@ -108,6 +139,7 @@ impl TaskControlRegistry {
             .unwrap_or(false)
     }
 
+    // 任务开始前注册控制文件路径，并立即写入当前动作，避免 sidecar 启动后读不到初始状态。
     fn register_control_file(&self, task_id: String, control_file: PathBuf) -> Result<(), String> {
         {
             let mut control_files = self
@@ -120,6 +152,7 @@ impl TaskControlRegistry {
         self.write_control_action(&task_id)
     }
 
+    // 任务结束、失败、删除或清空时清理控制文件和 pid 文件，避免旧控制信号影响下次同名任务。
     fn unregister_task(&self, task_id: &str) {
         if let Ok(mut control_files) = self.control_files.lock() {
             if let Some(control_file) = control_files.remove(task_id) {
@@ -133,11 +166,13 @@ impl TaskControlRegistry {
         }
     }
 
+    // 前端点击暂停时调用：先改内存，再把 pause 写到控制文件。
     fn sync_pause_request(&self, task_id: String) -> Result<(), String> {
         self.pause(task_id.clone())?;
         self.write_control_action(&task_id)
     }
 
+    // 前端点击继续时调用：先移除暂停标记，再把 resume 写到控制文件。
     fn sync_resume_request(&self, task_id: &str) -> Result<(), String> {
         self.resume(task_id)?;
         self.write_control_action(task_id)
@@ -153,6 +188,7 @@ impl TaskControlRegistry {
         self.write_control_action_value(task_id, action)
     }
 
+    // 删除/清空任务时调用：写 cancel 给 sidecar，让下载循环主动中止。
     fn sync_cancel_request(&self, task_id: &str) -> Result<(), String> {
         if let Ok(mut paused) = self.paused.lock() {
             paused.remove(task_id);
@@ -161,6 +197,7 @@ impl TaskControlRegistry {
         self.write_control_action_value(task_id, "cancel")
     }
 
+    // 控制文件只有简单文本值 pause/resume/cancel，sidecar 轮询读取，比跨进程 IPC 更轻量。
     fn write_control_action_value(&self, task_id: &str, action: &str) -> Result<(), String> {
         let control_file = self
             .control_files
@@ -183,6 +220,7 @@ impl TaskControlRegistry {
     }
 }
 
+// 把前端秒级请求间隔转成毫秒，并硬性限制范围，防止过快请求触发站点风控。
 fn resolve_request_interval_ms(payload: &DownloadTaskPayload) -> u32 {
     let interval_ms = payload
         .request_interval_seconds
@@ -192,6 +230,7 @@ fn resolve_request_interval_ms(payload: &DownloadTaskPayload) -> u32 {
     interval_ms.clamp(1000, 5000)
 }
 
+// 这里用毫秒时间戳字符串，前端 runtime-bridge 会再格式化成中文时间。
 fn timestamp_now() -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -200,6 +239,7 @@ fn timestamp_now() -> String {
     millis.to_string()
 }
 
+// 旧版 JSON 快照路径，仅用于迁移；新版本主要使用 SQLite。
 fn state_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
@@ -209,6 +249,7 @@ fn state_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base_dir.join("runtime-state.json"))
 }
 
+// SQLite 状态库放在 Tauri 应用数据目录，不会被打进安装包，也不会污染用户输出目录。
 fn sqlite_db_path(app: &AppHandle) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
@@ -218,6 +259,7 @@ fn sqlite_db_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base_dir.join("runtime-state.sqlite"))
 }
 
+// 本地状态存入 SQLite，并启用 WAL 以降低频繁日志写入时的锁冲突。
 fn open_state_db_path(db_path: &Path) -> Result<Connection, String> {
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建状态目录失败: {error}"))?;
@@ -228,7 +270,8 @@ fn open_state_db_path(db_path: &Path) -> Result<Connection, String> {
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(|error| format!("设置 SQLite busy_timeout 失败: {error}"))?;
-    connection
+        // 表结构刻意保持简单：每条任务/Cookie/日志仍保存为 JSON，方便前端类型演进。
+connection
         .execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
@@ -260,6 +303,7 @@ fn open_state_db(app: &AppHandle) -> Result<Connection, String> {
     open_state_db_path(&db_path)
 }
 
+// 这些错误通常表示状态库不可继续使用，可以备份后重建，避免应用启动失败。
 fn is_recoverable_sqlite_error(message: &str) -> bool {
     let normalized = message.to_lowercase();
 
@@ -275,6 +319,7 @@ fn is_recoverable_sqlite_error(message: &str) -> bool {
     .any(|keyword| normalized.contains(keyword))
 }
 
+// SQLite WAL 模式会产生 -wal 和 -shm 侧文件，备份/恢复时必须和主库一起处理。
 fn sqlite_sidecar_paths(db_path: &Path) -> [PathBuf; 3] {
     [
         db_path.to_path_buf(),
@@ -283,6 +328,7 @@ fn sqlite_sidecar_paths(db_path: &Path) -> [PathBuf; 3] {
     ]
 }
 
+// 状态库损坏时先把主库和 WAL/SHM 侧文件整体改名备份，再创建干净库继续运行。
 fn rotate_corrupted_state_db(db_path: &Path) -> Result<PathBuf, String> {
     let backup_stem = format!("runtime-state.corrupt-{}", timestamp_now());
     let backup_db_path = db_path.with_file_name(format!("{backup_stem}.sqlite"));
@@ -314,6 +360,7 @@ fn rotate_corrupted_state_db(db_path: &Path) -> Result<PathBuf, String> {
     Ok(backup_db_path)
 }
 
+// 只对固定表名调用该函数，避免把用户输入拼进 SQL。
 fn count_rows(connection: &Connection, table_name: &str) -> Result<i64, String> {
     let sql = format!("SELECT COUNT(*) FROM {table_name}");
     connection
@@ -321,6 +368,7 @@ fn count_rows(connection: &Connection, table_name: &str) -> Result<i64, String> 
         .map_err(|error| format!("统计 {table_name} 行数失败: {error}"))
 }
 
+// 判断是否已有真实状态，用来决定是否需要从旧 JSON 迁移。
 fn sqlite_has_any_state(connection: &Connection) -> Result<bool, String> {
     let tasks = count_rows(connection, "tasks")?;
     let cookies = count_rows(connection, "cookies")?;
@@ -329,6 +377,7 @@ fn sqlite_has_any_state(connection: &Connection) -> Result<bool, String> {
     Ok(tasks > 0 || cookies > 0 || logs > 0)
 }
 
+// 从快照根对象读取数组字段；字段缺失时返回空数组，让旧快照也能被温和处理。
 fn value_array_from_root<'a>(root: &'a Value, key: &str) -> &'a [Value] {
     root.get(key)
         .and_then(Value::as_array)
@@ -336,6 +385,7 @@ fn value_array_from_root<'a>(root: &'a Value, key: &str) -> &'a [Value] {
         .unwrap_or(&[])
 }
 
+// 重新启动后继续使用已有最大日志 id，避免新日志和历史日志 id 重复。
 fn next_runtime_log_seed(logs: &[Value]) -> Option<u64> {
     logs.iter()
         .filter_map(|log| log.get("id").and_then(Value::as_u64))
@@ -343,6 +393,7 @@ fn next_runtime_log_seed(logs: &[Value]) -> Option<u64> {
         .map(|max_id| max_id.saturating_add(1))
 }
 
+// 前端仍以整体快照保存，Rust 侧在一个事务内拆分写入任务、Cookie、日志和配置表。
 fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Result<(), String> {
     let tasks = value_array_from_root(snapshot, "tasks");
     let cookies = value_array_from_root(snapshot, "cookies");
@@ -356,6 +407,7 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
         .cloned()
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
 
+    // 整体快照写入采用“先清空再重建”的事务模型，保证任务/Cookie/日志始终来自同一版本快照。
     let transaction = connection
         .transaction()
         .map_err(|error| format!("开启 SQLite 事务失败: {error}"))?;
@@ -371,7 +423,8 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
         .map_err(|error| format!("清理 app_logs 失败: {error}"))?;
 
     {
-        let mut statement = transaction
+                // 任务表按前端数组顺序写入，读取时用 rowid ASC 保留用户看到的队列顺序。
+let mut statement = transaction
             .prepare("INSERT OR REPLACE INTO tasks (id, payload_json) VALUES (?1, ?2)")
             .map_err(|error| format!("准备写入 tasks 语句失败: {error}"))?;
         for task in tasks {
@@ -444,6 +497,7 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
         .map_err(|error| format!("提交 SQLite 事务失败: {error}"))
 }
 
+// 兼容旧版 JSON 状态文件：只有 SQLite 为空时才迁移，避免覆盖新状态。
 fn migrate_json_snapshot_if_needed(
     app: &AppHandle,
     connection: &mut Connection,
@@ -464,6 +518,7 @@ fn migrate_json_snapshot_if_needed(
     write_snapshot_to_sqlite(connection, &snapshot)
 }
 
+// 从 SQLite 重新组装成前端熟悉的 AppSeedState JSON，前端无需关心底层表结构。
 fn load_snapshot_from_sqlite(connection: &Connection) -> Result<Option<Value>, String> {
     if !sqlite_has_any_state(connection)? {
         return Ok(None);
@@ -507,6 +562,7 @@ fn load_snapshot_from_sqlite(connection: &Connection) -> Result<Option<Value>, S
         tasks.push(parsed);
     }
 
+    // Cookie 读取使用 rowid DESC，使最新导入的 Cookie 更靠前，符合界面使用习惯。
     let mut cookies_statement = connection
         .prepare("SELECT payload_json FROM cookies ORDER BY rowid DESC")
         .map_err(|error| format!("读取 cookies 失败: {error}"))?;
@@ -521,6 +577,7 @@ fn load_snapshot_from_sqlite(connection: &Connection) -> Result<Option<Value>, S
         cookies.push(parsed);
     }
 
+    // 日志按 id 倒序读取，界面默认最新日志在上。
     let mut logs_statement = connection
         .prepare("SELECT payload_json FROM app_logs ORDER BY id DESC")
         .map_err(|error| format!("读取 app_logs 失败: {error}"))?;
@@ -554,6 +611,7 @@ fn save_snapshot_to_sqlite_path(db_path: &Path, snapshot: &Value) -> Result<(), 
     write_snapshot_to_sqlite(&mut connection, snapshot)
 }
 
+// 保存失败且判断为可恢复损坏时，会自动备份旧库并重试一次写入。
 fn save_snapshot_to_sqlite_path_with_recovery(
     db_path: &Path,
     snapshot: &Value,
@@ -573,6 +631,7 @@ fn save_snapshot_to_sqlite_path_with_recovery(
     }
 }
 
+// 每个任务一个控制文件，路径在应用数据目录下，避免写到用户选择的图片输出目录。
 fn task_control_file_path(app: &AppHandle, task_id: &str) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
@@ -582,10 +641,12 @@ fn task_control_file_path(app: &AppHandle, task_id: &str) -> Result<PathBuf, Str
     Ok(base_dir.join("task-control").join(format!("{task_id}.txt")))
 }
 
+// pid 文件和控制文件同名不同扩展名，用于清空/删除任务时找到后台 sidecar 进程。
 fn task_pid_file_path(control_file_path: &Path) -> PathBuf {
     control_file_path.with_extension("pid")
 }
 
+// 所有 Rust/sidecar 日志最终都转成 runtime-log 事件，由前端统一展示和持久化。
 fn emit_runtime_log_event(
     app: &AppHandle,
     level: &str,
@@ -607,6 +668,7 @@ fn emit_runtime_log_event(
         .map_err(|error| format!("发送运行日志事件失败: {error}"))
 }
 
+// 实时进度不只写日志，还单独发 task-progress 事件，保证进度条不等日志批量刷新。
 fn emit_task_progress_event(
     app: &AppHandle,
     task_id: String,
@@ -627,6 +689,7 @@ fn emit_task_progress_event(
         .map_err(|error| format!("发送任务进度事件失败: {error}"))
 }
 
+// 开发环境直接从仓库的 apps/sidecar 读取 dist/index.js。
 fn resolve_dev_sidecar_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -635,6 +698,7 @@ fn resolve_dev_sidecar_root() -> PathBuf {
 }
 
 #[cfg(not(debug_assertions))]
+// 发布包环境优先从 resources/sidecar 读取已打包的 Node、dist 和依赖。
 fn resolve_bundled_sidecar_root(app: &AppHandle) -> Option<PathBuf> {
     let root = app.path().resource_dir().ok()?.join("sidecar");
     root.join("dist").join("index.js").exists().then_some(root)
@@ -650,6 +714,7 @@ fn resolve_sidecar_root(app: &AppHandle) -> PathBuf {
     resolve_bundled_sidecar_root(app).unwrap_or_else(resolve_dev_sidecar_root)
 }
 
+// 开发环境和安装包环境的 sidecar 路径不同，这里统一解析入口文件并给出清晰错误。
 fn resolve_sidecar_entry(sidecar_root: &Path) -> Result<PathBuf, String> {
     let entry = sidecar_root.join("dist").join("index.js");
     if entry.exists() {
@@ -662,10 +727,12 @@ fn resolve_sidecar_entry(sidecar_root: &Path) -> Result<PathBuf, String> {
     ))
 }
 
+// 传给 node 的入口参数固定使用相对路径，避免 Windows 盘符路径被 node 误解析。
 fn resolve_sidecar_entry_arg() -> &'static str {
     "./dist/index.js"
 }
 
+// 安装包内如果带有 node.exe 就优先使用它；开发环境才回退到系统 node。
 fn resolve_sidecar_node(sidecar_root: &Path) -> PathBuf {
     let bundled_node = sidecar_root.join(if cfg!(windows) { "node.exe" } else { "node" });
     if bundled_node.exists() {
@@ -675,6 +742,7 @@ fn resolve_sidecar_node(sidecar_root: &Path) -> PathBuf {
     PathBuf::from("node")
 }
 
+// sidecar stdout 同时承载日志、进度和最终结果，解析时必须按 kind 分流。
 fn parse_sidecar_stdout_line(
     app: &AppHandle,
     fallback_task_id: &str,
@@ -687,6 +755,7 @@ fn parse_sidecar_stdout_line(
         return;
     }
 
+    // sidecar 正常输出是 JSON；如果第三方库输出普通文本，也会作为普通日志显示出来。
     let parsed = match serde_json::from_str::<Value>(trimmed) {
         Ok(value) => value,
         Err(_) => {
@@ -702,6 +771,7 @@ fn parse_sidecar_stdout_line(
         }
     };
 
+    // 最终结果只保存到 result_holder，不再作为普通日志显示。
     if parsed.get("kind").and_then(Value::as_str) == Some("task-result") {
         if let Some(payload) = parsed.get("payload") {
             if let Ok(mut guard) = result_holder.lock() {
@@ -711,6 +781,7 @@ fn parse_sidecar_stdout_line(
         return;
     }
 
+    // 进度事件会走两条路：emit task-progress 立即更新进度条，同时写隐藏日志作为兜底恢复。
     if parsed.get("kind").and_then(Value::as_str) == Some("task-progress") {
         let task_id = resolve_sidecar_event_task_id(
             parsed.get("taskId").and_then(Value::as_str),
@@ -799,6 +870,7 @@ fn parse_sidecar_stdout_line(
     let _ = emit_runtime_log_event(app, level, scope, message, task_id, timestamp);
 }
 
+// stderr 一律按错误日志处理，并记住最后一条错误，供 sidecar 异常退出时返回给前端。
 fn parse_sidecar_stderr_line(
     app: &AppHandle,
     fallback_task_id: &str,
@@ -822,15 +894,18 @@ fn parse_sidecar_stderr_line(
     );
 }
 
+// Windows 目录选择器通过 PowerShell 调用，单引号需要转义，避免路径里有特殊字符时命令失败。
 fn escape_powershell_single_quote(input: &str) -> String {
     input.replace('\'', "''")
 }
 
+// 目录选择器只接受真实存在的初始目录，空值或不存在路径都不预填。
 fn existing_path(path: Option<String>) -> Option<String> {
     path.filter(|value| !value.trim().is_empty())
         .filter(|value| Path::new(value).exists())
 }
 
+// 多线程读取 stdout/stderr 时用 Mutex 保存最近错误，最后统一决定返回给前端的失败原因。
 fn remember_sidecar_error_message(error_holder: &Arc<Mutex<Option<String>>>, message: &str) {
     let trimmed = message.trim();
     if trimmed.is_empty() {
@@ -842,6 +917,7 @@ fn remember_sidecar_error_message(error_holder: &Arc<Mutex<Option<String>>>, mes
     }
 }
 
+// sidecar 顶层错误会带固定前缀，返回给用户前去掉它，让错误文案更直接。
 fn normalize_sidecar_error_message(message: &str) -> String {
     message
         .trim()
@@ -850,6 +926,7 @@ fn normalize_sidecar_error_message(message: &str) -> String {
         .to_string()
 }
 
+// sidecar 非 0 退出时优先展示业务错误；没有业务错误才展示进程退出码。
 fn format_sidecar_exit_error(status_code: Option<i32>, sidecar_message: Option<&str>) -> String {
     match sidecar_message.map(normalize_sidecar_error_message) {
         Some(message) if !message.is_empty() => message,
@@ -857,6 +934,7 @@ fn format_sidecar_exit_error(status_code: Option<i32>, sidecar_message: Option<&
     }
 }
 
+// 打开目录前做存在性和类型校验，避免把错误路径直接交给系统 shell。
 fn ensure_existing_directory(path: &str) -> Result<PathBuf, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -874,6 +952,7 @@ fn ensure_existing_directory(path: &str) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
+// 清空或删除任务时会优先读取 pid 文件终止 sidecar 子进程，避免后台继续写图片。
 fn terminate_task_process(control_file_path: &Path) -> Result<bool, String> {
     let pid_file_path = task_pid_file_path(control_file_path);
     let pid_text = match fs::read_to_string(&pid_file_path) {
@@ -911,6 +990,7 @@ fn terminate_task_process(control_file_path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+// Tauri command 默认在异步运行时里执行，阻塞 IO/进程等待必须放进 spawn_blocking。
 async fn run_blocking_job<T, F>(job: F) -> Result<T, String>
 where
     T: Send + 'static,
@@ -921,6 +1001,7 @@ where
         .map_err(|error| format!("后台任务执行失败: {error}"))?
 }
 
+// 豆瓣登录导入只把 dbcl2 和 ck 都存在视为登录成功，其他 Cookie 会一起拼成请求头。
 fn resolve_douban_login_cookie_status<K, V>(
     window_exists: bool,
     cookies: &[(K, V)],
@@ -970,6 +1051,7 @@ where
     }
 }
 
+// 读取 WebView Cookie 是同步/阻塞操作，因此外层命令会通过 run_blocking_job 调用。
 fn read_login_window_cookie_status_blocking(
     app: AppHandle,
     window_label: String,
@@ -992,6 +1074,7 @@ fn read_login_window_cookie_status_blocking(
     Ok(resolve_douban_login_cookie_status(true, &cookie_pairs))
 }
 
+// 前端启动时调用：读取 SQLite，如果发现库损坏则自动备份并重建。
 #[tauri::command]
 fn load_persisted_state(app: AppHandle) -> Result<Option<String>, String> {
     let db_path = sqlite_db_path(&app)?;
@@ -1018,6 +1101,7 @@ fn load_persisted_state(app: AppHandle) -> Result<Option<String>, String> {
     }
 }
 
+// sidecar 内部默认任务 id 是 bootstrap-url-task，这里把它映射回前端真实 taskId。
 fn resolve_sidecar_event_task_id(raw_task_id: Option<&str>, fallback_task_id: &str) -> String {
     match raw_task_id {
         Some(task_id) if !task_id.trim().is_empty() && task_id != "bootstrap-url-task" => {
@@ -1027,6 +1111,7 @@ fn resolve_sidecar_event_task_id(raw_task_id: Option<&str>, fallback_task_id: &s
     }
 }
 
+// 前端轮询登录窗口状态时调用；返回 ready 后前端会关闭窗口并保存 Cookie。
 #[tauri::command]
 async fn check_login_window_cookie_status(
     app: AppHandle,
@@ -1035,6 +1120,7 @@ async fn check_login_window_cookie_status(
     run_blocking_job(move || read_login_window_cookie_status_blocking(app, window_label)).await
 }
 
+// 用户取消或 Cookie 导入完成后关闭豆瓣登录窗口。
 #[tauri::command]
 fn close_login_window(app: AppHandle, window_label: String) -> Result<bool, String> {
     let Some(window) = app.get_webview_window(&window_label) else {
@@ -1047,6 +1133,7 @@ fn close_login_window(app: AppHandle, window_label: String) -> Result<bool, Stri
     Ok(true)
 }
 
+// 前端状态有变化时调用：传入完整 JSON 快照，由 Rust 写入 SQLite。
 #[tauri::command]
 fn save_persisted_state(app: AppHandle, snapshot_json: String) -> Result<(), String> {
     let snapshot = serde_json::from_str::<Value>(&snapshot_json)
@@ -1055,6 +1142,7 @@ fn save_persisted_state(app: AppHandle, snapshot_json: String) -> Result<(), Str
     save_snapshot_to_sqlite_path_with_recovery(&db_path, &snapshot)
 }
 
+// 前端也可以主动写日志，最终仍走同一条 runtime-log 事件管道。
 #[tauri::command]
 fn emit_runtime_log(app: AppHandle, payload: RuntimeLogPayload) -> Result<(), String> {
     emit_runtime_log_event(
@@ -1067,6 +1155,7 @@ fn emit_runtime_log(app: AppHandle, payload: RuntimeLogPayload) -> Result<(), St
     )
 }
 
+// 暂停不会直接杀进程，而是写 pause 控制文件，让 sidecar 在安全检查点停下。
 #[tauri::command]
 fn pause_download_task(
     app: AppHandle,
@@ -1085,6 +1174,7 @@ fn pause_download_task(
     Ok(true)
 }
 
+// 继续任务会写 resume；前端随后把任务重新放回队列。
 #[tauri::command]
 fn resume_download_task(
     app: AppHandle,
@@ -1103,6 +1193,7 @@ fn resume_download_task(
     Ok(true)
 }
 
+// 删除单任务或清空队列都会走这里：写 cancel、尝试杀进程、清理控制文件。
 #[tauri::command]
 fn clear_download_tasks(
     app: AppHandle,
@@ -1131,6 +1222,7 @@ fn clear_download_tasks(
     Ok(cleared)
 }
 
+// 删除输出目录前必须确认目标在输出根目录内，避免误删用户其他文件。
 #[tauri::command]
 fn delete_directory_path(
     directory_path: String,
@@ -1169,6 +1261,7 @@ fn delete_directory_path(
     Ok(true)
 }
 
+// 打开系统目录选择器；Windows 上使用 FolderBrowserDialog，因为 Tauri 这里没有直接引入 dialog 插件。
 #[tauri::command]
 fn pick_output_directory(initial_path: Option<String>) -> Result<Option<String>, String> {
     let initial_path = existing_path(initial_path);
@@ -1203,6 +1296,7 @@ fn pick_output_directory(initial_path: Option<String>) -> Result<Option<String>,
     Ok(Some(selected))
 }
 
+// 阻塞下载任务负责创建 sidecar 子进程、注入环境变量、监听 stdout/stderr 并返回最终 JSON。
 fn run_download_task_blocking(
     app: AppHandle,
     payload: DownloadTaskPayload,
@@ -1237,6 +1331,7 @@ fn run_download_task_blocking(
         None,
     )?;
 
+    // sidecar 作为独立 Node 进程运行，所有任务参数通过环境变量注入，避免复杂命令行转义。
     let mut command = Command::new(sidecar_node);
     command
         .arg(sidecar_entry_arg)
@@ -1265,6 +1360,7 @@ fn run_download_task_blocking(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    // Windows 发布包中隐藏 node.exe 控制台窗口，避免用户每次下载时看到空白命令行。
     #[cfg(windows)]
     {
         #[cfg(target_os = "windows")]
@@ -1272,12 +1368,14 @@ fn run_download_task_blocking(
         command.creation_flags(0x08000000);
     }
 
+    // Cookie 只在当前子进程环境中传递，不写入 sidecar 命令行，减少泄露风险。
     if let Some(cookie) = payload.douban_cookie.as_ref() {
         command.env("MCD_DOUBAN_COOKIE", cookie);
     } else {
         command.env_remove("MCD_DOUBAN_COOKIE");
     }
 
+    // 真正启动 sidecar；后续 stdout/stderr 都必须被读取，否则子进程可能因管道阻塞卡住。
     let mut child = command
         .spawn()
         .map_err(|error| format!("启动 sidecar 失败: {error}"))?;
@@ -1285,12 +1383,14 @@ fn run_download_task_blocking(
     if let Some(parent) = control_file_path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建任务控制目录失败: {error}"))?;
     }
-    fs::write(
+        // 记录 pid 是为了删除/清空队列时能终止仍在后台运行的下载进程。
+fs::write(
         task_pid_file_path(&control_file_path),
         child.id().to_string(),
     )
     .map_err(|error| format!("写入任务进程标记失败: {error}"))?;
 
+    // stdout 解析结构化 JSON：日志、进度和最终任务结果都从这里回来。
     let stdout = child
         .stdout
         .take()
@@ -1300,6 +1400,7 @@ fn run_download_task_blocking(
         .take()
         .ok_or_else(|| "无法读取 sidecar stderr".to_string())?;
 
+    // 两个读取线程和主线程共享最终结果/错误信息，因此用 Arc<Mutex<...>> 包起来。
     let result_holder = Arc::new(Mutex::new(None));
     let error_holder = Arc::new(Mutex::new(None));
 
@@ -1307,6 +1408,7 @@ fn run_download_task_blocking(
     let stdout_task_id = payload.task_id.clone();
     let stdout_result_holder = Arc::clone(&result_holder);
     let stdout_error_holder = Arc::clone(&error_holder);
+    // 单独线程持续读取 stdout，确保实时进度能边下载边发给前端。
     let stdout_thread = thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             parse_sidecar_stdout_line(
@@ -1322,12 +1424,14 @@ fn run_download_task_blocking(
     let stderr_app = app.clone();
     let stderr_task_id = payload.task_id.clone();
     let stderr_error_holder = Arc::clone(&error_holder);
+    // stderr 也必须单独读取，否则大量错误输出可能让子进程阻塞。
     let stderr_thread = thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             parse_sidecar_stderr_line(&stderr_app, &stderr_task_id, &line, &stderr_error_holder);
         }
     });
 
+    // 等待 sidecar 主进程退出；退出后再合并两个读取线程的解析结果。
     let status = child
         .wait()
         .map_err(|error| format!("等待 sidecar 任务结束失败: {error}"))?;
@@ -1335,6 +1439,7 @@ fn run_download_task_blocking(
     let _ = stdout_thread.join();
     let _ = stderr_thread.join();
 
+    // 非 0 退出视为任务失败，优先返回 sidecar 输出的业务错误。
     if !status.success() {
         let sidecar_message = error_holder
             .lock()
@@ -1346,6 +1451,7 @@ fn run_download_task_blocking(
         ));
     }
 
+    // 正常退出但没有 task-result 也算失败，避免前端把未知状态当成成功。
     let result = match result_holder
         .lock()
         .map_err(|_| "读取 sidecar 结果失败".to_string())?
@@ -1364,6 +1470,7 @@ fn run_download_task_blocking(
     serde_json::to_string(&result).map_err(|error| format!("序列化任务结果失败: {error}"))
 }
 
+// 前端执行真实下载任务的主入口：注册控制文件，转到阻塞线程运行，最后清理注册表。
 #[tauri::command]
 async fn run_download_task(
     app: AppHandle,
@@ -1381,6 +1488,7 @@ async fn run_download_task(
     result
 }
 
+// 自定义裁剪上传只允许常见图片扩展名，提前挡掉不可预览或危险的文件类型。
 fn is_supported_local_image_path(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
@@ -1394,6 +1502,7 @@ fn is_supported_local_image_path(path: &Path) -> bool {
 }
 
 #[tauri::command]
+// 自定义裁剪拖拽本地文件时通过该命令读取图片字节，并限制文件类型和大小。
 fn read_local_image_file(file_path: String) -> Result<Vec<u8>, String> {
     let path = PathBuf::from(file_path.trim());
     if !path.is_file() {
@@ -1411,6 +1520,7 @@ fn read_local_image_file(file_path: String) -> Result<Vec<u8>, String> {
 
     fs::read(&path).map_err(|error| format!("读取拖拽图片失败: {error}"))
 }
+// 保存自定义裁剪图片前清理 Windows/macOS/Linux 都不适合出现在文件名里的字符。
 fn sanitize_output_file_name(file_name: &str) -> String {
     let sanitized = file_name
         .chars()
@@ -1430,6 +1540,7 @@ fn sanitize_output_file_name(file_name: &str) -> String {
     }
 }
 
+// 自定义裁剪保存命令：固定写到输出根目录/custom-crop-photo 下。
 #[tauri::command]
 fn save_custom_cropped_image(
     output_root_dir: String,
@@ -1448,6 +1559,7 @@ fn save_custom_cropped_image(
 
     Ok(output_path.to_string_lossy().into_owned())
 }
+// 早期内部输出目录命令，仍保留在 handler 中以兼容已有前端调用。
 #[tauri::command]
 fn open_output_dir(app: AppHandle) -> Result<String, String> {
     let output_dir = app
@@ -1461,6 +1573,7 @@ fn open_output_dir(app: AppHandle) -> Result<String, String> {
     Ok(output_dir.to_string_lossy().into_owned())
 }
 
+// 打开某个已存在目录，用于任务完成后打开输出目录。
 #[tauri::command]
 fn open_directory_path(directory_path: String) -> Result<(), String> {
     let directory = ensure_existing_directory(&directory_path)?;
@@ -1492,6 +1605,7 @@ fn open_directory_path(directory_path: String) -> Result<(), String> {
     Ok(())
 }
 
+// 打开文件所在目录并选中文件，用于自定义裁剪保存后的路径提示。
 #[tauri::command]
 fn reveal_file_path(file_path: String) -> Result<(), String> {
     let path = PathBuf::from(file_path.trim());
@@ -1530,11 +1644,13 @@ fn reveal_file_path(file_path: String) -> Result<(), String> {
 
     Ok(())
 }
+// Tauri builder 注册所有前端可调用命令，并托管任务控制注册表。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(TaskControlRegistry::default())
         .plugin(tauri_plugin_opener::init())
+        // 只有登记在 generate_handler! 里的函数，前端 invoke(...) 才能调用。
         .invoke_handler(tauri::generate_handler![
             load_persisted_state,
             check_login_window_cookie_status,
@@ -1558,6 +1674,7 @@ pub fn run() {
 }
 
 #[cfg(test)]
+// 单元测试集中保护 lib.rs 中最容易出事故的边界：进程参数、状态库恢复、目录删除和任务控制。
 mod tests {
     use super::{
         delete_directory_path, format_sidecar_exit_error, is_recoverable_sqlite_error,
@@ -1576,6 +1693,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    // 每个测试使用独立临时目录，并先删除同名目录，避免上次测试残留影响结果。
     fn test_temp_dir(label: &str) -> PathBuf {
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)

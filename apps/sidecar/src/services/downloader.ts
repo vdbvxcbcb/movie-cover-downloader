@@ -1,3 +1,4 @@
+// 图片下载服务：负责断点续传、图片格式转换、比例裁剪、保存和进度上报。
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
@@ -16,12 +17,14 @@ import {
 } from "./resume-store.js";
 import { PauseRequestedError, type FileTaskControl } from "./task-control.js";
 
+// 校验最终输出格式，只允许 jpg/png，避免 sharp 或文件名生成阶段收到非法格式。
 function ensureSupportedOutputImageFormat(format: string): asserts format is SidecarTask["outputImageFormat"] {
   if (format !== "jpg" && format !== "png") {
     throw new Error(`unsupported output image format: "${format}"`);
   }
 }
 
+// 先轻量读取常见图片头，只有需要裁剪或转格式时才交给 sharp 做完整解码。
 function detectImageMetadata(buffer: Buffer) {
   if (buffer.length >= 24 && buffer[0] === 0x89 && buffer.toString("ascii", 1, 4) === "PNG") {
     return {
@@ -87,6 +90,7 @@ function detectImageMetadata(buffer: Buffer) {
   return { extension: undefined as string | undefined };
 }
 
+// 根据响应 Content-Type 或图片 URL 推断原始扩展名，决定是否可以直接保存原图二进制。
 function inferExtension(imageUrl: string, contentType?: string | null) {
   if (contentType?.includes("image/webp")) return ".webp";
   if (contentType?.includes("image/png")) return ".png";
@@ -107,16 +111,20 @@ interface NormalizedImageBuffer {
   height?: number;
 }
 
+// 校验图片比例策略，只允许原图、9:16、3:4 三种，和前端设置保持一致。
 function ensureSupportedImageAspectRatio(aspectRatio: string): asserts aspectRatio is SidecarTask["imageAspectRatio"] {
   if (aspectRatio !== "original" && aspectRatio !== "9:16" && aspectRatio !== "3:4") {
     throw new Error(`unsupported image aspect ratio: "${aspectRatio}"`);
   }
 }
 
+// 把比例字符串转换成宽高数字，供居中裁剪算法计算目标比例。
 function resolveAspectRatioSize(aspectRatio: Exclude<SidecarTask["imageAspectRatio"], "original">) {
   return aspectRatio === "3:4" ? { width: 3, height: 4 } : { width: 9, height: 16 };
 }
 
+// 固定比例下载采用居中裁剪，不放大、不拉伸，因此清晰度来自原始图片像素。
+// 根据原图尺寸和目标比例计算居中裁剪区域，不放大、不拉伸，尽量保持清晰度。
 function calculateCenteredCrop(width: number, height: number, aspectRatio: Exclude<SidecarTask["imageAspectRatio"], "original">) {
   const target = resolveAspectRatioSize(aspectRatio);
   const targetRatio = target.width / target.height;
@@ -141,6 +149,7 @@ function calculateCenteredCrop(width: number, height: number, aspectRatio: Exclu
   };
 }
 
+// 图片归一化负责最终格式和比例：原图模式尽量保持原始二进制，裁剪模式再用 sharp 输出。
 async function normalizeImageBuffer(
   buffer: Buffer,
   targetFormat: SidecarTask["outputImageFormat"],
@@ -181,10 +190,12 @@ async function normalizeImageBuffer(
   };
 }
 
+// 判断断点续传 part 文件是否不存在；不存在是正常情况，不应让下载失败。
 function isFileMissing(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
+// 读取已下载 part 文件大小，用于 Range 续传；没有 part 文件时返回 null。
 async function readExistingPartSize(partPath: string) {
   try {
     const stat = await fs.stat(partPath);
@@ -197,6 +208,7 @@ async function readExistingPartSize(partPath: string) {
   }
 }
 
+// 从 Content-Range 或 Content-Length 推断图片总字节数，便于判断续传是否已经完整。
 function resolveTotalBytes(response: Response, downloadedBytes: number) {
   const contentRange = response.headers.get("content-range");
   if (contentRange) {
@@ -222,12 +234,15 @@ interface DownloadedSourceImage {
   buffer: Buffer;
 }
 
+// 下载服务负责单张图片请求、断点续传、格式/比例处理、最终保存和进度上报。
 export class DownloaderService {
+  // 下载服务只保存运行配置和日志器；具体任务参数由 download(...) 每次传入。
   constructor(
     private readonly config: RuntimeConfig,
     private readonly logger: SidecarLogger,
   ) {}
 
+  // 断点续传只在 URL 和 part 文件都匹配时复用，避免把旧任务残片写进新图片。
   private async loadUsableResumeMetadata(
     outputDir: string,
     taskId: string,
@@ -256,6 +271,7 @@ export class DownloaderService {
     };
   }
 
+  // 下载流先落到 .part 文件并持续刷新元数据，暂停或崩溃后能从已下载字节继续。
   private async writeResponseToPartFile(
     response: Response,
     metadata: ResumeMetadata,
@@ -314,6 +330,7 @@ export class DownloaderService {
     }
   }
 
+  // 单张图片请求会自动携带 Referer、Cookie 和 Range 头，失败时清理不可用的续传状态。
   private async fetchSourceImageBuffer(
     task: SidecarTask,
     discovery: DiscoveryResult,
@@ -393,6 +410,7 @@ export class DownloaderService {
     };
   }
 
+  // 主下载循环按发现顺序逐张保存，保存成功后立即上报进度并写入 saved image 日志。
   async download(
     task: SidecarTask,
     discovery: DiscoveryResult,

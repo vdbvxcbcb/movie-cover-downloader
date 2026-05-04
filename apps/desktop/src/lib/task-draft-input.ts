@@ -1,3 +1,4 @@
+// 新增任务表单校验工具：规范化批量链接、数量限制和输出目录。
 import type { ImageCountMode } from "../types/app";
 
 interface TaskDraftInputValidation {
@@ -18,6 +19,7 @@ type ValidationResult =
       message: string;
     };
 
+// 规范化批量链接输入：把连续粘贴的多个 URL 拆成每行一个。
 export function normalizeDetailUrlsInput(value: string) {
   return value
     .replace(/([^\s])(https?:\/\/)/g, "$1\n$2")
@@ -28,6 +30,7 @@ export function normalizeDetailUrlsInput(value: string) {
     .join("\n");
 }
 
+// 只接受豆瓣电影 subject 详情页，拒绝豆瓣首页、其他豆瓣页面和外站链接。
 function isDoubanMovieDetailUrl(url: URL) {
   if (url.protocol !== "https:" || url.hostname !== "movie.douban.com") {
     return false;
@@ -37,6 +40,7 @@ function isDoubanMovieDetailUrl(url: URL) {
 }
 
 
+// 将字符串安全解析成 URL 后再校验站点和路径，解析失败会返回 false。
 function isSupportedDetailUrl(detailUrl: string) {
   try {
     const url = new URL(detailUrl);
@@ -46,6 +50,7 @@ function isSupportedDetailUrl(detailUrl: string) {
   }
 }
 
+// 新增任务提交前的统一校验入口，返回可创建任务的链接列表和数量限制。
 export function validateTaskDraftInput(input: TaskDraftInputValidation): ValidationResult {
   if (typeof input.detailUrls !== "string") {
     return {

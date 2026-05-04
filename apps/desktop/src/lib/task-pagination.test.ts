@@ -1,3 +1,4 @@
+// 分页工具测试：覆盖边界页码和页数计算。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { paginateItems } from "./task-pagination";

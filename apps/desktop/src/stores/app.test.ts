@@ -1,9 +1,11 @@
+// Pinia 仓库测试：模拟 Tauri 桥接以验证队列状态流转。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPinia, setActivePinia } from "pinia";
 import { formatTaskProgress, getTaskProgressPercent } from "../lib/presenters";
 import type { RuntimeDownloadTaskResult, RuntimeTaskProgressEvent, TaskDraft } from "../types/app";
 
+// 创建测试用 window/localStorage/prompt stub，避免 Pinia store 测试依赖真实浏览器环境。
 function createWindowStub() {
   const target = new EventTarget();
   const storage = new Map<string, string>();
@@ -15,22 +17,27 @@ function createWindowStub() {
     removeEventListener: target.removeEventListener.bind(target),
     dispatchEvent: target.dispatchEvent.bind(target),
     localStorage: {
+      // 模拟 localStorage.getItem，供浏览器降级持久化测试使用。
       getItem(key: string) {
         return storage.get(key) ?? null;
       },
+      // 模拟 localStorage.setItem，把测试快照写入内存 Map。
       setItem(key: string, value: string) {
         storage.set(key, value);
       },
+      // 模拟 localStorage.removeItem，清理内存 Map 中的指定 key。
       removeItem(key: string) {
         storage.delete(key);
       },
     },
+    // 模拟 window.prompt，避免测试过程中弹出真实输入框。
     prompt() {
       return null;
     },
   };
 }
 
+// 在异步 store 测试中轮询等待条件满足，超时则让测试失败。
 async function waitFor(check: () => boolean, timeoutMs = 2_000) {
   const start = Date.now();
   while (!check()) {
@@ -42,6 +49,7 @@ async function waitFor(check: () => boolean, timeoutMs = 2_000) {
   }
 }
 
+// 创建默认任务草稿，测试可以覆盖链接、数量和输出目录。
 function createDraft(overrides: Partial<TaskDraft> = {}): TaskDraft {
   return {
     detailUrl: "https://movie.douban.com/subject/34780991/",
@@ -57,6 +65,7 @@ function createDraft(overrides: Partial<TaskDraft> = {}): TaskDraft {
   };
 }
 
+// 构造 sidecar 成功结果，模拟真实下载完成后的返回数据。
 function createSuccessResult(imageCount = 1): RuntimeDownloadTaskResult {
   const normalizedTitle = "Douban Title";
   const outputDir = "D:/cover/Douban Title - 2026-05-01";
@@ -91,6 +100,7 @@ function createSuccessResult(imageCount = 1): RuntimeDownloadTaskResult {
   };
 }
 
+// 初始化 Pinia store 测试环境，并注入可控的 runtimeBridge mock。
 async function setupStore(overrides?: {
   loadState?: typeof import("../lib/runtime-bridge").runtimeBridge.loadState;
   saveState?: typeof import("../lib/runtime-bridge").runtimeBridge.saveState;
@@ -105,6 +115,7 @@ async function setupStore(overrides?: {
     CustomEvent: class<T> extends Event {
       detail: T;
 
+      // Node 测试环境缺少 CustomEvent，这里提供最小实现供 runtimeBridge 事件使用。
       constructor(type: string, init: CustomEventInit<T>) {
         super(type);
         this.detail = init.detail as T;
@@ -148,9 +159,11 @@ async function setupStore(overrides?: {
     emitRuntimeLogs(entries: import("../types/app").LogEntry[]) {
       runtimeLogListener?.(entries);
     },
+    // 主动触发已注册的进度监听器，用来测试实时进度更新。
     emitTaskProgress(event: RuntimeTaskProgressEvent) {
       taskProgressListener?.(event);
     },
+    // 测试结束后恢复原始 structuredClone，避免影响其他用例。
     restoreStructuredClone() {
       globalThis.structuredClone = nativeStructuredClone;
     },
