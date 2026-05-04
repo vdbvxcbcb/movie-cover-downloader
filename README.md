@@ -7,6 +7,10 @@
 - 使用说明：[docs/usage-guide.md](./docs/usage-guide.md)
 - sidecar 说明：[apps/sidecar/README.md](./apps/sidecar/README.md)
 
+## 下载安装
+
+- 请到发布页面下载安装包：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
+
 ## 当前定位
 
 - 桌面壳：`Tauri 2`
