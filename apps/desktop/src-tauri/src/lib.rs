@@ -119,7 +119,7 @@ impl TaskControlRegistry {
             return Ok(());
         }
 
-        Err("æ— æ³•å†™å…¥æš‚åœçŠ¶æ€".to_string())
+        Err("无法写入暂停状态".to_string())
     }
 
     // 从暂停集合移除任务，下一次写控制文件时 sidecar 会看到 resume。
@@ -129,7 +129,7 @@ impl TaskControlRegistry {
             return Ok(());
         }
 
-        Err("æ— æ³•æ¸…ç†æš‚åœçŠ¶æ€".to_string())
+        Err("无法清理暂停状态".to_string())
     }
 
     fn is_paused(&self, task_id: &str) -> bool {
@@ -145,7 +145,7 @@ impl TaskControlRegistry {
             let mut control_files = self
                 .control_files
                 .lock()
-                .map_err(|_| "æ— æ³•æ³¨å†Œä»»åŠ¡æŽ§åˆ¶æ–‡ä»¶".to_string())?;
+                .map_err(|_| "无法注册任务控制文件".to_string())?;
             control_files.insert(task_id.clone(), control_file.clone());
         }
 
@@ -202,7 +202,7 @@ impl TaskControlRegistry {
         let control_file = self
             .control_files
             .lock()
-            .map_err(|_| "æ— æ³•è¯»å–ä»»åŠ¡æŽ§åˆ¶æ–‡ä»¶".to_string())?
+            .map_err(|_| "无法读取任务控制文件".to_string())?
             .get(task_id)
             .cloned();
 
@@ -212,11 +212,11 @@ impl TaskControlRegistry {
 
         if let Some(parent) = control_file.parent() {
             fs::create_dir_all(parent)
-                .map_err(|error| format!("åˆ›å»ºä»»åŠ¡æŽ§åˆ¶ç›®å½•å¤±è´¥: {error}"))?;
+                .map_err(|error| format!("创建任务控制目录失败: {error}"))?;
         }
 
         fs::write(&control_file, action)
-            .map_err(|error| format!("å†™å…¥ä»»åŠ¡æŽ§åˆ¶æ–‡ä»¶å¤±è´¥: {error}"))
+            .map_err(|error| format!("写入任务控制文件失败: {error}"))
     }
 }
 
