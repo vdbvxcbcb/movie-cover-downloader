@@ -1,6 +1,6 @@
 # Movie Cover Downloader
 
-一个面向 Windows 的影视封面下载器桌面应用，当前只支持豆瓣电影。应用提供任务队列、Cookie 管理、实时下载进度、本地输出目录管理、自定义裁剪能力。
+一个面向 Windows 的影视封面下载器桌面应用，当前只支持豆瓣电影。应用提供豆瓣影片搜索、搜索结果链接一键加入任务、任务队列、Cookie 管理、实时下载进度、本地输出目录管理、自定义裁剪能力。
 
 ## 快速入口
 
@@ -42,9 +42,10 @@ flowchart TB
   user[用户] --> desktop[Windows 桌面应用]
 
   subgraph frontend[apps/desktop/src - Vue 前端层]
-    ui[页面与组件\n任务队列 / 日志中心 / Cookie / 自定义裁剪]
+    ui[页面与组件\n任务队列 / 搜索弹窗 / 日志中心 / Cookie / 自定义裁剪]
     store[Pinia Store\n任务状态 / 进度 / Cookie / 日志 / 持久化调度]
     bridge[runtime-bridge.ts\nTauri invoke / event 统一桥接]
+    draft[新增任务草稿\n详情链接文本 / 影片预览 / 输出目录]
   end
 
   subgraph tauri[apps/desktop/src-tauri - Tauri Rust 层]
@@ -58,6 +59,7 @@ flowchart TB
     scheduler[SchedulerService\n编排任务生命周期]
     matcher[MatcherService\n选择站点适配器]
     douban[DoubanAdapter\n详情页 / 分类页 / 图片发现]
+    doubanSearch[DoubanSearch / DoubanTitle\n影片搜索 / 片名解析 / 封面预览]
     downloader[DownloaderService\n断点续传 / sharp 裁剪 / 保存图片 / 进度上报]
     control[FileTaskControl\npause / resume / cancel]
   end
@@ -99,6 +101,21 @@ sequenceDiagram
   participant D as 豆瓣页面
   participant O as 本地输出目录
   participant DB as SQLite 状态库
+
+  opt 搜索影片并加入链接草稿
+    U->>UI: 输入片名并点击搜索影视
+    UI->>B: searchDoubanMovies(query, page)
+    B->>R: invoke("search_douban_movies")
+    R->>N: 以 MCD_COMMAND=douban-search 启动 sidecar
+    N->>D: 请求豆瓣搜索页
+    D-->>N: 返回搜索结果 HTML / 数据
+    N-->>R: stdout douban-search-result
+    R-->>B: 返回搜索结果 JSON
+    B-->>UI: 渲染缩略图、片名、介绍和分页
+    U->>UI: 点击添加链接
+    UI->>S: addCreateTaskDetailUrl(detailUrl, title, preview)
+    S->>S: 更新共享链接草稿和影片封面预览
+  end
 
   U->>UI: 输入豆瓣详情页链接、输出目录、数量、图片尺寸
   UI->>UI: 校验链接与数量
@@ -148,6 +165,40 @@ sequenceDiagram
 
 ## 运行时数据流
 
+### 搜索与新增链接任务联动
+
+搜索影视能力不是单独的下载流程，而是新增链接任务的辅助入口：
+
+```text
+用户点击“2、搜索影视”
+  ↓
+SearchMovieModal 调用 searchDoubanMovies(query, page)
+  ↓
+runtime-bridge 调用 Tauri 命令 search_douban_movies
+  ↓
+Rust 以 MCD_COMMAND=douban-search 启动同一个 sidecar bundle
+  ↓
+sidecar 请求豆瓣搜索页并解析影片缩略图、片名、简介、详情页链接
+  ↓
+搜索弹窗展示结果列表和分页器
+  ↓
+用户点击“添加链接”
+  ↓
+Pinia store 将“片名：详情页链接”写入新增任务共享草稿
+  ↓
+CreateTaskModal 打开时直接显示这些链接，提交时仍只提取纯豆瓣 subject 链接
+```
+
+这个联动由 `stores/app.ts` 中的共享草稿维护，核心状态包括：
+
+- `createTaskDetailUrls`：新增链接任务弹窗里的详情页链接文本。
+- `createTaskMoviePreviews`：按详情页链接缓存搜索结果中的片名、封面缩略图和简介。
+- `addCreateTaskDetailUrl()`：搜索结果行点击“添加链接”时写入草稿。
+- `removeCreateTaskDetailUrl()`：搜索结果行点击“删除链接”时从草稿移除对应链接。
+- `hasCreateTaskDetailUrl()`：判断搜索结果是否已经加入草稿，用于把“添加链接”变成“完成添加”。
+
+用户也可以跳过搜索，直接在新增链接任务弹窗里手动粘贴豆瓣 subject 链接。前端会按行校验链接格式；需要展示片名时，会通过 `resolve_douban_movie_title` / `resolve_douban_movie_preview` 解析片名和封面，但最终创建任务仍只使用纯链接，避免“片名：链接”的展示格式影响下载流程。
+
 ### 新增链接下载任务
 
 ```text
@@ -179,6 +230,17 @@ Pinia store 实时更新任务进度、状态、日志和本地持久化快照
 下载进度不是等任务结束后一次性计算，而是由 sidecar 在每张图片保存成功后输出 `task-progress` 事件。Rust 收到后发给前端，前端 store 更新 `download.savedCount` / `download.targetCount`，任务表格的进度文字和进度条随之变化。
 
 为了提高可靠性，进度还有一条兜底路径：Rust 会把 `task-progress` 同步写成隐藏日志，前端如果收到日志批次，也能从日志中恢复进度状态。
+
+### 队列稳定性与安全保护
+
+队列稳定性围绕两个目标设计：后台按添加时间 FIFO 执行，界面按当前产品需求展示；危险操作不能和正在写入文件的下载任务抢同一批目录。
+
+- 后台执行：`drainQueue()` 从任务列表里按添加时间正序选择下一个可执行任务，旧任务先跑完再处理新任务。
+- 实时刷新：`task-progress`、结构化日志和表格刷新节拍共同推动任务列表更新，避免进度等到任务结束才从 `-` 瞬间变成满格。
+- 下载中保护：队列运行时禁用单条删除、清空队列、清空输出目录等危险操作；store 方法入口也会二次拦截，防止绕过界面调用。
+- 输出目录保护：删除单条任务和清空队列时复用 `getTaskGeneratedOutputDirectory()`，只有确认是任务生成的输出子目录才删除；如果早期进度只知道输出根目录，则只移除任务记录和取消后台进程，不删除根目录。
+- Cookie 顺序保护：SQLite 保存和读取 Cookie 都按前端数组顺序处理，避免应用重启后 Cookie 优先级反转。
+- 测试保护：根目录 `pnpm test` 会统一运行 desktop 和 sidecar 的 TypeScript 测试，Tauri 层通过 `cargo test` 覆盖 SQLite 顺序、目录删除边界和任务控制。
 
 ### 暂停、继续、删除和清空队列
 
@@ -233,6 +295,7 @@ sidecar 是独立 Node 进程。它不直接操作前端状态，也不直接调
 - 按限制数量或无限制模式返回图片列表；
 - 下载图片并支持断点续传；
 - 按用户选择保存原图、9:16 或 3:4；
+- 为搜索弹窗返回影片缩略图、片名、简介和详情页链接；
 - 使用 `sharp` 做裁剪和格式转换；
 - 保存图片后立即上报实时进度；
 - 识别暂停/取消控制文件并中止任务。
@@ -306,8 +369,9 @@ Windows 安装包不能只打包 Tauri 前端壳，否则用户机器上没有 N
 
 ## 设计边界
 
-- 当前站点支持豆瓣电影。
+- 当前站点支持豆瓣电影，搜索、片名解析和下载任务都围绕豆瓣 subject 链接设计。
 - 前端界面可以在浏览器预览，但真实下载只在 Tauri 桌面环境中执行。
 - sidecar 通过环境变量接收任务参数，通过 stdout 返回事件，不直接依赖前端。
 - 所有本地文件删除都应经过 Rust 层边界校验。
 - Cookie 只用于当前请求链路，不应出现在命令行参数中。
+
