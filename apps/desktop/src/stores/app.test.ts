@@ -147,6 +147,7 @@ async function setupStore(overrides?: {
   runtimeBridge.resumeDownloadTask = async () => {};
   runtimeBridge.clearDownloadTasks = async () => 0;
   runtimeBridge.deleteDirectoryPath = async (directoryPath: string) => directoryPath;
+  runtimeBridge.clearDirectoryContents = async () => 0;
 
   const { useAppStore } = await import("./app");
   setActivePinia(createPinia());
@@ -1091,10 +1092,11 @@ test("队列下载中不能删除单条任务", async () => {
   assert.equal(appStore.tasks.length, 1);
 });
 
-test("clear queue removes generated output directories for all tasks", async () => {
+test("clear queue clears output root directories for all tasks", async () => {
   const { appStore, runtimeBridge } = await setupStore();
   const clearedTaskIds: string[][] = [];
   const deletedDirectories: Array<{ directoryPath: string; rootDirectoryPath: string }> = [];
+  const clearedRootDirectories: string[] = [];
 
   runtimeBridge.clearDownloadTasks = async (taskIds: string[]) => {
     clearedTaskIds.push(taskIds);
@@ -1104,11 +1106,15 @@ test("clear queue removes generated output directories for all tasks", async () 
     deletedDirectories.push({ directoryPath, rootDirectoryPath });
     return directoryPath;
   };
+  runtimeBridge.clearDirectoryContents = async (directoryPath: string) => {
+    clearedRootDirectories.push(directoryPath);
+    return 1;
+  };
 
   await appStore.createTasks([
     createDraft(),
     createDraft({ detailUrl: "https://movie.douban.com/subject/1292052/" }),
-    createDraft({ detailUrl: "https://movie.douban.com/subject/1292064/" }),
+    createDraft({ detailUrl: "https://movie.douban.com/subject/1292064/", outputRootDir: "D:/poster" }),
   ]);
 
   appStore.tasks[0] = {
@@ -1129,7 +1135,7 @@ test("clear queue removes generated output directories for all tasks", async () 
     download: {
       savedCount: 0,
       targetCount: 0,
-      directory: "D:/cover",
+      directory: "D:/poster",
       files: [],
     },
   };
@@ -1139,14 +1145,11 @@ test("clear queue removes generated output directories for all tasks", async () 
 
   assert.equal(clearedTaskIds.length, 1);
   assert.equal(clearedTaskIds[0]?.length, 3);
-  assert.deepEqual(deletedDirectories, [
-    { directoryPath: "D:/cover/飞驰人生3 - 2026-05-03/still", rootDirectoryPath: "D:/cover" },
-    { directoryPath: "D:/cover/让子弹飞 - 2026-05-02/still", rootDirectoryPath: "D:/cover" },
-  ]);
+  assert.deepEqual(deletedDirectories, []);
+  assert.deepEqual(clearedRootDirectories, ["D:/cover", "D:/poster"]);
   assert.equal(appStore.tasks.length, 0);
   assert.equal(appStore.queueRunning, false);
 });
-
 
 test("队列下载中不能清空全部任务", async () => {
   const { appStore, runtimeBridge } = await setupStore();

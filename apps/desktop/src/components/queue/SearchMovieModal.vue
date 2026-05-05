@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 豆瓣影片搜索弹窗：输入片名后通过 Tauri 调用 sidecar 搜索，并把详情页链接写入新增任务草稿。
 import { computed, ref } from "vue";
+import ActionButton from "../common/ActionButton.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 import { normalizeComparableDetailUrl } from "../../lib/task-draft-input";

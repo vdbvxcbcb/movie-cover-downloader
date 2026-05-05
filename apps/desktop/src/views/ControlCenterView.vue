@@ -21,7 +21,6 @@ const hasCookieProfiles = computed(() => cookies.value.length > 0);
 const hasQueueTasks = computed(() => tasks.value.length > 0);
 const disableCookieRequiredActions = computed(() => !hasCookieProfiles.value);
 const disableClearQueue = computed(() => disableCookieRequiredActions.value || queueRunning.value || !hasQueueTasks.value || appStore.isActionPending("queue.clear-all"));
-const disableClearOutputDirectory = computed(() => disableCookieRequiredActions.value || queueRunning.value || appStore.isActionPending("output.clear-root"));
 </script>
 
 <template>
@@ -46,20 +45,11 @@ const disableClearOutputDirectory = computed(() => disableCookieRequiredActions.
           <PopConfirmAction
             label="5、清空队列任务"
             title="清空全部任务？"
-            description="队列记录和已生成的本地输出目录会一起删除。"
+            description="队列记录和输出目录下的所有目录和文件会一起删除。"
             confirm-label="清空"
             bubble-size="normal"
             :disabled="disableClearQueue"
             @confirm="void appStore.clearQueueTasks()"
-          />
-          <PopConfirmAction
-            label="清空输出目录"
-            title="清空输出目录？"
-            description="输出目录下的所有目录和文件会一起删除。"
-            confirm-label="清空"
-            bubble-size="normal"
-            :disabled="disableClearOutputDirectory"
-            @confirm="void appStore.clearOutputRootDirectory()"
           />
         </div>
       </template>

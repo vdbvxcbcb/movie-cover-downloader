@@ -702,7 +702,7 @@ export const useAppStore = defineStore("app", () => {
     createTaskDetailUrls.value = value;
   }
 
-  // 同步新增链接任务弹窗中的输出根目录，供自定义裁剪和清空输出目录复用。
+  // 同步新增链接任务弹窗中的输出根目录，供自定义裁剪复用。
   function syncCreateTaskOutputRootDir(value: string) {
     createTaskOutputRootDir.value = value.trim() || "D:/cover";
   }
@@ -1406,7 +1406,7 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
-  // 清空队列时不仅移除记录，也会让 Tauri 取消任务并删除每个任务的输出目录。
+  // 清空队列时移除记录、取消后台任务，并清空这些任务所属输出根目录下的所有内容。
   async function clearQueueTasks() {
     if (queueRunning.value) {
       showNotice("队列下载中，不能清空队列任务", "warn");
@@ -1421,22 +1421,15 @@ export const useAppStore = defineStore("app", () => {
     await withPending("queue.clear-all", async () => {
       const count = tasks.value.length;
       const taskIds = tasks.value.map((task) => task.id);
-      const outputDirectories: { directoryPath: string; rootDirectoryPath: string }[] = [];
-      for (const task of tasks.value) {
-        const outputDirectory = getTaskGeneratedOutputDirectory(task);
-        if (!outputDirectory) continue;
-        if (outputDirectories.some((item) => item.directoryPath === outputDirectory.directoryPath)) continue;
-
-        outputDirectories.push(outputDirectory);
-      }
+      const outputRootDirectories = Array.from(
+        new Set(tasks.value.map((task) => task.target.outputRootDir.trim()).filter(Boolean)),
+      );
       queueRunning.value = false;
 
       if (runtimeBridge.isNativeRuntime() && taskIds.length > 0) {
         await runtimeBridge.clearDownloadTasks(taskIds);
-        for (const outputDirectory of outputDirectories) {
-          if (outputDirectory) {
-            await runtimeBridge.deleteDirectoryPath(outputDirectory.directoryPath, outputDirectory.rootDirectoryPath);
-          }
+        for (const outputRootDir of outputRootDirectories) {
+          await runtimeBridge.clearDirectoryContents(outputRootDir);
         }
       }
 
@@ -1444,26 +1437,10 @@ export const useAppStore = defineStore("app", () => {
       tasks.value = [];
       progressTick.value += 1;
       schedulePersist();
-      await emitLog("WARN", "queue", `队列任务已清空: ${count} 个`);
-      showNotice(count > 0 ? `已清空 ${count} 个队列任务` : "当前队列为空", count > 0 ? "warn" : "info");
+      await emitLog("WARN", "queue", `队列任务已清空: ${count} 个，输出目录内容已清理: ${outputRootDirectories.join(", ")}`);
+      showNotice(count > 0 ? `已清空 ${count} 个队列任务并清理输出目录` : "当前队列为空", count > 0 ? "warn" : "info");
     });
   }
-
-  // 清空当前输出根目录里的所有内容，但保留输出目录本身。
-  async function clearOutputRootDirectory() {
-    if (queueRunning.value) {
-      showNotice("队列下载中，不能清空输出目录", "warn");
-      return;
-    }
-
-    await withPending("output.clear-root", async () => {
-      const outputRootDir = customCropOutputRootDir.value;
-      const deletedCount = await runtimeBridge.clearDirectoryContents(outputRootDir);
-      await emitLog("WARN", "shell", `输出目录已清空: ${outputRootDir}`);
-      showNotice(deletedCount > 0 ? `已清空输出目录: ${outputRootDir}` : "输出目录为空或不存在", "warn");
-    });
-  }
-
   // 导入 Cookie：无草稿时只打开弹窗，有草稿时保存 Cookie 并写日志。
   async function importCookie(draft?: CookieDraft) {
     await withPending("cookies.import", async () => {
@@ -1636,7 +1613,6 @@ export const useAppStore = defineStore("app", () => {
     deleteTask,
     openTaskOutputDirectory,
     clearQueueTasks,
-    clearOutputRootDirectory,
     clearAllLogs,
     triggerAction,
     isActionPending,
