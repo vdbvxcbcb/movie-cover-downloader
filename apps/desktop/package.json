@@ -9,7 +9,8 @@
     "prebuild": "pnpm --dir ../sidecar build && pnpm --dir ../.. prepare:sidecar-bundle",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "pnpm --dir ../sidecar exec tsx --test ../desktop/src/package-scripts.test.ts ../desktop/src/lib/presenters.test.ts ../desktop/src/lib/task-draft-input.test.ts ../desktop/src/lib/task-pagination.test.ts ../desktop/src/stores/app.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -26,3 +27,4 @@
     "vue-tsc": "^2.1.10"
   }
 }
+

@@ -26,6 +26,24 @@ export interface SidecarTask {
   attempts: number;
 }
 
+// 豆瓣搜索列表中的单个影片条目，只保留弹窗展示需要的信息，不返回评分字段。
+export interface DoubanSearchResultItem {
+  id: string;
+  title: string;
+  description: string;
+  coverUrl?: string;
+  coverDataUrl?: string;
+  detailUrl: string;
+}
+
+// 豆瓣搜索分页结果；pageSize 对应豆瓣搜索页每页返回数量。
+export interface DoubanSearchResultPage {
+  query: string;
+  page: number;
+  pageSize: number;
+  total: number;
+  items: DoubanSearchResultItem[];
+}
 // 详情页解析后的来源信息，包含规范化标题、图片页 URL 和解析可信度。
 export interface ResolvedSource {
   source: SourceSite;

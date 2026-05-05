@@ -6,11 +6,16 @@ import { extractDoubanEmptyCategoryTitle, formatDoubanAssetTypeLabel } from "../
 import { runTaskLifecycle } from "../lib/queue-runtime";
 import { runtimeBridge } from "../lib/runtime-bridge";
 import { compareTaskAddedOrder } from "../lib/task-order";
+import {
+  formatDetailUrlDisplayLine,
+  normalizeComparableDetailUrl,
+} from "../lib/task-draft-input";
 import type {
   AppSeedState,
   CookieDraft,
   CookieMutation,
   CookieProfile,
+  DoubanMoviePreview,
   NoticePayload,
   QueueConfig,
   RuntimeDownloadTaskResult,
@@ -412,7 +417,11 @@ export const useAppStore = defineStore("app", () => {
   const queueRunning = ref(false);
   const queueBusy = ref(false);
   const createTaskOpen = ref(false);
+  const createTaskDetailUrls = ref("");
+  const createTaskOutputRootDir = ref("D:/cover");
+  const createTaskMoviePreviews = ref<Record<string, Partial<DoubanMoviePreview>>>({});
   const importCookieOpen = ref(false);
+  const searchMovieOpen = ref(false);
   const customCropOpen = ref(false);
   const logOnlyErrors = ref(false);
   const progressTick = ref(0);
@@ -424,10 +433,7 @@ export const useAppStore = defineStore("app", () => {
   const pendingActionIds = ref<string[]>([]);
   const activeTaskIds = ref<string[]>([]);
   // 自定义裁剪默认保存到最近任务的输出根目录；没有任务时回退 D:/cover。
-  const customCropOutputRootDir = computed(() => {
-    const latestTask = tasks.value[tasks.value.length - 1];
-    return latestTask?.target.outputRootDir ?? "D:/cover";
-  });
+  const customCropOutputRootDir = computed(() => createTaskOutputRootDir.value);
 
   let persistenceTimer: number | null = null;
   let logPersistenceTimer: number | null = null;
@@ -683,6 +689,74 @@ export const useAppStore = defineStore("app", () => {
     }, 180);
   }
 
+  // 把链接草稿拆成去空白后的展示行，搜索弹窗和新增任务弹窗共用这份草稿。
+  function getCreateTaskDetailUrlLines() {
+    return createTaskDetailUrls.value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  // 同步新增链接任务弹窗中的详情页链接文本。
+  function syncCreateTaskDetailUrls(value: string) {
+    createTaskDetailUrls.value = value;
+  }
+
+  // 同步新增链接任务弹窗中的输出根目录，供自定义裁剪和清空输出目录复用。
+  function syncCreateTaskOutputRootDir(value: string) {
+    createTaskOutputRootDir.value = value.trim() || "D:/cover";
+  }
+
+  function getCreateTaskMoviePreview(detailUrl: string) {
+    return createTaskMoviePreviews.value[normalizeComparableDetailUrl(detailUrl)];
+  }
+
+  function upsertCreateTaskMoviePreview(detailUrl: string, preview: Partial<DoubanMoviePreview>) {
+    const key = normalizeComparableDetailUrl(detailUrl);
+    if (!key) return;
+
+    createTaskMoviePreviews.value = {
+      ...createTaskMoviePreviews.value,
+      [key]: {
+        ...createTaskMoviePreviews.value[key],
+        ...preview,
+        detailUrl: preview.detailUrl ?? detailUrl.trim(),
+      },
+    };
+  }
+
+  // 判断搜索结果中的详情页链接是否已经加入新增任务草稿；比较时只看 URL，不看显示片名。
+  function hasCreateTaskDetailUrl(detailUrl: string) {
+    const normalized = normalizeComparableDetailUrl(detailUrl);
+    return getCreateTaskDetailUrlLines().some((line) => normalizeComparableDetailUrl(line) === normalized);
+  }
+
+  // 从搜索结果添加一条豆瓣详情页链接；文本框显示“片名：链接”，后续提交仍只提取链接。
+  function addCreateTaskDetailUrl(detailUrl: string, title?: string | null, preview?: Partial<DoubanMoviePreview>) {
+    const normalized = detailUrl.trim();
+    if (!normalized || hasCreateTaskDetailUrl(normalized)) {
+      return false;
+    }
+
+    createTaskDetailUrls.value = [
+      ...getCreateTaskDetailUrlLines(),
+      formatDetailUrlDisplayLine(normalized, title ?? preview?.title),
+    ].join("\n");
+    upsertCreateTaskMoviePreview(normalized, { ...preview, title: title ?? preview?.title ?? "" });
+    return true;
+  }
+
+  // 从新增任务草稿中删除一条链接，供搜索结果行里的删除按钮调用。
+  function removeCreateTaskDetailUrl(detailUrl: string) {
+    const normalized = normalizeComparableDetailUrl(detailUrl);
+    const currentLines = getCreateTaskDetailUrlLines();
+    const nextLines = currentLines.filter((line) => normalizeComparableDetailUrl(line) !== normalized);
+    const changed = nextLines.length !== currentLines.length;
+    const { [normalized]: _removedPreview, ...remainingPreviews } = createTaskMoviePreviews.value;
+    createTaskDetailUrls.value = nextLines.join("\n");
+    createTaskMoviePreviews.value = remainingPreviews;
+    return changed;
+  }
   // 设置全局 toast 提示，供界面右上角统一展示反馈。
   function showNotice(message: string, tone: NoticePayload["tone"] = "info") {
     notice.value = { message, tone };
@@ -718,6 +792,15 @@ export const useAppStore = defineStore("app", () => {
     importCookieOpen.value = false;
   }
 
+  // 打开豆瓣影片搜索弹窗。
+  function openSearchMovie() {
+    searchMovieOpen.value = true;
+  }
+
+  // 关闭豆瓣影片搜索弹窗。
+  function closeSearchMovie() {
+    searchMovieOpen.value = false;
+  }
   // 打开自定义裁剪弹窗。
   function openCustomCrop() {
     customCropOpen.value = true;
@@ -916,6 +999,10 @@ export const useAppStore = defineStore("app", () => {
         const snapshot = await runtimeBridge.loadState();
         if (snapshot) {
           tasks.value = rehydrateTasks(snapshot.tasks);
+          const latestTask = tasks.value[tasks.value.length - 1];
+          if (latestTask?.target.outputRootDir) {
+            createTaskOutputRootDir.value = latestTask.target.outputRootDir;
+          }
           const normalizedCookies = normalizeCookieProfiles(snapshot.cookies);
           cookies.value = normalizedCookies.cookies;
           cookiesChanged = normalizedCookies.changed;
@@ -1188,7 +1275,15 @@ export const useAppStore = defineStore("app", () => {
   // 批量创建链接任务，写日志、关闭弹窗，并自动启动队列。
   async function createTasks(drafts: TaskDraft[]) {
     await withPending("queue.create-task", async () => {
-      const createdTasks = drafts.map((draft) => createTaskFromDraft(nextTaskId(), draft));
+      syncCreateTaskOutputRootDir(drafts[0]?.outputRootDir ?? createTaskOutputRootDir.value);
+      const createdTasks = drafts.map((draft) => {
+        const preview = getCreateTaskMoviePreview(draft.detailUrl);
+        return createTaskFromDraft(nextTaskId(), {
+          ...draft,
+          coverUrl: draft.coverUrl ?? preview?.coverUrl,
+          coverDataUrl: draft.coverDataUrl ?? preview?.coverDataUrl,
+        });
+      });
       tasks.value = [...tasks.value, ...createdTasks];
       schedulePersist();
       await emitLog(
@@ -1198,6 +1293,8 @@ export const useAppStore = defineStore("app", () => {
       );
       showNotice(createdTasks.length > 1 ? `已新增 ${createdTasks.length} 个链接任务` : "已新增链接任务", "success");
       createTaskOpen.value = false;
+      createTaskDetailUrls.value = "";
+      createTaskMoviePreviews.value = {};
       queueRunning.value = true;
       void drainQueue();
     });
@@ -1278,14 +1375,19 @@ export const useAppStore = defineStore("app", () => {
 
   // 删除单个任务，同时取消后台进程并删除该任务生成的输出目录。
   async function deleteTask(taskId: string) {
+    if (queueRunning.value) {
+      showNotice("队列下载中，不能删除任务", "warn");
+      return;
+    }
+
     await withPending(`queue.delete.${taskId}`, async () => {
       const task = tasks.value.find((item) => item.id === taskId);
-      const outputDirectory = task?.outputDirectory ?? task?.download?.directory;
+      const outputDirectory = task ? getTaskGeneratedOutputDirectory(task) : null;
 
       if (runtimeBridge.isNativeRuntime() && task) {
         await runtimeBridge.clearDownloadTasks([taskId]);
         if (outputDirectory) {
-          await runtimeBridge.deleteDirectoryPath(outputDirectory, task.target.outputRootDir);
+          await runtimeBridge.deleteDirectoryPath(outputDirectory.directoryPath, outputDirectory.rootDirectoryPath);
         }
       }
 
@@ -1296,7 +1398,7 @@ export const useAppStore = defineStore("app", () => {
         "WARN",
         "queue",
         outputDirectory
-          ? `任务已删除并清理输出目录: ${outputDirectory}`
+          ? `任务已删除并清理输出目录: ${outputDirectory.directoryPath}`
           : `任务已删除: ${task?.target.detailUrl ?? taskId}`,
         taskId,
       );
@@ -1306,6 +1408,16 @@ export const useAppStore = defineStore("app", () => {
 
   // 清空队列时不仅移除记录，也会让 Tauri 取消任务并删除每个任务的输出目录。
   async function clearQueueTasks() {
+    if (queueRunning.value) {
+      showNotice("队列下载中，不能清空队列任务", "warn");
+      return;
+    }
+
+    if (tasks.value.length === 0) {
+      showNotice("当前队列为空", "info");
+      return;
+    }
+
     await withPending("queue.clear-all", async () => {
       const count = tasks.value.length;
       const taskIds = tasks.value.map((task) => task.id);
@@ -1334,6 +1446,21 @@ export const useAppStore = defineStore("app", () => {
       schedulePersist();
       await emitLog("WARN", "queue", `队列任务已清空: ${count} 个`);
       showNotice(count > 0 ? `已清空 ${count} 个队列任务` : "当前队列为空", count > 0 ? "warn" : "info");
+    });
+  }
+
+  // 清空当前输出根目录里的所有内容，但保留输出目录本身。
+  async function clearOutputRootDirectory() {
+    if (queueRunning.value) {
+      showNotice("队列下载中，不能清空输出目录", "warn");
+      return;
+    }
+
+    await withPending("output.clear-root", async () => {
+      const outputRootDir = customCropOutputRootDir.value;
+      const deletedCount = await runtimeBridge.clearDirectoryContents(outputRootDir);
+      await emitLog("WARN", "shell", `输出目录已清空: ${outputRootDir}`);
+      showNotice(deletedCount > 0 ? `已清空输出目录: ${outputRootDir}` : "输出目录为空或不存在", "warn");
     });
   }
 
@@ -1466,7 +1593,10 @@ export const useAppStore = defineStore("app", () => {
     queueRunning,
     queueBusy,
     createTaskOpen,
+    createTaskDetailUrls,
+    createTaskOutputRootDir,
     importCookieOpen,
+    searchMovieOpen,
     customCropOpen,
     logOnlyErrors,
     progressTick,
@@ -1480,11 +1610,20 @@ export const useAppStore = defineStore("app", () => {
     pendingActionIds,
     activeTaskIds,
     clearNotice,
+    syncCreateTaskDetailUrls,
+    syncCreateTaskOutputRootDir,
+    addCreateTaskDetailUrl,
+    upsertCreateTaskMoviePreview,
+    getCreateTaskMoviePreview,
+    removeCreateTaskDetailUrl,
+    hasCreateTaskDetailUrl,
     toggleLogOnlyErrors,
     openCreateTask,
     closeCreateTask,
     openImportCookie,
+    openSearchMovie,
     closeImportCookie,
+    closeSearchMovie,
     openCustomCrop,
     closeCustomCrop,
     createTasks,
@@ -1497,9 +1636,12 @@ export const useAppStore = defineStore("app", () => {
     deleteTask,
     openTaskOutputDirectory,
     clearQueueTasks,
+    clearOutputRootDirectory,
     clearAllLogs,
     triggerAction,
     isActionPending,
     bootstrap,
   };
 });
+
+

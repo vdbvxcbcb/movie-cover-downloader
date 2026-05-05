@@ -47,7 +47,32 @@ test("详情页链接接受指定形式的豆瓣 subject 链接", () => {
 
   assert.equal(result.ok, true);
 });
+test("详情页链接接受带片名的展示行并提交纯链接", () => {
+  const result = validateTaskDraftInput({
+    detailUrls: [
+      "飞驰人生3：https://movie.douban.com/subject/37311135/",
+      "消失的人：https://movie.douban.com/subject/36965301/",
+    ].join("\n"),
+    outputRootDir: "D:/cover",
+    imageCountMode: "limited",
+    maxImagesInput: "10",
+  });
 
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepEqual(result.detailUrls, [
+      "https://movie.douban.com/subject/37311135/",
+      "https://movie.douban.com/subject/36965301/",
+    ]);
+  }
+});
+
+
+test("带片名的展示行不会把片名和链接拆成两行", () => {
+  const normalized = normalizeDetailUrlsInput("飞驰人生3：https://movie.douban.com/subject/37311135/");
+
+  assert.equal(normalized, "飞驰人生3：https://movie.douban.com/subject/37311135/");
+});
 test("详情页链接会拒绝豆瓣根站和非豆瓣链接", () => {
   const doubanResult = validateTaskDraftInput({
     detailUrls: "https://movie.douban.com/",

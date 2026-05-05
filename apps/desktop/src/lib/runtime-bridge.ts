@@ -5,6 +5,8 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type {
   AppSeedState,
   DoubanLoginImportStatus,
+  DoubanMoviePreview,
+  DoubanSearchResultPage,
   LogEntry,
   RuntimeDownloadTaskPayload,
   RuntimeDownloadTaskResult,
@@ -193,6 +195,34 @@ class RuntimeBridge {
     return window.prompt("请输入输出目录", initialPath ?? "D:/cover");
   }
 
+  // 通过 Tauri 命令调用 sidecar 的豆瓣搜索模式；浏览器预览不直接跨域访问豆瓣。
+  async searchDoubanMovies(query: string, page: number) {
+    if (!isTauriRuntime()) {
+      throw new Error("豆瓣搜索仅在 Tauri 桌面环境可用");
+    }
+
+    const serialized = await invoke<string>("search_douban_movies", { query, page });
+    return JSON.parse(serialized) as DoubanSearchResultPage;
+  }
+
+  // 解析豆瓣详情页片名，用于把用户手动粘贴的纯链接展示成“片名：链接”。
+  async resolveDoubanMovieTitle(detailUrl: string) {
+    if (!isTauriRuntime()) {
+      return null;
+    }
+
+    return invoke<string>("resolve_douban_movie_title", { detailUrl });
+  }
+
+  // 解析豆瓣影片预览信息，包含片名和封面缩略图 data URL。
+  async resolveDoubanMoviePreview(detailUrl: string) {
+    if (!isTauriRuntime()) {
+      return null;
+    }
+
+    const serialized = await invoke<string>("resolve_douban_movie_preview", { detailUrl });
+    return JSON.parse(serialized) as DoubanMoviePreview;
+  }
   // 真实下载只允许在 Tauri 环境执行，避免网页预览误以为可以访问本地 sidecar。
   // 触发真实 sidecar 下载任务；非 Tauri 环境直接报错，避免误导用户。
   async runDownloadTask(payload: RuntimeDownloadTaskPayload) {
@@ -238,6 +268,15 @@ class RuntimeBridge {
     }
 
     return directoryPath;
+  }
+
+  // 清空输出根目录下的所有子目录和文件，但保留输出根目录本身。
+  async clearDirectoryContents(directoryPath: string) {
+    if (isTauriRuntime()) {
+      return invoke<number>("clear_directory_contents", { directoryPath });
+    }
+
+    return 0;
   }
 
   // 自定义裁剪拖拽本地图片时读取图片字节，只在桌面端可用。
@@ -386,4 +425,3 @@ class RuntimeBridge {
 }
 
 export const runtimeBridge = new RuntimeBridge();
-

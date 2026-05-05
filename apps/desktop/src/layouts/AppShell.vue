@@ -8,6 +8,7 @@ import ImportCookieModal from "../components/cookies/ImportCookieModal.vue";
 import ToastNotice from "../components/common/ToastNotice.vue";
 import CreateTaskModal from "../components/queue/CreateTaskModal.vue";
 import CustomCropModal from "../components/queue/CustomCropModal.vue";
+import SearchMovieModal from "../components/queue/SearchMovieModal.vue";
 import { useAppStore } from "../stores/app";
 import type { CookieDraft, TaskDraft, TopAction } from "../types/app";
 
@@ -93,10 +94,17 @@ watch(
 
   <CreateTaskModal
     v-if="appStore.createTaskOpen"
+    :detail-urls="appStore.createTaskDetailUrls"
     @close="appStore.closeCreateTask"
     @submit="handleCreateTask"
+    @update-detail-urls="appStore.syncCreateTaskDetailUrls"
   />
 
+
+  <SearchMovieModal
+    v-if="appStore.searchMovieOpen"
+    @close="appStore.closeSearchMovie"
+  />
 
   <CustomCropModal
     v-if="appStore.customCropOpen"

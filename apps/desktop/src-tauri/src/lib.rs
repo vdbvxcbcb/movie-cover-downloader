@@ -211,12 +211,10 @@ impl TaskControlRegistry {
         };
 
         if let Some(parent) = control_file.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("创建任务控制目录失败: {error}"))?;
+            fs::create_dir_all(parent).map_err(|error| format!("创建任务控制目录失败: {error}"))?;
         }
 
-        fs::write(&control_file, action)
-            .map_err(|error| format!("写入任务控制文件失败: {error}"))
+        fs::write(&control_file, action).map_err(|error| format!("写入任务控制文件失败: {error}"))
     }
 }
 
@@ -270,8 +268,8 @@ fn open_state_db_path(db_path: &Path) -> Result<Connection, String> {
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(|error| format!("设置 SQLite busy_timeout 失败: {error}"))?;
-        // 表结构刻意保持简单：每条任务/Cookie/日志仍保存为 JSON，方便前端类型演进。
-connection
+    // 表结构刻意保持简单：每条任务/Cookie/日志仍保存为 JSON，方便前端类型演进。
+    connection
         .execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
@@ -423,8 +421,8 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
         .map_err(|error| format!("清理 app_logs 失败: {error}"))?;
 
     {
-                // 任务表按前端数组顺序写入，读取时用 rowid ASC 保留用户看到的队列顺序。
-let mut statement = transaction
+        // 任务表按前端数组顺序写入，读取时用 rowid ASC 保留用户看到的队列顺序。
+        let mut statement = transaction
             .prepare("INSERT OR REPLACE INTO tasks (id, payload_json) VALUES (?1, ?2)")
             .map_err(|error| format!("准备写入 tasks 语句失败: {error}"))?;
         for task in tasks {
@@ -562,9 +560,9 @@ fn load_snapshot_from_sqlite(connection: &Connection) -> Result<Option<Value>, S
         tasks.push(parsed);
     }
 
-    // Cookie 读取使用 rowid DESC，使最新导入的 Cookie 更靠前，符合界面使用习惯。
+    // Cookie 保存时已经按前端数组顺序写入，读取也按写入顺序恢复，避免重启后优先级反转。
     let mut cookies_statement = connection
-        .prepare("SELECT payload_json FROM cookies ORDER BY rowid DESC")
+        .prepare("SELECT payload_json FROM cookies ORDER BY rowid ASC")
         .map_err(|error| format!("读取 cookies 失败: {error}"))?;
     let cookie_rows = cookies_statement
         .query_map([], |row| row.get::<_, String>(0))
@@ -1261,6 +1259,48 @@ fn delete_directory_path(
     Ok(true)
 }
 
+// 清空输出根目录下的所有子目录和文件，但保留输出根目录本身。
+#[tauri::command]
+fn clear_directory_contents(directory_path: String) -> Result<usize, String> {
+    let directory = PathBuf::from(directory_path.trim());
+    if directory.as_os_str().is_empty() {
+        return Err("输出目录不能为空，已取消清空".to_string());
+    }
+    if !directory.exists() {
+        return Ok(0);
+    }
+
+    let directory =
+        fs::canonicalize(&directory).map_err(|error| format!("解析输出目录失败: {error}"))?;
+    if !directory.is_dir() {
+        return Err(format!("输出目录不是文件夹: {}", directory.display()));
+    }
+    if directory.parent().is_none() {
+        return Err(format!("拒绝清空磁盘根目录: {}", directory.display()));
+    }
+
+    let mut cleared = 0usize;
+    for entry in fs::read_dir(&directory)
+        .map_err(|error| format!("读取输出目录失败 {}: {error}", directory.display()))?
+    {
+        let entry = entry.map_err(|error| format!("读取输出目录项失败: {error}"))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("读取输出目录项类型失败 {}: {error}", path.display()))?;
+
+        if file_type.is_dir() {
+            fs::remove_dir_all(&path)
+                .map_err(|error| format!("删除输出子目录失败 {}: {error}", path.display()))?;
+        } else {
+            fs::remove_file(&path)
+                .map_err(|error| format!("删除输出文件失败 {}: {error}", path.display()))?;
+        }
+        cleared += 1;
+    }
+
+    Ok(cleared)
+}
 // 打开系统目录选择器；Windows 上使用 FolderBrowserDialog，因为 Tauri 这里没有直接引入 dialog 插件。
 #[tauri::command]
 fn pick_output_directory(initial_path: Option<String>) -> Result<Option<String>, String> {
@@ -1383,8 +1423,8 @@ fn run_download_task_blocking(
     if let Some(parent) = control_file_path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建任务控制目录失败: {error}"))?;
     }
-        // 记录 pid 是为了删除/清空队列时能终止仍在后台运行的下载进程。
-fs::write(
+    // 记录 pid 是为了删除/清空队列时能终止仍在后台运行的下载进程。
+    fs::write(
         task_pid_file_path(&control_file_path),
         child.id().to_string(),
     )
@@ -1488,6 +1528,254 @@ async fn run_download_task(
     result
 }
 
+// 阻塞搜索命令复用打包好的 sidecar Node 运行时，只允许执行固定的豆瓣搜索模式。
+fn search_douban_movies_blocking(
+    app: AppHandle,
+    query: String,
+    page: u32,
+) -> Result<String, String> {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Err("请输入要搜索的影片名称".to_string());
+    }
+
+    let sidecar_root = resolve_sidecar_root(&app);
+    let _sidecar_entry = resolve_sidecar_entry(&sidecar_root)?;
+    let sidecar_entry_arg = resolve_sidecar_entry_arg();
+    let sidecar_node = resolve_sidecar_node(&sidecar_root);
+    let page = page.max(1);
+
+    let mut command = Command::new(sidecar_node);
+    command
+        .arg(sidecar_entry_arg)
+        .current_dir(&sidecar_root)
+        .env("MCD_COMMAND", "douban-search")
+        .env("MCD_SEARCH_QUERY", &query)
+        .env("MCD_SEARCH_PAGE", page.to_string())
+        .env("MCD_SEARCH_PAGE_SIZE", "15")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("启动豆瓣搜索失败: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let mut sidecar_error: Option<String> = None;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+
+        if parsed.get("kind").and_then(Value::as_str) == Some("douban-search-result") {
+            if let Some(payload) = parsed.get("payload") {
+                return serde_json::to_string(payload)
+                    .map_err(|error| format!("序列化豆瓣搜索结果失败: {error}"));
+            }
+        }
+
+        if parsed
+            .get("level")
+            .and_then(Value::as_str)
+            .is_some_and(|level| level.eq_ignore_ascii_case("ERROR"))
+        {
+            if let Some(message) = parsed.get("message").and_then(Value::as_str) {
+                sidecar_error = Some(message.to_string());
+            }
+        }
+    }
+
+    if !output.status.success() {
+        return Err(sidecar_error
+            .or_else(|| (!stderr.is_empty()).then_some(stderr))
+            .unwrap_or_else(|| "豆瓣搜索进程异常退出".to_string()));
+    }
+
+    Err(sidecar_error.unwrap_or_else(|| "sidecar 未返回豆瓣搜索结果".to_string()))
+}
+
+// 前端搜索弹窗调用的命令：转到阻塞线程执行，避免网络请求卡住桌面主线程。
+#[tauri::command]
+async fn search_douban_movies(app: AppHandle, query: String, page: u32) -> Result<String, String> {
+    run_blocking_job(move || search_douban_movies_blocking(app, query, page)).await
+}
+
+// 阻塞片名解析命令复用 sidecar，只允许解析固定的豆瓣 subject 详情页。
+fn resolve_douban_movie_title_blocking(
+    app: AppHandle,
+    detail_url: String,
+) -> Result<String, String> {
+    let detail_url = detail_url.trim().to_string();
+    if detail_url.is_empty() {
+        return Err("请填写豆瓣详情页链接".to_string());
+    }
+
+    let sidecar_root = resolve_sidecar_root(&app);
+    let _sidecar_entry = resolve_sidecar_entry(&sidecar_root)?;
+    let sidecar_entry_arg = resolve_sidecar_entry_arg();
+    let sidecar_node = resolve_sidecar_node(&sidecar_root);
+
+    let mut command = Command::new(sidecar_node);
+    command
+        .arg(sidecar_entry_arg)
+        .current_dir(&sidecar_root)
+        .env("MCD_COMMAND", "douban-title")
+        .env("MCD_TITLE_DETAIL_URL", &detail_url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("启动豆瓣片名解析失败: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let mut sidecar_error: Option<String> = None;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+
+        if parsed.get("kind").and_then(Value::as_str) == Some("douban-title-result") {
+            if let Some(title) = parsed
+                .get("payload")
+                .and_then(|payload| payload.get("title"))
+                .and_then(Value::as_str)
+            {
+                return Ok(title.to_string());
+            }
+        }
+
+        if parsed
+            .get("level")
+            .and_then(Value::as_str)
+            .is_some_and(|level| level.eq_ignore_ascii_case("ERROR"))
+        {
+            if let Some(message) = parsed.get("message").and_then(Value::as_str) {
+                sidecar_error = Some(message.to_string());
+            }
+        }
+    }
+
+    if !output.status.success() {
+        return Err(sidecar_error
+            .or_else(|| (!stderr.is_empty()).then_some(stderr))
+            .unwrap_or_else(|| "豆瓣片名解析进程异常退出".to_string()));
+    }
+
+    Err(sidecar_error.unwrap_or_else(|| "sidecar 未返回豆瓣片名".to_string()))
+}
+
+// 新增任务弹窗手动粘贴链接时调用：解析片名只影响显示，不影响任务提交的纯 URL。
+#[tauri::command]
+async fn resolve_douban_movie_title(app: AppHandle, detail_url: String) -> Result<String, String> {
+    run_blocking_job(move || resolve_douban_movie_title_blocking(app, detail_url)).await
+}
+
+// 队列表格封面列使用的影片预览信息：返回片名和搜索结果同款封面缩略图。
+fn resolve_douban_movie_preview_blocking(
+    app: AppHandle,
+    detail_url: String,
+) -> Result<String, String> {
+    let detail_url = detail_url.trim().to_string();
+    if detail_url.is_empty() {
+        return Err("请填写豆瓣详情页链接".to_string());
+    }
+
+    let sidecar_root = resolve_sidecar_root(&app);
+    let _sidecar_entry = resolve_sidecar_entry(&sidecar_root)?;
+    let sidecar_entry_arg = resolve_sidecar_entry_arg();
+    let sidecar_node = resolve_sidecar_node(&sidecar_root);
+
+    let mut command = Command::new(sidecar_node);
+    command
+        .arg(sidecar_entry_arg)
+        .current_dir(&sidecar_root)
+        .env("MCD_COMMAND", "douban-title")
+        .env("MCD_TITLE_DETAIL_URL", &detail_url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("启动豆瓣影片预览解析失败: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let mut sidecar_error: Option<String> = None;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+
+        if parsed.get("kind").and_then(Value::as_str) == Some("douban-title-result") {
+            if let Some(payload) = parsed.get("payload") {
+                return serde_json::to_string(payload)
+                    .map_err(|error| format!("序列化豆瓣影片预览失败: {error}"));
+            }
+        }
+
+        if parsed
+            .get("level")
+            .and_then(Value::as_str)
+            .is_some_and(|level| level.eq_ignore_ascii_case("ERROR"))
+        {
+            if let Some(message) = parsed.get("message").and_then(Value::as_str) {
+                sidecar_error = Some(message.to_string());
+            }
+        }
+    }
+
+    if !output.status.success() {
+        return Err(sidecar_error
+            .or_else(|| (!stderr.is_empty()).then_some(stderr))
+            .unwrap_or_else(|| "豆瓣影片预览解析进程异常退出".to_string()));
+    }
+
+    Err(sidecar_error.unwrap_or_else(|| "sidecar 未返回豆瓣影片预览".to_string()))
+}
+
+#[tauri::command]
+async fn resolve_douban_movie_preview(
+    app: AppHandle,
+    detail_url: String,
+) -> Result<String, String> {
+    run_blocking_job(move || resolve_douban_movie_preview_blocking(app, detail_url)).await
+}
 // 自定义裁剪上传只允许常见图片扩展名，提前挡掉不可预览或危险的文件类型。
 fn is_supported_local_image_path(path: &Path) -> bool {
     path.extension()
@@ -1661,10 +1949,14 @@ pub fn run() {
             resume_download_task,
             clear_download_tasks,
             delete_directory_path,
+            clear_directory_contents,
             pick_output_directory,
             read_local_image_file,
             save_custom_cropped_image,
             run_download_task,
+            search_douban_movies,
+            resolve_douban_movie_title,
+            resolve_douban_movie_preview,
             open_output_dir,
             open_directory_path,
             reveal_file_path
@@ -1677,9 +1969,9 @@ pub fn run() {
 // 单元测试集中保护 lib.rs 中最容易出事故的边界：进程参数、状态库恢复、目录删除和任务控制。
 mod tests {
     use super::{
-        delete_directory_path, format_sidecar_exit_error, is_recoverable_sqlite_error,
-        load_snapshot_from_sqlite, next_runtime_log_seed, open_state_db_path,
-        resolve_douban_login_cookie_status, resolve_sidecar_entry_arg,
+        clear_directory_contents, delete_directory_path, format_sidecar_exit_error,
+        is_recoverable_sqlite_error, load_snapshot_from_sqlite, next_runtime_log_seed,
+        open_state_db_path, resolve_douban_login_cookie_status, resolve_sidecar_entry_arg,
         resolve_sidecar_event_task_id, resolve_sidecar_node, rotate_corrupted_state_db,
         run_blocking_job, save_snapshot_to_sqlite_path_with_recovery, TaskControlRegistry,
     };
@@ -1941,6 +2233,31 @@ mod tests {
     }
 
     #[test]
+    fn load_snapshot_keeps_persisted_cookie_order() {
+        let temp_dir = test_temp_dir("cookie-order");
+        let db_path = temp_dir.join("runtime-state.sqlite");
+        let snapshot = serde_json::json!({
+            "schemaVersion": 2,
+            "tasks": [],
+            "cookies": [
+                { "id": "new-cookie", "value": "new" },
+                { "id": "old-cookie", "value": "old" }
+            ],
+            "logs": [],
+            "queueConfig": {}
+        });
+
+        save_snapshot_to_sqlite_path_with_recovery(&db_path, &snapshot).unwrap();
+        let connection = open_state_db_path(&db_path).unwrap();
+        let loaded = load_snapshot_from_sqlite(&connection).unwrap().unwrap();
+
+        assert_eq!(loaded["cookies"][0]["id"].as_str(), Some("new-cookie"));
+        assert_eq!(loaded["cookies"][1]["id"].as_str(), Some("old-cookie"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn delete_directory_path_removes_existing_output_directory() {
         let temp_dir = test_temp_dir("delete-output");
         let output_dir = temp_dir.join("Movie - 2026-05-02").join("still");
@@ -1994,6 +2311,30 @@ mod tests {
     }
 
     #[test]
+    fn clear_directory_contents_removes_children_but_keeps_root() {
+        let temp_dir = test_temp_dir("clear-output-root");
+        let child_dir = temp_dir.join("Movie - 2026-05-02").join("still");
+        fs::create_dir_all(&child_dir).unwrap();
+        fs::write(child_dir.join("image.jpg"), "image").unwrap();
+        fs::write(temp_dir.join("root-file.txt"), "root").unwrap();
+
+        let cleared = clear_directory_contents(temp_dir.to_string_lossy().into_owned()).unwrap();
+
+        assert_eq!(cleared, 2);
+        assert!(temp_dir.exists());
+        assert!(!child_dir.exists());
+        assert!(!temp_dir.join("root-file.txt").exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn clear_directory_contents_rejects_empty_path() {
+        let error = clear_directory_contents("   ".to_string()).unwrap_err();
+
+        assert!(error.contains("输出目录不能为空"));
+    }
+    #[test]
     fn next_runtime_log_seed_uses_loaded_log_max_id_plus_one() {
         let logs = vec![
             serde_json::json!({ "id": 1, "message": "seed" }),
@@ -2021,3 +2362,4 @@ mod tests {
         assert!(!registry.is_paused("task-1"));
     }
 }
+

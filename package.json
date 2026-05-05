@@ -11,8 +11,10 @@
     "dev:sidecar": "pnpm --dir apps/sidecar dev",
     "build:sidecar": "pnpm --dir apps/sidecar build",
     "lint": "echo \"待初始化\"",
+    "test": "pnpm --dir apps/desktop test && pnpm --dir apps/sidecar test",
     "typecheck": "pnpm --dir apps/desktop exec vue-tsc --noEmit",
     "typecheck:sidecar": "pnpm --dir apps/sidecar typecheck",
     "prepare:sidecar-bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-sidecar-bundle.ps1"
   }
 }
+

@@ -47,6 +47,8 @@ export interface TaskTarget {
   outputImageFormat: OutputImageFormat;
   imageAspectRatio: ImageAspectRatio;
   requestIntervalSeconds: RequestIntervalSeconds;
+  coverUrl?: string;
+  coverDataUrl?: string;
 }
 
 export interface SourceDetectionSnapshot {
@@ -100,6 +102,8 @@ export interface TaskItem {
   target: TaskTarget;
   lifecycle: TaskLifecycle;
   summary: string;
+  coverUrl?: string;
+  coverDataUrl?: string;
   detection?: SourceDetectionSnapshot;
   discovery?: DiscoverySnapshot;
   download?: DownloadSnapshot;
@@ -151,6 +155,8 @@ export interface TaskDraft {
   outputImageFormat: OutputImageFormat;
   imageAspectRatio: ImageAspectRatio;
   requestIntervalSeconds: RequestIntervalSeconds;
+  coverUrl?: string;
+  coverDataUrl?: string;
 }
 
 export interface CookieDraft {
@@ -163,6 +169,29 @@ export interface DoubanLoginImportStatus {
   cookieValue?: string;
 }
 
+export interface DoubanSearchResultItem {
+  id: string;
+  title: string;
+  description: string;
+  coverUrl?: string;
+  coverDataUrl?: string;
+  detailUrl: string;
+}
+
+export interface DoubanSearchResultPage {
+  query: string;
+  page: number;
+  pageSize: number;
+  total: number;
+  items: DoubanSearchResultItem[];
+}
+
+export interface DoubanMoviePreview {
+  detailUrl: string;
+  title: string;
+  coverUrl?: string;
+  coverDataUrl?: string;
+}
 export interface AppSeedState {
   schemaVersion: number;
   tasks: TaskItem[];

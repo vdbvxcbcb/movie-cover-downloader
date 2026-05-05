@@ -8,7 +8,6 @@ import TaskProgressCell from "./TaskProgressCell.vue";
 import {
   describeQueueAction,
   describeTaskStatus,
-  formatTaskOrigin,
   formatTaskTitle,
   isTaskDownloadComplete,
 } from "../../lib/presenters";
@@ -18,6 +17,7 @@ import type { TaskItem } from "../../types/app";
 
 const props = defineProps<{
   tasks: TaskItem[];
+  queueRunning?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -32,6 +32,8 @@ const isNativeRuntime = runtimeBridge.isNativeRuntime();
 const nativeBackgroundPhases = new Set(["resolving", "discovering", "downloading"]);
 const currentPage = ref(1);
 const jumpPageInput = ref("1");
+const coverCache = ref<Record<string, string>>({});
+const failedCoverSources = ref<Record<string, string>>({});
 
 // 表格使用显式渲染依赖，让进度事件推进时即使任务对象引用变化较小也能刷新单元格。
 const taskRenderDependencyKey = computed(() =>
@@ -80,6 +82,46 @@ watch(
   { deep: true, immediate: true },
 );
 
+watch(
+  () => pagination.value.pageItems.map((task) => `${task.id}:${task.target.detailUrl}:${task.coverDataUrl ?? ""}:${task.coverUrl ?? ""}`).join("|"),
+  () => {
+    for (const task of pagination.value.pageItems) {
+      void resolveTaskCover(task);
+    }
+  },
+  { immediate: true },
+);
+
+function getTaskCoverSource(task: TaskItem) {
+  const source = task.coverDataUrl ?? task.coverUrl ?? coverCache.value[task.target.detailUrl] ?? "";
+  return failedCoverSources.value[task.target.detailUrl] === source ? "" : source;
+}
+
+async function resolveTaskCover(task: TaskItem) {
+  if (getTaskCoverSource(task) || !isNativeRuntime) return;
+
+  try {
+    const preview = await runtimeBridge.resolveDoubanMoviePreview(task.target.detailUrl);
+    const coverSource = preview?.coverDataUrl ?? preview?.coverUrl;
+    if (!coverSource) return;
+    coverCache.value = {
+      ...coverCache.value,
+      [task.target.detailUrl]: coverSource,
+    };
+  } catch {
+    // 封面只影响展示，解析失败时保留占位，不影响队列任务。
+  }
+}
+
+function handleCoverError(task: TaskItem) {
+  const source = getTaskCoverSource(task);
+  if (!source) return;
+
+  failedCoverSources.value = {
+    ...failedCoverSources.value,
+    [task.target.detailUrl]: source,
+  };
+}
 // 获取任务状态徽标；桌面后台阶段会额外展示“后台处理中”。
 function getStatusDescriptor(task: TaskItem) {
   if (isNativeRuntime && nativeBackgroundPhases.has(task.lifecycle.phase)) {
@@ -102,6 +144,17 @@ function getOutputDirectoryLabel(task: TaskItem) {
   return task.outputDirectory ?? task.target.outputRootDir;
 }
 
+function getTaskAspectRatioLabel(task: TaskItem) {
+  return task.target.imageAspectRatio === "original" ? "原图比例" : `比例${task.target.imageAspectRatio}`;
+}
+
+function getTaskResultLabel(task: TaskItem) {
+  if (!/^已下载\s+\d+\/\d+\s+张图片/.test(task.summary) || /(?:比例\d+:\d+|原图比例)/.test(task.summary)) {
+    return task.summary;
+  }
+
+  return `${task.summary}，${getTaskAspectRatioLabel(task)}`;
+}
 // 操作列根据任务生命周期动态切换暂停、继续、重试、完成等按钮状态。
 // 读取当前任务操作按钮文案和动作类型。
 function getQueueActionDescriptor(task: TaskItem) {
@@ -157,7 +210,7 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
       <thead>
         <tr>
           <th>任务</th>
-          <th>来源</th>
+          <th>豆瓣封面</th>
           <th>状态</th>
           <th>下载进度</th>
           <th>输出目录</th>
@@ -173,7 +226,12 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
               <span class="table-text">{{ task.target.detailUrl }}</span>
             </div>
           </td>
-          <td>{{ formatTaskOrigin(task) }}</td>
+          <td class="task-table__cover">
+            <div class="cover-cell">
+              <img v-if="getTaskCoverSource(task)" :src="getTaskCoverSource(task)" :alt="formatTaskTitle(task)" @error="handleCoverError(task)" />
+              <span v-else>暂无封面</span>
+            </div>
+          </td>
           <td><StatusPill :label="getStatusDescriptor(task).label" :tone="getStatusDescriptor(task).tone" /></td>
           <td class="task-table__progress">
             <TaskProgressCell :task="task" />
@@ -190,7 +248,7 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
             <span v-else class="table-text">{{ getOutputDirectoryLabel(task) }}</span>
           </td>
           <td class="task-table__result">
-            <span class="table-text">{{ task.summary }}</span>
+            <span class="table-text">{{ getTaskResultLabel(task) }}</span>
           </td>
           <td class="task-table__actions">
             <div class="row-actions">
@@ -206,6 +264,7 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
                 title="删除这条任务？"
                 description="任务记录和本地输出目录会一起删除。"
                 confirm-label="删除"
+                :disabled="props.queueRunning"
                 @confirm="emit('remove', task.id)"
               />
             </div>
@@ -267,6 +326,30 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
   cursor: pointer;
 }
 
+.cover-cell {
+  width: 62px;
+  height: 88px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.cover-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.task-table__cover {
+  width: 96px;
+  min-width: 96px;
+}
 .table-text {
   display: block;
   word-break: break-all;
@@ -315,3 +398,5 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
   box-shadow: 0 0 0 3px rgba(77, 212, 198, 0.12);
 }
 </style>
+
+

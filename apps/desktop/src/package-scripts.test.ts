@@ -10,5 +10,7 @@ test("桌面端 dev 和 build 前会先自动构建 sidecar", async () => {
   };
 
   assert.equal(packageJson.scripts?.predev, "pnpm --dir ../sidecar build");
-  assert.equal(packageJson.scripts?.prebuild, "pnpm --dir ../sidecar build");
+  assert.equal(packageJson.scripts?.prebuild, "pnpm --dir ../sidecar build && pnpm --dir ../.. prepare:sidecar-bundle");
+  assert.match(packageJson.scripts?.test ?? "", /tsx --test/);
 });
+

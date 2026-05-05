@@ -7,7 +7,8 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/adapters/douban.test.ts src/services/downloader.test.ts"
   },
   "dependencies": {
     "sharp": "^0.34.2"
@@ -18,3 +19,4 @@
     "typescript": "^5.9.3"
   }
 }
+

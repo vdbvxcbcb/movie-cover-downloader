@@ -53,6 +53,8 @@ export function createTaskFromDraft(id: string, draft: TaskDraft): TaskItem {
       updatedAt: currentStamp(),
     },
     summary: "新链接任务已入队，等待解析详情页与图片页",
+    coverUrl: draft.coverUrl,
+    coverDataUrl: draft.coverDataUrl,
   };
 }
 

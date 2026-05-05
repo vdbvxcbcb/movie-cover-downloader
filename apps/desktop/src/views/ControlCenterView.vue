@@ -15,6 +15,13 @@ const appStore = useAppStore();
 const { tasks, cookies, queueRunning } = storeToRefs(appStore);
 // 控制中心界面按任务添加时间正序展示：旧任务在上，新任务在下。
 const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder));
+// Cookie 列表至少存在一条记录时，才允许使用后续业务操作。
+const hasCookieProfiles = computed(() => cookies.value.length > 0);
+// 清空队列任务还需要队列里确实有任务。
+const hasQueueTasks = computed(() => tasks.value.length > 0);
+const disableCookieRequiredActions = computed(() => !hasCookieProfiles.value);
+const disableClearQueue = computed(() => disableCookieRequiredActions.value || queueRunning.value || !hasQueueTasks.value || appStore.isActionPending("queue.clear-all"));
+const disableClearOutputDirectory = computed(() => disableCookieRequiredActions.value || queueRunning.value || appStore.isActionPending("output.clear-root"));
 </script>
 
 <template>
@@ -23,20 +30,36 @@ const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder)
       <template #aside>
         <div class="topbar__actions control-center-actions">
           <ActionButton
+            class="control-center-actions__import"
             label="1、导入Cookie"
             :disabled="appStore.isActionPending('cookies.import')"
             @click="void appStore.importCookie()"
           />
-          <ActionButton label="2、添加链接任务" @click="appStore.openCreateTask()" />
-          <ActionButton label="3、自定义裁剪" @click="appStore.openCustomCrop()" />
+          <ActionButton
+            class="control-center-actions__search"
+            label="2、搜索影视"
+            :disabled="disableCookieRequiredActions"
+            @click="appStore.openSearchMovie()"
+          />
+          <ActionButton label="3、添加链接任务" :disabled="disableCookieRequiredActions" @click="appStore.openCreateTask()" />
+          <ActionButton label="4、自定义裁剪" :disabled="disableCookieRequiredActions" @click="appStore.openCustomCrop()" />
           <PopConfirmAction
-            label="4、清空队列任务"
+            label="5、清空队列任务"
             title="清空全部任务？"
             description="队列记录和已生成的本地输出目录会一起删除。"
             confirm-label="清空"
             bubble-size="normal"
-            :disabled="appStore.isActionPending('queue.clear-all')"
+            :disabled="disableClearQueue"
             @confirm="void appStore.clearQueueTasks()"
+          />
+          <PopConfirmAction
+            label="清空输出目录"
+            title="清空输出目录？"
+            description="输出目录下的所有目录和文件会一起删除。"
+            confirm-label="清空"
+            bubble-size="normal"
+            :disabled="disableClearOutputDirectory"
+            @confirm="void appStore.clearOutputRootDirectory()"
           />
         </div>
       </template>
@@ -60,6 +83,7 @@ const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder)
     <PanelSection eyebrow="Queue" title="下载队列">
       <TaskTable
         :tasks="orderedTasks"
+        :queue-running="queueRunning"
         @retry="void appStore.retryTask($event)"
         @pause="void appStore.pauseTask($event)"
         @resume="void appStore.resumeTask($event)"
@@ -99,6 +123,7 @@ const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder)
 
 <style scoped>
 .control-center-actions {
-  justify-content: flex-start;
+  justify-content: flex-end;
 }
 </style>
+

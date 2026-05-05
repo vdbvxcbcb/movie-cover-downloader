@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 新增链接任务弹窗：收集豆瓣链接、输出目录、抓取类型、数量和图片尺寸。
-import { computed, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import type {
   DoubanAssetType,
@@ -10,18 +10,36 @@ import type {
   RequestIntervalSeconds,
   TaskDraft,
 } from "../../types/app";
-import { normalizeDetailUrlsInput, validateTaskDraftInput } from "../../lib/task-draft-input";
+import {
+  extractDetailUrlFromDisplayLine,
+  formatDetailUrlDisplayLine,
+  normalizeComparableDetailUrl,
+  normalizeDetailUrlsInput,
+  validateTaskDraftInput,
+} from "../../lib/task-draft-input";
 import { runtimeBridge } from "../../lib/runtime-bridge";
+import { useAppStore } from "../../stores/app";
 
+const props = withDefaults(
+  defineProps<{
+    detailUrls?: string;
+  }>(),
+  {
+    detailUrls: "",
+  },
+);
 const emit = defineEmits<{
   close: [];
   submit: [drafts: TaskDraft[]];
+  updateDetailUrls: [value: string];
 }>();
+
+const appStore = useAppStore();
 
 // 表单状态保持字符串输入，提交前再统一校验和转换，便于给出明确的用户错误提示。
 const form = reactive({
-  detailUrls: "",
-  outputRootDir: "D:/cover",
+  detailUrls: props.detailUrls,
+  outputRootDir: appStore.createTaskOutputRootDir,
   doubanAssetType: "still" as DoubanAssetType,
   imageCountMode: "limited" as ImageCountMode,
   maxImagesInput: "10",
@@ -30,7 +48,124 @@ const form = reactive({
   requestIntervalSeconds: "1" as "1" | "2" | "3" | "4" | "5",
 });
 const alertMessage = ref("");
+const resolvedTitleCache = new Map<string, string>();
+let titleResolveTimer: number | null = null;
+let titleResolveRevision = 0;
 
+function getDetailUrlDisplayEntries(value: string) {
+  return normalizeDetailUrlsInput(value)
+    .split(/\r?\n/g)
+    .map((line) => {
+      const normalizedLine = line.trim();
+      const detailUrl = extractDetailUrlFromDisplayLine(normalizedLine);
+      const urlIndex = detailUrl ? normalizedLine.indexOf(detailUrl) : -1;
+      const titlePrefix = urlIndex > 0 ? normalizedLine.slice(0, urlIndex).replace(/[：:]\s*$/, "").trim() : "";
+      return {
+        line: normalizedLine,
+        detailUrl,
+        hasTitle: titlePrefix.length > 0,
+      };
+    })
+    .filter((entry) => entry.line);
+}
+
+async function resolveMissingDetailUrlTitles() {
+  titleResolveRevision += 1;
+  const currentRevision = titleResolveRevision;
+  const pendingUrls = new Map<string, string>();
+
+  for (const entry of getDetailUrlDisplayEntries(form.detailUrls)) {
+    if (!entry.detailUrl) continue;
+    const comparableUrl = normalizeComparableDetailUrl(entry.detailUrl);
+    const preview = appStore.getCreateTaskMoviePreview(entry.detailUrl);
+    const hasPreviewCover = Boolean(preview?.coverDataUrl || preview?.coverUrl);
+    const hasTitle = entry.hasTitle || resolvedTitleCache.has(comparableUrl);
+    if (!comparableUrl || (hasTitle && hasPreviewCover)) continue;
+    pendingUrls.set(comparableUrl, entry.detailUrl);
+  }
+
+  if (pendingUrls.size === 0) {
+    return;
+  }
+
+  const resolvedPairs = await Promise.all(
+    Array.from(pendingUrls.entries()).map(async ([comparableUrl, detailUrl]) => {
+      try {
+        const preview = await runtimeBridge.resolveDoubanMoviePreview(detailUrl);
+        return [comparableUrl, detailUrl, preview] as const;
+      } catch {
+        return [comparableUrl, detailUrl, null] as const;
+      }
+    }),
+  );
+
+  if (currentRevision !== titleResolveRevision) {
+    return;
+  }
+
+  for (const [comparableUrl, detailUrl, preview] of resolvedPairs) {
+    if (!preview) continue;
+    appStore.upsertCreateTaskMoviePreview(detailUrl, preview);
+    if (preview.title) {
+      resolvedTitleCache.set(comparableUrl, preview.title);
+    }
+  }
+
+  let changed = false;
+  const nextLines = getDetailUrlDisplayEntries(form.detailUrls).map((entry) => {
+    if (!entry.detailUrl || entry.hasTitle) {
+      return entry.line;
+    }
+
+    const title = resolvedTitleCache.get(normalizeComparableDetailUrl(entry.detailUrl));
+    if (!title) {
+      return entry.line;
+    }
+
+    changed = true;
+    return formatDetailUrlDisplayLine(entry.detailUrl, title);
+  });
+
+  if (changed) {
+    syncDetailUrls(nextLines.join("\n"));
+  }
+}
+function scheduleMissingDetailUrlTitleResolution(delay = 500) {
+  if (titleResolveTimer !== null) {
+    window.clearTimeout(titleResolveTimer);
+  }
+
+  titleResolveTimer = window.setTimeout(() => {
+    titleResolveTimer = null;
+    void resolveMissingDetailUrlTitles();
+  }, delay);
+}
+
+watch(
+  () => form.outputRootDir,
+  (value) => appStore.syncCreateTaskOutputRootDir(value),
+);
+
+onBeforeUnmount(() => {
+  if (titleResolveTimer !== null) {
+    window.clearTimeout(titleResolveTimer);
+  }
+});
+
+watch(
+  () => props.detailUrls,
+  (value) => {
+    if (value !== form.detailUrls) {
+      form.detailUrls = value;
+      scheduleMissingDetailUrlTitleResolution();
+    }
+  },
+);
+
+function syncDetailUrls(value: string) {
+  form.detailUrls = value;
+  emit("updateDetailUrls", value);
+}
 // 任务说明随表单实时计算，让用户在加入队列前确认抓取类型、数量和尺寸策略。
 const strategySummary = computed(() => {
   const assetTypeLabel =
@@ -123,14 +258,16 @@ function handleDetailUrlsInput(event: Event) {
   const input = event.target as HTMLTextAreaElement;
   const protocolMatches = input.value.match(/https?:\/\//g) ?? [];
   if (protocolMatches.length < 2 && !/\shttps?:\/\//.test(input.value)) {
-    form.detailUrls = input.value;
+    syncDetailUrls(input.value);
+    scheduleMissingDetailUrlTitleResolution();
     clearAlert();
     return;
   }
 
   const normalized = normalizeDetailUrlsInput(input.value);
-  form.detailUrls = normalized;
+  syncDetailUrls(normalized);
   input.value = normalized;
+  scheduleMissingDetailUrlTitleResolution();
   clearAlert();
 }
 
@@ -138,12 +275,14 @@ function handleDetailUrlsInput(event: Event) {
 function handleDetailUrlsBlur(event: Event) {
   const input = event.target as HTMLTextAreaElement;
   const normalized = normalizeDetailUrlsInput(input.value);
-  form.detailUrls = normalized;
+  syncDetailUrls(normalized);
   input.value = normalized;
+  void resolveMissingDetailUrlTitles();
 }
-
 // 提交时只接收通过校验的豆瓣 subject 链接，任何错误都会阻止加入队列并展示原因。
-function submit() {
+async function submit() {
+  await resolveMissingDetailUrlTitles();
+
   const validation = validateTaskDraftInput({
     detailUrls: form.detailUrls,
     outputRootDir: form.outputRootDir,
@@ -202,6 +341,7 @@ function submit() {
           <textarea
             v-model="form.detailUrls"
             rows="5"
+            wrap="off"
             placeholder="链接可自动换行，每行一个链接，例如：&#10;https://movie.douban.com/subject/35010610/&#10;https://movie.douban.com/subject/1292064/"
             @blur="handleDetailUrlsBlur"
             @input="handleDetailUrlsInput"
@@ -566,6 +706,8 @@ function submit() {
   height: 124px;
   min-height: 124px;
   line-height: 1.25;
+  white-space: pre;
+  overflow-x: auto;
 }
 
 @media (max-width: 1480px) {
@@ -578,4 +720,3 @@ function submit() {
   }
 }
 </style>
-

@@ -3,6 +3,8 @@ import { CookiePoolService } from "./services/cookie-pool.js";
 import { DownloaderService } from "./services/downloader.js";
 import { MatcherService } from "./services/matcher.js";
 import { SchedulerService } from "./services/scheduler.js";
+import { searchDoubanMovies } from "./services/douban-search.js";
+import { resolveDoubanMovieTitle } from "./services/douban-title.js";
 import { CancelRequestedError, FileTaskControl, PauseRequestedError } from "./services/task-control.js";
 import { createLogger } from "./shared/logger.js";
 import { createRuntimeConfig, formatRuntimeConfig } from "./shared/runtime-config.js";
@@ -95,11 +97,35 @@ function createBootstrapTask(configOutputDir: string): SidecarTask | null {
   };
 }
 
+// 搜索模式只负责返回豆瓣电影搜索结果，不启动下载调度器，避免影响队列任务。
+async function runDoubanSearchCommand(config: ReturnType<typeof createRuntimeConfig>) {
+  const query = process.env.MCD_SEARCH_QUERY ?? "";
+  const page = Number(process.env.MCD_SEARCH_PAGE ?? 1);
+  const pageSize = Number(process.env.MCD_SEARCH_PAGE_SIZE ?? 15);
+  const result = await searchDoubanMovies(query, { config, page, pageSize });
+  process.stdout.write(`${JSON.stringify({ kind: "douban-search-result", payload: result })}\n`);
+}
+
+// 片名解析模式只解析单个豆瓣详情页标题，供前端把纯链接展示成“片名：链接”。
+async function runDoubanTitleCommand(config: ReturnType<typeof createRuntimeConfig>) {
+  const detailUrl = process.env.MCD_TITLE_DETAIL_URL ?? "";
+  const result = await resolveDoubanMovieTitle(detailUrl, { config });
+  process.stdout.write(`${JSON.stringify({ kind: "douban-title-result", payload: result })}\n`);
+}
 // 主流程组装 Cookie 池、匹配器、下载器和调度器，然后执行一次性任务并把结果写回 stdout。
 // sidecar 主入口：组装配置、Cookie 池、匹配器、下载器和调度器，并把最终结果输出给 Tauri。
 async function main() {
   const logger = createLogger("bootstrap");
   const config = createRuntimeConfig();
+  if (process.env.MCD_COMMAND === "douban-search") {
+    await runDoubanSearchCommand(config);
+    return;
+  }
+
+  if (process.env.MCD_COMMAND === "douban-title") {
+    await runDoubanTitleCommand(config);
+    return;
+  }
 
   const cookiePool = new CookiePoolService(config, createLogger("cookie-pool"));
   const matcher = new MatcherService(config, cookiePool, createLogger("discoverer"));
