@@ -7,7 +7,7 @@ import type {
   TaskItem,
   TaskPhase,
 } from "../types/app";
-import { isDoubanEmptyCategoryTask } from "./douban-empty-category";
+import { formatDoubanAssetTypeLabel, isDoubanEmptyCategoryTask } from "./douban-empty-category";
 
 const sourceSiteLabels: Record<SourceSite, string> = {
   douban: "豆瓣",
@@ -40,7 +40,7 @@ export function formatSourceSite(site: SourceSite) {
 
 // 任务标题兜底：片名未解析前显示详情页链接。
 export function formatTaskTitle(task: TaskItem) {
-  return task.title;
+  return `${task.title} ${formatDoubanAssetTypeLabel(task.target.doubanAssetType)}`;
 }
 
 // 判断下载数量是否已经达到目标数量，用于进度显示和完成态兜底。

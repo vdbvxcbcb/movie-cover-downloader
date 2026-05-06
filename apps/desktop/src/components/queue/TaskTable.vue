@@ -52,6 +52,7 @@ const taskRenderDependencyKey = computed(() =>
       [
         task.id,
         task.title,
+        task.target.doubanAssetType,
         task.lifecycle.phase,
         task.summary,
         task.download?.savedCount ?? -1,

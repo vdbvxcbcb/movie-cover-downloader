@@ -1,7 +1,7 @@
 // 展示层工具测试：锁定进度、状态和文案格式化行为。
 import test from "node:test";
 import assert from "node:assert/strict";
-import { describeQueueAction, describeTaskStatus, formatTaskProgress, getTaskProgressPercent } from "./presenters";
+import { describeQueueAction, describeTaskStatus, formatTaskProgress, formatTaskTitle, getTaskProgressPercent } from "./presenters";
 import type { TaskItem } from "../types/app";
 
 // 创建展示层测试任务，允许按用例覆盖生命周期或下载快照。
@@ -36,6 +36,11 @@ test("空分类任务状态显示为暂无内容而不是失败待重试", () =>
 
   assert.equal(descriptor.label, "暂无内容");
   assert.equal(descriptor.tone, "neutral");
+});
+
+test("任务标题会显示片名和抓取分类", () => {
+  assert.equal(formatTaskTitle(createTask()), "示例电影 壁纸");
+  assert.equal(formatTaskTitle(createTask({ target: { ...createTask().target, doubanAssetType: "poster" } })), "示例电影 海报");
 });
 
 test("任务已完成时操作列显示完成按钮", () => {
