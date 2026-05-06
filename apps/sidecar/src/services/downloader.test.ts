@@ -16,6 +16,7 @@ const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+tm2QAAAAASUVORK5CYII=",
   "base64",
 );
+const maxSourceImageBytes = 80 * 1024 * 1024;
 
 // 创建下载服务测试用日志器，记录日志方法为空实现。
 function createLogger() {
@@ -440,6 +441,84 @@ test("选择图片比例时只裁剪不放大缩放", async () => {
     assert.equal(result.saved[0]!.width, 506);
     assert.equal(result.saved[0]!.height, 900);
     assert.match(path.basename(result.saved[0]!.outputPath), /Test Title - wallpaper - 506x900 - 9x16\.jpg$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("响应头声明单图过大时会跳过并清理断点文件", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcd-downloader-size-"));
+  const { logger, warnings } = createLogger();
+  const downloader = new DownloaderService(createConfig(), logger);
+  const originalFetch = globalThis.fetch;
+  const discovery = createDiscovery(tempDir);
+  discovery.images = [{ ...discovery.images[1]!, width: 1, height: 1 }];
+  const artifacts = buildResumeArtifacts(tempDir, "task-1", 1);
+
+  globalThis.fetch = async () =>
+    new Response(onePixelPng, {
+      status: 200,
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(maxSourceImageBytes + 1),
+      },
+    });
+
+  try {
+    await assert.rejects(
+      () => downloader.download(createTask(), discovery),
+      /no downloadable images were saved/i,
+    );
+
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /source image exceeds/i);
+    await assert.rejects(() => fs.stat(artifacts.partPath), /ENOENT/);
+    await assert.rejects(() => fs.stat(artifacts.metadataPath), /ENOENT/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("流式下载累计超过单图上限时会跳过并清理断点文件", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcd-downloader-stream-size-"));
+  const { logger, warnings } = createLogger();
+  const downloader = new DownloaderService(createConfig(), logger);
+  const originalFetch = globalThis.fetch;
+  const discovery = createDiscovery(tempDir);
+  discovery.images = [{ ...discovery.images[1]!, width: 1, height: 1 }];
+  const artifacts = buildResumeArtifacts(tempDir, "task-1", 1);
+  await fs.mkdir(path.dirname(artifacts.partPath), { recursive: true });
+  await fs.writeFile(artifacts.partPath, new Uint8Array(0));
+  await fs.truncate(artifacts.partPath, maxSourceImageBytes - 1);
+  await saveResumeMetadata({
+    taskId: "task-1",
+    imageIndex: 1,
+    imageUrl: discovery.images[0]!.imageUrl,
+    partPath: artifacts.partPath,
+    metadataPath: artifacts.metadataPath,
+    downloadedBytes: maxSourceImageBytes - 1,
+  });
+
+  globalThis.fetch = async () =>
+    new Response(new Uint8Array([1, 2]), {
+      status: 206,
+      headers: {
+        "content-type": "image/png",
+      },
+    });
+
+  try {
+    await assert.rejects(
+      () => downloader.download(createTask(), discovery),
+      /no downloadable images were saved/i,
+    );
+
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /source image exceeds/i);
+    await assert.rejects(() => fs.stat(artifacts.partPath), /ENOENT/);
+    await assert.rejects(() => fs.stat(artifacts.metadataPath), /ENOENT/);
   } finally {
     globalThis.fetch = originalFetch;
     await fs.rm(tempDir, { recursive: true, force: true });

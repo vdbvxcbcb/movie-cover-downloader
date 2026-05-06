@@ -268,7 +268,7 @@ function acceptImageBytes(bytes: Uint8Array, name: string) {
 // 处理 Tauri 拖拽事件中的本地文件路径，读取图片字节后进入统一预览流程。
 async function acceptDroppedPath(filePath: string) {
   try {
-    const bytes = await runtimeBridge.readLocalImageFile(filePath);
+    const bytes = await runtimeBridge.readLocalImageFile(filePath, props.outputRootDir);
     acceptImageBytes(bytes, fileNameFromPath(filePath));
   } catch (error) {
     showAlert(error instanceof Error ? error.message : String(error));

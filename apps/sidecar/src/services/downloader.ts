@@ -17,6 +17,20 @@ import {
 } from "./resume-store.js";
 import { PauseRequestedError, type FileTaskControl } from "./task-control.js";
 
+const maxSourceImageBytes = 80 * 1024 * 1024;
+
+class SourceImageSizeLimitError extends Error {
+  constructor(bytes: number) {
+    super(`source image exceeds ${maxSourceImageBytes} bytes: ${bytes}`);
+  }
+}
+
+function assertSourceImageSize(bytes: number) {
+  if (bytes > maxSourceImageBytes) {
+    throw new SourceImageSizeLimitError(bytes);
+  }
+}
+
 // 校验最终输出格式，只允许 jpg/png，避免 sharp 或文件名生成阶段收到非法格式。
 function ensureSupportedOutputImageFormat(format: string): asserts format is SidecarTask["outputImageFormat"] {
   if (format !== "jpg" && format !== "png") {
@@ -280,6 +294,9 @@ export class DownloaderService {
   ) {
     await fs.mkdir(path.dirname(metadata.partPath), { recursive: true });
     const totalBytes = resolveTotalBytes(response, metadata.downloadedBytes);
+    if (totalBytes) {
+      assertSourceImageSize(totalBytes);
+    }
     let nextMetadata: ResumeMetadata = {
       ...metadata,
       downloadedBytes: replacePart ? 0 : metadata.downloadedBytes,
@@ -295,6 +312,7 @@ export class DownloaderService {
       if (!reader) {
         const chunk = Buffer.from(await response.arrayBuffer());
         if (chunk.length > 0) {
+          assertSourceImageSize(nextMetadata.downloadedBytes + chunk.length);
           await fileHandle.write(chunk);
           nextMetadata = {
             ...nextMetadata,
@@ -315,6 +333,7 @@ export class DownloaderService {
         }
 
         const chunk = Buffer.from(value);
+        assertSourceImageSize(nextMetadata.downloadedBytes + chunk.length);
         await fileHandle.write(chunk);
         nextMetadata = {
           ...nextMetadata,
@@ -343,6 +362,19 @@ export class DownloaderService {
     const prepared = await this.loadUsableResumeMetadata(discovery.outputDir, task.id, imageIndex, image.imageUrl);
     const artifacts = prepared.artifacts;
 
+    try {
+      if (prepared.metadata?.downloadedBytes) {
+        assertSourceImageSize(prepared.metadata.downloadedBytes);
+      }
+      if (prepared.metadata?.totalBytes) {
+        assertSourceImageSize(prepared.metadata.totalBytes);
+      }
+    } catch (error) {
+      if (error instanceof SourceImageSizeLimitError) {
+        await clearResumeArtifacts(discovery.outputDir, task.id, imageIndex);
+      }
+      throw error;
+    }
     if (prepared.metadata?.totalBytes && prepared.metadata.downloadedBytes >= prepared.metadata.totalBytes) {
       return {
         artifacts,
@@ -390,19 +422,26 @@ export class DownloaderService {
       return this.fetchSourceImageBuffer(task, discovery, image, imageIndex, cookieHeader, taskControl, false);
     }
 
-    await this.writeResponseToPartFile(
-      response,
-      prepared.metadata ?? {
-        taskId: task.id,
-        imageIndex,
-        imageUrl: image.imageUrl,
-        partPath: artifacts.partPath,
-        metadataPath: artifacts.metadataPath,
-        downloadedBytes: 0,
-      },
-      !prepared.metadata?.downloadedBytes,
-      taskControl,
-    );
+    try {
+      await this.writeResponseToPartFile(
+        response,
+        prepared.metadata ?? {
+          taskId: task.id,
+          imageIndex,
+          imageUrl: image.imageUrl,
+          partPath: artifacts.partPath,
+          metadataPath: artifacts.metadataPath,
+          downloadedBytes: 0,
+        },
+        !prepared.metadata?.downloadedBytes,
+        taskControl,
+      );
+    } catch (error) {
+      if (error instanceof SourceImageSizeLimitError) {
+        await clearResumeArtifacts(discovery.outputDir, task.id, imageIndex);
+      }
+      throw error;
+    }
 
     return {
       artifacts,

@@ -300,7 +300,7 @@ async function copyTaskDetailUrl(task: TaskItem) {
                 label="删除"
                 size="sm"
                 title="删除这条任务？"
-                description="任务记录和本地输出目录会一起删除。"
+                description="任务记录和图片所在目录会一起删除。"
                 confirm-label="删除"
                 :disabled="isTaskDeleteDisabled(task)"
                 @confirm="emit('remove', task.id)"

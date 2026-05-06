@@ -27,12 +27,21 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::LocalFree,
+    Security::Cryptography::{
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    },
+};
 
 // 日志 id 在 Rust 侧生成，避免前端批量接收时出现重复 key。
 static LOG_ID_SEED: AtomicU64 = AtomicU64::new(10_000);
 
 // 持久化快照版本号和前端 AppSeedState.schemaVersion 对齐，用来丢弃不兼容的旧状态。
 const APP_STATE_SCHEMA_VERSION: i64 = 2;
+const MAX_TASK_ID_LEN: usize = 96;
+const PROTECTED_COOKIE_PAYLOAD_SCHEME: &str = "win32-dpapi";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -226,6 +235,176 @@ fn resolve_request_interval_ms(payload: &DownloadTaskPayload) -> u32 {
         .unwrap_or(1000);
 
     interval_ms.clamp(1000, 5000)
+}
+
+fn validate_task_id(task_id: &str) -> Result<&str, String> {
+    let trimmed = task_id.trim();
+    if trimmed.is_empty() {
+        return Err("任务 id 不能为空".to_string());
+    }
+    if trimmed != task_id {
+        return Err("任务 id 不能包含首尾空白".to_string());
+    }
+    if trimmed.len() > MAX_TASK_ID_LEN {
+        return Err("任务 id 过长".to_string());
+    }
+    if !trimmed
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("任务 id 只能包含字母、数字、短横线和下划线".to_string());
+    }
+
+    Ok(trimmed)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn hex_decode(value: &str) -> Result<Vec<u8>, String> {
+    let bytes = value.as_bytes();
+    if bytes.len() % 2 != 0 {
+        return Err("受保护 Cookie 数据格式无效".to_string());
+    }
+
+    bytes
+        .chunks_exact(2)
+        .map(|chunk| {
+            let high = hex_nibble(chunk[0])?;
+            let low = hex_nibble(chunk[1])?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err("解析受保护 Cookie 数据失败: 不是十六进制字符".to_string()),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn protect_bytes(plain: &[u8]) -> Result<Vec<u8>, String> {
+    let mut input = CRYPT_INTEGER_BLOB {
+        cbData: plain.len() as u32,
+        pbData: plain.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+
+    let ok = unsafe {
+        CryptProtectData(
+            &mut input,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if ok == 0 {
+        return Err("加密 Cookie 失败".to_string());
+    }
+
+    let protected =
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe {
+        LocalFree(output.pbData as _);
+    }
+    Ok(protected)
+}
+
+#[cfg(target_os = "windows")]
+fn unprotect_bytes(protected: &[u8]) -> Result<Vec<u8>, String> {
+    let mut input = CRYPT_INTEGER_BLOB {
+        cbData: protected.len() as u32,
+        pbData: protected.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+
+    let ok = unsafe {
+        CryptUnprotectData(
+            &mut input,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if ok == 0 {
+        return Err("解密 Cookie 失败".to_string());
+    }
+
+    let plain =
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe {
+        LocalFree(output.pbData as _);
+    }
+    Ok(plain)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn protect_bytes(plain: &[u8]) -> Result<Vec<u8>, String> {
+    Ok(plain.to_vec())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn unprotect_bytes(protected: &[u8]) -> Result<Vec<u8>, String> {
+    Ok(protected.to_vec())
+}
+
+fn serialize_cookie_payload(cookie: &Value) -> Result<String, String> {
+    let payload =
+        serde_json::to_vec(cookie).map_err(|error| format!("序列化 cookie 失败: {error}"))?;
+    let protected = protect_bytes(&payload)?;
+    serde_json::to_string(&serde_json::json!({
+        "protected": true,
+        "scheme": PROTECTED_COOKIE_PAYLOAD_SCHEME,
+        "payload": hex_encode(&protected)
+    }))
+    .map_err(|error| format!("序列化受保护 cookie 失败: {error}"))
+}
+
+fn deserialize_cookie_payload(payload: &str) -> Result<Value, String> {
+    let parsed = serde_json::from_str::<Value>(payload)
+        .map_err(|error| format!("解析 cookie 失败: {error}"))?;
+    let is_protected = parsed
+        .get("protected")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !is_protected {
+        return Ok(parsed);
+    }
+
+    if parsed.get("scheme").and_then(Value::as_str) != Some(PROTECTED_COOKIE_PAYLOAD_SCHEME) {
+        return Err("不支持的 Cookie 保护格式".to_string());
+    }
+    let encrypted = parsed
+        .get("payload")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "受保护 Cookie 缺少 payload".to_string())
+        .and_then(hex_decode)?;
+    let decrypted = unprotect_bytes(&encrypted)?;
+    serde_json::from_slice::<Value>(&decrypted)
+        .map_err(|error| format!("解析解密后的 cookie 失败: {error}"))
 }
 
 // 这里用毫秒时间戳字符串，前端 runtime-bridge 会再格式化成中文时间。
@@ -447,8 +626,7 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
                 .get("id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "写入 cookies 失败: Cookie 缺少 id".to_string())?;
-            let payload = serde_json::to_string(cookie)
-                .map_err(|error| format!("序列化 cookie 失败: {error}"))?;
+            let payload = serialize_cookie_payload(cookie)?;
             statement
                 .execute(params![cookie_id, payload])
                 .map_err(|error| format!("写入 cookie 失败: {error}"))?;
@@ -570,8 +748,7 @@ fn load_snapshot_from_sqlite(connection: &Connection) -> Result<Option<Value>, S
     let mut cookies = Vec::new();
     for row in cookie_rows {
         let payload = row.map_err(|error| format!("读取 cookie 行失败: {error}"))?;
-        let parsed = serde_json::from_str::<Value>(&payload)
-            .map_err(|error| format!("解析 cookie 失败: {error}"))?;
+        let parsed = deserialize_cookie_payload(&payload)?;
         cookies.push(parsed);
     }
 
@@ -631,6 +808,7 @@ fn save_snapshot_to_sqlite_path_with_recovery(
 
 // 每个任务一个控制文件，路径在应用数据目录下，避免写到用户选择的图片输出目录。
 fn task_control_file_path(app: &AppHandle, task_id: &str) -> Result<PathBuf, String> {
+    let task_id = validate_task_id(task_id)?;
     let base_dir = app
         .path()
         .app_data_dir()
@@ -1160,6 +1338,7 @@ fn pause_download_task(
     task_id: String,
     registry: tauri::State<TaskControlRegistry>,
 ) -> Result<bool, String> {
+    let task_id = validate_task_id(&task_id)?.to_string();
     registry.sync_pause_request(task_id.clone())?;
     let _ = emit_runtime_log_event(
         &app,
@@ -1179,6 +1358,7 @@ fn resume_download_task(
     task_id: String,
     registry: tauri::State<TaskControlRegistry>,
 ) -> Result<bool, String> {
+    let task_id = validate_task_id(&task_id)?.to_string();
     registry.sync_resume_request(&task_id)?;
     let _ = emit_runtime_log_event(
         &app,
@@ -1201,6 +1381,7 @@ fn clear_download_tasks(
     let mut cleared = 0usize;
 
     for task_id in task_ids {
+        let task_id = validate_task_id(&task_id)?.to_string();
         let control_file_path = task_control_file_path(&app, &task_id)?;
         registry.register_control_file(task_id.clone(), control_file_path.clone())?;
         let _ = registry.sync_cancel_request(&task_id);
@@ -1304,22 +1485,43 @@ fn delete_directory_path(
 
 // 清空输出根目录下的所有子目录和文件，但保留输出根目录本身。
 #[tauri::command]
-fn clear_directory_contents(directory_path: String) -> Result<usize, String> {
+fn clear_directory_contents(
+    directory_path: String,
+    root_directory_path: String,
+) -> Result<usize, String> {
     let directory = PathBuf::from(directory_path.trim());
     if directory.as_os_str().is_empty() {
         return Err("输出目录不能为空，已取消清空".to_string());
     }
+    let root_directory = PathBuf::from(root_directory_path.trim());
+    if root_directory.as_os_str().is_empty() {
+        return Err("输出根目录不能为空，已取消清空".to_string());
+    }
     if !directory.exists() {
         return Ok(0);
+    }
+    if !root_directory.exists() {
+        return Err("输出根目录不存在，已取消清空".to_string());
     }
 
     let directory =
         fs::canonicalize(&directory).map_err(|error| format!("解析输出目录失败: {error}"))?;
+    let root_directory = fs::canonicalize(&root_directory)
+        .map_err(|error| format!("解析输出根目录失败: {error}"))?;
     if !directory.is_dir() {
         return Err(format!("输出目录不是文件夹: {}", directory.display()));
     }
+    if !root_directory.is_dir() {
+        return Err(format!(
+            "输出根目录不是文件夹: {}",
+            root_directory.display()
+        ));
+    }
     if directory.parent().is_none() {
         return Err(format!("拒绝清空磁盘根目录: {}", directory.display()));
+    }
+    if directory != root_directory {
+        return Err(format!("拒绝清空非输出根目录: {}", directory.display()));
     }
 
     let mut cleared = 0usize;
@@ -1561,7 +1763,7 @@ async fn run_download_task(
     registry: tauri::State<'_, TaskControlRegistry>,
 ) -> Result<String, String> {
     // 真实抓取链路会持续几秒到几十秒，这里必须让出桌面主线程，避免窗口假死。
-    let task_id = payload.task_id.clone();
+    let task_id = validate_task_id(&payload.task_id)?.to_string();
     let control_file_path = task_control_file_path(&app, &task_id)?;
     registry.register_control_file(task_id.clone(), control_file_path.clone())?;
 
@@ -1834,10 +2036,27 @@ fn is_supported_local_image_path(path: &Path) -> bool {
 
 #[tauri::command]
 // 自定义裁剪拖拽本地文件时通过该命令读取图片字节，并限制文件类型和大小。
-fn read_local_image_file(file_path: String) -> Result<Vec<u8>, String> {
+fn read_local_image_file(
+    file_path: String,
+    root_directory_path: String,
+) -> Result<Vec<u8>, String> {
+    let root_directory = PathBuf::from(root_directory_path.trim());
+    if root_directory.as_os_str().is_empty() {
+        return Err("输出根目录不能为空".to_string());
+    }
+    if !root_directory.is_dir() {
+        return Err("输出根目录不存在或不是文件夹".to_string());
+    }
+    let root_directory = fs::canonicalize(&root_directory)
+        .map_err(|error| format!("解析输出根目录失败: {error}"))?;
+
     let path = PathBuf::from(file_path.trim());
     if !path.is_file() {
         return Err("拖拽的不是可读取的图片文件".to_string());
+    }
+    let path = fs::canonicalize(&path).map_err(|error| format!("解析图片路径失败: {error}"))?;
+    if !path.starts_with(&root_directory) {
+        return Err("只能读取输出根目录内的本地图片".to_string());
     }
 
     if !is_supported_local_image_path(&path) {
@@ -2012,11 +2231,12 @@ pub fn run() {
 // 单元测试集中保护 lib.rs 中最容易出事故的边界：进程参数、状态库恢复、目录删除和任务控制。
 mod tests {
     use super::{
-        clear_directory_contents, delete_directory_path, format_sidecar_exit_error,
+        clear_directory_contents, delete_directory_path, format_sidecar_exit_error, hex_decode,
         is_recoverable_sqlite_error, load_snapshot_from_sqlite, next_runtime_log_seed,
-        open_state_db_path, resolve_douban_login_cookie_status, resolve_sidecar_entry_arg,
-        resolve_sidecar_event_task_id, resolve_sidecar_node, rotate_corrupted_state_db,
-        run_blocking_job, save_snapshot_to_sqlite_path_with_recovery, TaskControlRegistry,
+        open_state_db_path, read_local_image_file, resolve_douban_login_cookie_status,
+        resolve_sidecar_entry_arg, resolve_sidecar_event_task_id, resolve_sidecar_node,
+        rotate_corrupted_state_db, run_blocking_job, save_snapshot_to_sqlite_path_with_recovery,
+        validate_task_id, TaskControlRegistry,
     };
     use std::{
         fs,
@@ -2126,6 +2346,22 @@ mod tests {
     #[test]
     fn resolve_sidecar_entry_arg_uses_relative_entrypoint() {
         assert_eq!(resolve_sidecar_entry_arg(), "./dist/index.js");
+    }
+
+    #[test]
+    fn validate_task_id_accepts_safe_ids_and_rejects_path_segments() {
+        assert_eq!(validate_task_id("task-123_abc").unwrap(), "task-123_abc");
+
+        for task_id in ["", " task-1", "task-1 ", "../escape", "task/1", "task.1"] {
+            assert!(validate_task_id(task_id).is_err());
+        }
+
+        assert!(validate_task_id(&"a".repeat(97)).is_err());
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_ascii_payload_without_panicking() {
+        assert!(hex_decode("💥").is_err());
     }
 
     #[test]
@@ -2301,6 +2537,78 @@ mod tests {
     }
 
     #[test]
+    fn load_snapshot_accepts_legacy_plaintext_cookie_payload() {
+        let temp_dir = test_temp_dir("legacy-cookie");
+        let db_path = temp_dir.join("runtime-state.sqlite");
+        let connection = open_state_db_path(&db_path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO cookies (id, payload_json) VALUES (?1, ?2)",
+                (
+                    "legacy-cookie",
+                    serde_json::json!({
+                        "id": "legacy-cookie",
+                        "value": "dbcl2=test; ck=test"
+                    })
+                    .to_string(),
+                ),
+            )
+            .unwrap();
+
+        let loaded = load_snapshot_from_sqlite(&connection).unwrap().unwrap();
+
+        assert_eq!(loaded["cookies"][0]["id"].as_str(), Some("legacy-cookie"));
+        assert_eq!(
+            loaded["cookies"][0]["value"].as_str(),
+            Some("dbcl2=test; ck=test")
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn saved_cookie_payload_round_trips_without_plaintext_on_windows() {
+        let temp_dir = test_temp_dir("protected-cookie");
+        let db_path = temp_dir.join("runtime-state.sqlite");
+        let snapshot = serde_json::json!({
+            "schemaVersion": 2,
+            "tasks": [],
+            "cookies": [
+                {
+                    "id": "protected-cookie",
+                    "source": "douban",
+                    "value": "dbcl2=test; ck=test"
+                }
+            ],
+            "logs": [],
+            "queueConfig": {}
+        });
+
+        save_snapshot_to_sqlite_path_with_recovery(&db_path, &snapshot).unwrap();
+        let connection = open_state_db_path(&db_path).unwrap();
+        let payload: String = connection
+            .query_row(
+                "SELECT payload_json FROM cookies WHERE id = ?1",
+                ["protected-cookie"],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(payload.contains("\"protected\":true"));
+        if cfg!(target_os = "windows") {
+            assert!(!payload.contains("dbcl2=test; ck=test"));
+        }
+
+        let loaded = load_snapshot_from_sqlite(&connection).unwrap().unwrap();
+        assert_eq!(
+            loaded["cookies"][0]["value"].as_str(),
+            Some("dbcl2=test; ck=test")
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn delete_directory_path_removes_existing_output_directory() {
         let temp_dir = test_temp_dir("delete-output");
         let movie_dir = temp_dir.join("Movie - 2026-05-02");
@@ -2437,7 +2745,8 @@ mod tests {
         fs::write(child_dir.join("image.jpg"), "image").unwrap();
         fs::write(temp_dir.join("root-file.txt"), "root").unwrap();
 
-        let cleared = clear_directory_contents(temp_dir.to_string_lossy().into_owned()).unwrap();
+        let temp_dir_string = temp_dir.to_string_lossy().into_owned();
+        let cleared = clear_directory_contents(temp_dir_string.clone(), temp_dir_string).unwrap();
 
         assert_eq!(cleared, 2);
         assert!(temp_dir.exists());
@@ -2449,9 +2758,64 @@ mod tests {
 
     #[test]
     fn clear_directory_contents_rejects_empty_path() {
-        let error = clear_directory_contents("   ".to_string()).unwrap_err();
+        let error =
+            clear_directory_contents("   ".to_string(), "D:/cover".to_string()).unwrap_err();
 
         assert!(error.contains("输出目录不能为空"));
+    }
+
+    #[test]
+    fn clear_directory_contents_rejects_non_root_directory() {
+        let temp_dir = test_temp_dir("clear-root-boundary");
+        let child_dir = temp_dir.join("child");
+        fs::create_dir_all(&child_dir).unwrap();
+
+        let error = clear_directory_contents(
+            child_dir.to_string_lossy().into_owned(),
+            temp_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("拒绝清空非输出根目录"));
+        assert!(child_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn read_local_image_file_accepts_image_inside_root() {
+        let temp_dir = test_temp_dir("read-image-root");
+        let image_path = temp_dir.join("cover.jpg");
+        fs::write(&image_path, b"image").unwrap();
+
+        let bytes = read_local_image_file(
+            image_path.to_string_lossy().into_owned(),
+            temp_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(bytes, b"image");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn read_local_image_file_rejects_image_outside_root() {
+        let root_dir = test_temp_dir("read-image-root-boundary");
+        let outside_dir = test_temp_dir("read-image-outside-boundary");
+        let image_path = outside_dir.join("cover.jpg");
+        fs::write(&image_path, b"image").unwrap();
+
+        let error = read_local_image_file(
+            image_path.to_string_lossy().into_owned(),
+            root_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("只能读取输出根目录内的本地图片"));
+
+        let _ = fs::remove_dir_all(root_dir);
+        let _ = fs::remove_dir_all(outside_dir);
     }
     #[test]
     fn next_runtime_log_seed_uses_loaded_log_max_id_plus_one() {

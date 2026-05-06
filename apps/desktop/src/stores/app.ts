@@ -1438,7 +1438,7 @@ export const useAppStore = defineStore("app", () => {
       if (runtimeBridge.isNativeRuntime() && taskIds.length > 0) {
         await runtimeBridge.clearDownloadTasks(taskIds);
         for (const outputRootDir of outputRootDirectories) {
-          await runtimeBridge.clearDirectoryContents(outputRootDir);
+          await runtimeBridge.clearDirectoryContents(outputRootDir, outputRootDir);
         }
       }
 

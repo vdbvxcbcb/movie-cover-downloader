@@ -271,21 +271,21 @@ class RuntimeBridge {
   }
 
   // 清空输出根目录下的所有子目录和文件，但保留输出根目录本身。
-  async clearDirectoryContents(directoryPath: string) {
+  async clearDirectoryContents(directoryPath: string, rootDirectoryPath: string) {
     if (isTauriRuntime()) {
-      return invoke<number>("clear_directory_contents", { directoryPath });
+      return invoke<number>("clear_directory_contents", { directoryPath, rootDirectoryPath });
     }
 
     return 0;
   }
 
   // 自定义裁剪拖拽本地图片时读取图片字节，只在桌面端可用。
-  async readLocalImageFile(filePath: string) {
+  async readLocalImageFile(filePath: string, rootDirectoryPath: string) {
     if (!isTauriRuntime()) {
       throw new Error("拖拽读取本地图片仅在 Tauri 桌面环境可用");
     }
 
-    const bytes = await invoke<number[]>("read_local_image_file", { filePath });
+    const bytes = await invoke<number[]>("read_local_image_file", { filePath, rootDirectoryPath });
     return new Uint8Array(bytes);
   }
   // 保存自定义裁剪结果；桌面端写入输出目录，浏览器预览则触发下载。
