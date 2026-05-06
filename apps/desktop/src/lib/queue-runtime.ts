@@ -81,9 +81,15 @@ function buildOutputFolderName(title: string) {
   return `${sanitizeFolderSegment(title)} - ${date}`;
 }
 
+function formatDirectoryImageAspectRatio(imageAspectRatio: TaskItem["target"]["imageAspectRatio"]) {
+  return imageAspectRatio === "original" ? "original" : imageAspectRatio.replace(":", "x");
+}
+
 // 生成浏览器演示的输出目录字符串，不实际写入本地磁盘。
 function buildOutputDirectory(task: TaskItem, folderName: string) {
-  return `${task.target.outputRootDir.replace(/[\\/]+$/, "")}/${folderName}`;
+  const categoryDir = task.target.doubanAssetType;
+  const ratioDir = `${categoryDir}-${formatDirectoryImageAspectRatio(task.target.imageAspectRatio)}`;
+  return `${task.target.outputRootDir.replace(/[\\/]+$/, "")}/${folderName}/${categoryDir}/${ratioDir}`;
 }
 
 // 构造一张演示发现图片，填充分类、方向、尺寸和来源 URL。

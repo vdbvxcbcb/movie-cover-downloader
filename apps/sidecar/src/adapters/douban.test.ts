@@ -315,9 +315,11 @@ test("discover 成功时会按豆瓣抓图类型追加输出子目录", async ()
   const detailHtml = '<html><span property="v:itemreviewed">示例电影</span></html>';
   const photoHtml = '<html><img src="https://img1.doubanio.com/view/photo/m/public/p1.jpg"></html>';
   const cases = [
-    { assetType: "still", expectedDir: "still", pageType: "S" },
-    { assetType: "poster", expectedDir: "poster", pageType: "R" },
-    { assetType: "wallpaper", expectedDir: "wallpaper", pageType: "W" },
+    { assetType: "still", imageAspectRatio: "original", expectedDir: path.join("still", "still-original"), pageType: "S" },
+    { assetType: "still", imageAspectRatio: "9:16", expectedDir: path.join("still", "still-9x16"), pageType: "S" },
+    { assetType: "still", imageAspectRatio: "3:4", expectedDir: path.join("still", "still-3x4"), pageType: "S" },
+    { assetType: "poster", imageAspectRatio: "original", expectedDir: path.join("poster", "poster-original"), pageType: "R" },
+    { assetType: "wallpaper", imageAspectRatio: "original", expectedDir: path.join("wallpaper", "wallpaper-original"), pageType: "W" },
   ] as const;
 
   globalThis.setTimeout = ((callback: TimerHandler) => {
@@ -352,6 +354,7 @@ test("discover 成功时会按豆瓣抓图类型追加输出子目录", async ()
         createTask({
           outputRootDir: "D:/cover",
           doubanAssetType: testCase.assetType,
+          imageAspectRatio: testCase.imageAspectRatio,
         }),
         context,
       );

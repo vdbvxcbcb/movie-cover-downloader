@@ -4,7 +4,7 @@ import type { FetchedHtmlPage, SourceAdapter } from "./base.js";
 import { dedupeUrls, extractTitleFromHtml, fetchText, normalizeWhitespace } from "./base.js";
 import type { AdapterContext } from "./base.js";
 import type { DiscoveredImage, DiscoveryResult, SidecarTask } from "../shared/contracts.js";
-import { buildOutputDir, buildOutputFolderName } from "../utils/output-folder.js";
+import { buildOutputDir, buildOutputFolderName, formatDirectoryImageAspectRatio } from "../utils/output-folder.js";
 import { createResolvedSkeleton } from "../utils/source-detector.js";
 
 const doubanTypeMap = {
@@ -245,13 +245,14 @@ export class DoubanAdapter implements SourceAdapter {
     }
 
     const outputFolderName = buildOutputFolderName(title);
+    const imageAspectRatioDir = `${task.doubanAssetType}-${formatDirectoryImageAspectRatio(task.imageAspectRatio)}`;
     return {
       source: "douban",
       detailUrl: resolved.detailUrl,
       imagePageUrl: resolved.imagePageUrl,
       normalizedTitle: title,
       outputFolderName,
-      outputDir: path.join(buildOutputDir(task.outputRootDir, outputFolderName), task.doubanAssetType),
+      outputDir: path.join(buildOutputDir(task.outputRootDir, outputFolderName), task.doubanAssetType, imageAspectRatioDir),
       images: finalImages,
     };
   }

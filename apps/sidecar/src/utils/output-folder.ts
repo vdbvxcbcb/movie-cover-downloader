@@ -19,6 +19,10 @@ export function buildOutputDir(rootDir: string, folderName: string) {
 
 export type FileNameImageAspectRatio = "original" | "9:16" | "3:4";
 
+export function formatDirectoryImageAspectRatio(imageAspectRatio: FileNameImageAspectRatio) {
+  return imageAspectRatio === "original" ? "original" : imageAspectRatio.replace(":", "x");
+}
+
 // 把比例策略转换成文件名后缀；original 用“原图”，固定比例用 9x16/3x4。
 function formatFileNameImageAspectRatio(imageAspectRatio: FileNameImageAspectRatio) {
   return imageAspectRatio === "original" ? "原图" : imageAspectRatio.replace(":", "x");

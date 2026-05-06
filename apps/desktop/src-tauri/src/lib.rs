@@ -1256,6 +1256,49 @@ fn delete_directory_path(
 
     fs::remove_dir_all(&directory)
         .map_err(|error| format!("删除输出目录失败 {}: {error}", directory.display()))?;
+    if let Some(parent) = directory.parent() {
+        let removed_dir_name = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        let parent_dir_name = parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        let is_sized_category_dir = ["original", "9x16", "3x4"]
+            .iter()
+            .any(|suffix| removed_dir_name == format!("{parent_dir_name}-{suffix}"));
+        let mut parent_movie_dir = None;
+
+        if parent != root_directory.as_path()
+            && parent.starts_with(&root_directory)
+            && parent.is_dir()
+            && is_sized_category_dir
+            && fs::read_dir(parent)
+                .map_err(|error| format!("读取输出目录失败 {}: {error}", parent.display()))?
+                .next()
+                .is_none()
+        {
+            parent_movie_dir = parent.parent().map(Path::to_path_buf);
+            fs::remove_dir(parent)
+                .map_err(|error| format!("删除空输出目录失败 {}: {error}", parent.display()))?;
+        }
+        if let Some(movie_dir) = parent_movie_dir {
+            if movie_dir != root_directory
+                && movie_dir.starts_with(&root_directory)
+                && movie_dir.is_dir()
+                && fs::read_dir(&movie_dir)
+                    .map_err(|error| format!("读取输出目录失败 {}: {error}", movie_dir.display()))?
+                    .next()
+                    .is_none()
+            {
+                fs::remove_dir(&movie_dir).map_err(|error| {
+                    format!("删除空输出目录失败 {}: {error}", movie_dir.display())
+                })?;
+            }
+        }
+    }
+
     Ok(true)
 }
 
@@ -2260,7 +2303,8 @@ mod tests {
     #[test]
     fn delete_directory_path_removes_existing_output_directory() {
         let temp_dir = test_temp_dir("delete-output");
-        let output_dir = temp_dir.join("Movie - 2026-05-02").join("still");
+        let movie_dir = temp_dir.join("Movie - 2026-05-02");
+        let output_dir = movie_dir.join("still");
         fs::create_dir_all(&output_dir).unwrap();
         fs::write(output_dir.join("image.jpg"), "image").unwrap();
 
@@ -2272,6 +2316,81 @@ mod tests {
 
         assert!(deleted);
         assert!(!output_dir.exists());
+        assert!(movie_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn delete_directory_path_removes_empty_parent_directory() {
+        let temp_dir = test_temp_dir("delete-empty-parent");
+        let movie_dir = temp_dir.join("Movie - 2026-05-02");
+        let category_dir = movie_dir.join("still");
+        let output_dir = category_dir.join("still-original");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::write(output_dir.join("image.jpg"), "image").unwrap();
+
+        let deleted = delete_directory_path(
+            output_dir.to_string_lossy().into_owned(),
+            temp_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+
+        assert!(deleted);
+        assert!(!output_dir.exists());
+        assert!(!category_dir.exists());
+        assert!(!movie_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn delete_directory_path_keeps_non_empty_movie_directory() {
+        let temp_dir = test_temp_dir("delete-non-empty-movie");
+        let movie_dir = temp_dir.join("Movie - 2026-05-02");
+        let category_dir = movie_dir.join("still");
+        let output_dir = category_dir.join("still-original");
+        let sibling_category_dir = movie_dir.join("poster");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::create_dir_all(&sibling_category_dir).unwrap();
+        fs::write(output_dir.join("image.jpg"), "image").unwrap();
+
+        let deleted = delete_directory_path(
+            output_dir.to_string_lossy().into_owned(),
+            temp_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+
+        assert!(deleted);
+        assert!(!output_dir.exists());
+        assert!(!category_dir.exists());
+        assert!(movie_dir.exists());
+        assert!(sibling_category_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn delete_directory_path_keeps_non_empty_parent_directory() {
+        let temp_dir = test_temp_dir("delete-non-empty-parent");
+        let category_dir = temp_dir.join("Movie - 2026-05-02").join("still");
+        let output_dir = category_dir.join("still-original");
+        let sibling_dir = category_dir.join("still-9x16");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::create_dir_all(&sibling_dir).unwrap();
+        fs::write(output_dir.join("image.jpg"), "image").unwrap();
+        fs::write(sibling_dir.join("image.jpg"), "image").unwrap();
+
+        let deleted = delete_directory_path(
+            output_dir.to_string_lossy().into_owned(),
+            temp_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+
+        assert!(deleted);
+        assert!(!output_dir.exists());
+        assert!(category_dir.exists());
+        assert!(sibling_dir.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -2362,4 +2481,3 @@ mod tests {
         assert!(!registry.is_paused("task-1"));
     }
 }
-
