@@ -15,6 +15,7 @@
         "title": "影视封面下载器",
         "width": 1520,
         "height": 960,
+        "maximized": true,
         "minWidth": 1280,
         "minHeight": 800,
         "resizable": true

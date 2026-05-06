@@ -5,6 +5,8 @@
   line-height: 1.5;
   font-weight: 400;
   background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02), transparent 45%),
     radial-gradient(circle at top left, rgba(24, 197, 190, 0.18), transparent 28%),
     radial-gradient(circle at top right, rgba(255, 159, 67, 0.12), transparent 24%),
     linear-gradient(135deg, #071419 0%, #0b1f25 48%, #14282b 100%);
@@ -70,9 +72,6 @@ p {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.02), transparent 45%);
 }
 
 .rail {
