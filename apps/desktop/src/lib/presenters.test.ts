@@ -124,7 +124,7 @@ test("失败任务即使下载数量已满也不会被推断为完成", () => {
   assert.equal(describeQueueAction(task).label, "重试");
 });
 
-test("未完成任务操作列保留重试按钮", () => {
+test("失败任务操作列保留重试按钮", () => {
   const descriptor = describeQueueAction(
     createTask({
       lifecycle: {
@@ -139,6 +139,24 @@ test("未完成任务操作列保留重试按钮", () => {
     label: "重试",
     action: "retry",
     disabled: false,
+  });
+});
+
+test("待处理任务操作列显示待处理", () => {
+  const descriptor = describeQueueAction(
+    createTask({
+      lifecycle: {
+        phase: "queued",
+        attempts: 0,
+        updatedAt: "2026-05-01 21:19:00",
+      },
+    }),
+  );
+
+  assert.deepEqual(descriptor, {
+    label: "待处理",
+    action: "none",
+    disabled: true,
   });
 });
 

@@ -121,6 +121,14 @@ export function describeQueueAction(task: TaskItem) {
     };
   }
 
+  if (task.lifecycle.phase === "queued") {
+    return {
+      label: "待处理",
+      action: "none" as const,
+      disabled: true,
+    };
+  }
+
   if (
     task.lifecycle.phase === "resolving" ||
     task.lifecycle.phase === "discovering" ||

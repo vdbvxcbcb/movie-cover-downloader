@@ -17,7 +17,7 @@ import type { TaskItem } from "../../types/app";
 
 const props = defineProps<{
   tasks: TaskItem[];
-  queueRunning?: boolean;
+  activeTaskIds?: string[];
 }>();
 
 const emit = defineEmits<{
@@ -56,22 +56,6 @@ const pagination = computed(() => {
   taskRenderDependencyKey.value;
   return paginateItems(props.tasks, currentPage.value);
 });
-
-// 当前页任务的渲染 key，确保分页和进度变化时表格行稳定刷新。
-const visibleTaskRenderKey = computed(() =>
-  pagination.value.pageItems
-    .map((task) =>
-      [
-        task.id,
-        task.title,
-        task.lifecycle.phase,
-        task.summary,
-        task.download?.savedCount ?? -1,
-        task.download?.targetCount ?? -1,
-      ].join(":"),
-    )
-    .join("|"),
-);
 
 watch(
   () => props.tasks,
@@ -161,6 +145,11 @@ function getQueueActionDescriptor(task: TaskItem) {
   return describeQueueAction(task);
 }
 
+// 单条删除只受当前任务自身是否仍在执行影响；其他任务下载不应挡住已暂停任务。
+function isTaskDeleteDisabled(task: TaskItem) {
+  return Boolean(props.activeTaskIds?.includes(task.id) && task.lifecycle.phase !== "paused");
+}
+
 // 跳转到指定页，并同步页码输入框。
 function goToPage(page: number) {
   const nextPage = clampTaskPage(page, pagination.value.totalPages);
@@ -218,7 +207,7 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
           <th>操作</th>
         </tr>
       </thead>
-      <tbody :key="visibleTaskRenderKey">
+      <tbody>
         <tr v-for="task in pagination.pageItems" :key="task.id">
           <td class="task-table__title">
             <div class="title-cell">
@@ -264,7 +253,7 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
                 title="删除这条任务？"
                 description="任务记录和本地输出目录会一起删除。"
                 confirm-label="删除"
-                :disabled="props.queueRunning"
+                :disabled="isTaskDeleteDisabled(task)"
                 @confirm="emit('remove', task.id)"
               />
             </div>

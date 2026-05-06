@@ -1082,14 +1082,103 @@ test("队列下载中不能删除单条任务", async () => {
     return taskIds.length;
   };
 
-  await appStore.createTasks([createDraft()]);
+  await appStore.createTasks([createDraft(), createDraft({ detailUrl: "https://movie.douban.com/subject/1292052/" })]);
   const taskId = appStore.tasks[0]!.id;
+  const runningTaskId = appStore.tasks[1]!.id;
   appStore.queueRunning = true;
+  appStore.activeTaskIds = [taskId, runningTaskId];
+  appStore.tasks[0] = {
+    ...appStore.tasks[0]!,
+    lifecycle: {
+      ...appStore.tasks[0]!.lifecycle,
+      phase: "downloading",
+    },
+  };
 
   await appStore.deleteTask(taskId);
 
   assert.deepEqual(clearedTaskIds, []);
+  assert.equal(appStore.tasks.length, 2);
+});
+
+test("已暂停任务可以在队列未结束时删除", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  const clearedTaskIds: string[][] = [];
+  const deletedDirectories: string[] = [];
+
+  runtimeBridge.clearDownloadTasks = async (taskIds: string[]) => {
+    clearedTaskIds.push(taskIds);
+    return taskIds.length;
+  };
+  runtimeBridge.deleteDirectoryPath = async (directoryPath: string) => {
+    deletedDirectories.push(directoryPath);
+    return directoryPath;
+  };
+
+  await appStore.createTasks([createDraft(), createDraft({ detailUrl: "https://movie.douban.com/subject/1292052/" })]);
+  const taskId = appStore.tasks[0]!.id;
+  const runningTaskId = appStore.tasks[1]!.id;
+  appStore.queueRunning = true;
+  appStore.activeTaskIds = [taskId, runningTaskId];
+  appStore.tasks[0] = {
+    ...appStore.tasks[0]!,
+    lifecycle: {
+      ...appStore.tasks[0]!.lifecycle,
+      phase: "paused",
+    },
+    summary: "任务已暂停",
+  };
+  appStore.tasks[1] = {
+    ...appStore.tasks[1]!,
+    lifecycle: {
+      ...appStore.tasks[1]!.lifecycle,
+      phase: "downloading",
+    },
+  };
+
+  await appStore.deleteTask(taskId);
+
+  assert.deepEqual(clearedTaskIds, [[taskId]]);
+  assert.deepEqual(deletedDirectories, []);
   assert.equal(appStore.tasks.length, 1);
+  assert.equal(appStore.tasks[0]?.id, runningTaskId);
+});
+
+test("删除一个已暂停任务后仍可清空剩余已暂停任务", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  const clearedTaskIds: string[][] = [];
+  const clearedRootDirectories: string[] = [];
+
+  runtimeBridge.clearDownloadTasks = async (taskIds: string[]) => {
+    clearedTaskIds.push(taskIds);
+    return taskIds.length;
+  };
+  runtimeBridge.clearDirectoryContents = async (directoryPath: string) => {
+    clearedRootDirectories.push(directoryPath);
+    return 1;
+  };
+
+  await appStore.createTasks([createDraft(), createDraft({ detailUrl: "https://movie.douban.com/subject/1292052/" })]);
+  const deletedTaskId = appStore.tasks[0]!.id;
+  const remainingTaskId = appStore.tasks[1]!.id;
+  appStore.queueRunning = true;
+  appStore.activeTaskIds = [deletedTaskId, remainingTaskId];
+  appStore.tasks = appStore.tasks.map((task) => ({
+    ...task,
+    lifecycle: {
+      ...task.lifecycle,
+      phase: "paused",
+    },
+    summary: "任务已暂停",
+  }));
+
+  await appStore.deleteTask(deletedTaskId);
+  await appStore.clearQueueTasks();
+
+  assert.deepEqual(clearedTaskIds, [[deletedTaskId], [remainingTaskId]]);
+  assert.deepEqual(clearedRootDirectories, ["D:/cover"]);
+  assert.equal(appStore.tasks.length, 0);
+  assert.equal(appStore.queueRunning, false);
 });
 
 test("clear queue clears output root directories for all tasks", async () => {
@@ -1162,10 +1251,53 @@ test("队列下载中不能清空全部任务", async () => {
 
   await appStore.createTasks([createDraft(), createDraft({ detailUrl: "https://movie.douban.com/subject/1292052/" })]);
   appStore.queueRunning = true;
+  appStore.activeTaskIds = [appStore.tasks[0]!.id];
+  appStore.tasks[0] = {
+    ...appStore.tasks[0]!,
+    lifecycle: {
+      ...appStore.tasks[0]!.lifecycle,
+      phase: "downloading",
+    },
+  };
 
   await appStore.clearQueueTasks();
 
   assert.deepEqual(clearedTaskIds, []);
   assert.equal(appStore.tasks.length, 2);
+});
+
+test("队列只剩已暂停任务时可以清空", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  const clearedTaskIds: string[][] = [];
+  const clearedRootDirectories: string[] = [];
+
+  runtimeBridge.clearDownloadTasks = async (taskIds: string[]) => {
+    clearedTaskIds.push(taskIds);
+    return taskIds.length;
+  };
+  runtimeBridge.clearDirectoryContents = async (directoryPath: string) => {
+    clearedRootDirectories.push(directoryPath);
+    return 1;
+  };
+
+  await appStore.createTasks([createDraft()]);
+  const taskId = appStore.tasks[0]!.id;
+  appStore.queueRunning = true;
+  appStore.activeTaskIds = [taskId];
+  appStore.tasks[0] = {
+    ...appStore.tasks[0]!,
+    lifecycle: {
+      ...appStore.tasks[0]!.lifecycle,
+      phase: "paused",
+    },
+    summary: "任务已暂停",
+  };
+
+  await appStore.clearQueueTasks();
+
+  assert.deepEqual(clearedTaskIds, [[taskId]]);
+  assert.deepEqual(clearedRootDirectories, ["D:/cover"]);
+  assert.equal(appStore.tasks.length, 0);
+  assert.equal(appStore.queueRunning, false);
 });
 

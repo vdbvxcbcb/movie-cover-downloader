@@ -12,7 +12,7 @@ import { useAppStore } from "../stores/app";
 import { compareTaskAddedOrder } from "../lib/task-order";
 
 const appStore = useAppStore();
-const { tasks, cookies, queueRunning } = storeToRefs(appStore);
+const { tasks, cookies, queueRunning, activeTaskIds, queueHasActiveDownloads } = storeToRefs(appStore);
 // 控制中心界面按任务添加时间正序展示：旧任务在上，新任务在下。
 const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder));
 // Cookie 列表至少存在一条记录时，才允许使用后续业务操作。
@@ -20,7 +20,7 @@ const hasCookieProfiles = computed(() => cookies.value.length > 0);
 // 清空队列任务还需要队列里确实有任务。
 const hasQueueTasks = computed(() => tasks.value.length > 0);
 const disableCookieRequiredActions = computed(() => !hasCookieProfiles.value);
-const disableClearQueue = computed(() => disableCookieRequiredActions.value || queueRunning.value || !hasQueueTasks.value || appStore.isActionPending("queue.clear-all"));
+const disableClearQueue = computed(() => disableCookieRequiredActions.value || queueHasActiveDownloads.value || !hasQueueTasks.value || appStore.isActionPending("queue.clear-all"));
 </script>
 
 <template>
@@ -73,7 +73,7 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
     <PanelSection eyebrow="Queue" title="下载队列">
       <TaskTable
         :tasks="orderedTasks"
-        :queue-running="queueRunning"
+        :active-task-ids="activeTaskIds"
         @retry="void appStore.retryTask($event)"
         @pause="void appStore.pauseTask($event)"
         @resume="void appStore.resumeTask($event)"

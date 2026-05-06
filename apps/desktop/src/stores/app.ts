@@ -829,6 +829,14 @@ export const useAppStore = defineStore("app", () => {
     return tasks.value.find((task) => task.id === taskId);
   }
 
+  // 删除/清空队列只需要避开仍在真实执行的任务；已进入 paused 的任务允许取消并清理。
+  const queueHasActiveDownloads = computed(() =>
+    activeTaskIds.value.some((taskId) => {
+      const task = getTaskById(taskId);
+      return task ? task.lifecycle.phase !== "paused" : false;
+    }),
+  );
+
   // 应用浏览器演示运行时返回的 Cookie 成功/失败/冷却变更。
   function applyCookieMutations(mutations?: CookieMutation[]) {
     if (!mutations?.length) return;
@@ -1375,13 +1383,13 @@ export const useAppStore = defineStore("app", () => {
 
   // 删除单个任务，同时取消后台进程并删除该任务生成的输出目录。
   async function deleteTask(taskId: string) {
-    if (queueRunning.value) {
-      showNotice("队列下载中，不能删除任务", "warn");
-      return;
-    }
-
     await withPending(`queue.delete.${taskId}`, async () => {
       const task = tasks.value.find((item) => item.id === taskId);
+      if (activeTaskIds.value.includes(taskId) && task?.lifecycle.phase !== "paused") {
+        showNotice("任务下载中，不能删除任务", "warn");
+        return;
+      }
+
       const outputDirectory = task ? getTaskGeneratedOutputDirectory(task) : null;
 
       if (runtimeBridge.isNativeRuntime() && task) {
@@ -1392,6 +1400,7 @@ export const useAppStore = defineStore("app", () => {
       }
 
       tasks.value = tasks.value.filter((item) => item.id !== taskId);
+      activeTaskIds.value = activeTaskIds.value.filter((item) => item !== taskId);
       progressTick.value += 1;
       schedulePersist();
       await emitLog(
@@ -1408,7 +1417,7 @@ export const useAppStore = defineStore("app", () => {
 
   // 清空队列时移除记录、取消后台任务，并清空这些任务所属输出根目录下的所有内容。
   async function clearQueueTasks() {
-    if (queueRunning.value) {
+    if (queueHasActiveDownloads.value) {
       showNotice("队列下载中，不能清空队列任务", "warn");
       return;
     }
@@ -1586,6 +1595,7 @@ export const useAppStore = defineStore("app", () => {
     notice,
     pendingActionIds,
     activeTaskIds,
+    queueHasActiveDownloads,
     clearNotice,
     syncCreateTaskDetailUrls,
     syncCreateTaskOutputRootDir,
