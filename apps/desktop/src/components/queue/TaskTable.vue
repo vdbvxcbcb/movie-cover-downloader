@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 任务队列表格：负责分页展示任务和触发单任务操作。
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
 import StatusPill from "../common/StatusPill.vue";
@@ -13,6 +13,7 @@ import {
 } from "../../lib/presenters";
 import { clampTaskPage, paginateItems } from "../../lib/task-pagination";
 import { runtimeBridge } from "../../lib/runtime-bridge";
+import { useAppStore } from "../../stores/app";
 import type { TaskItem } from "../../types/app";
 
 const props = defineProps<{
@@ -29,11 +30,20 @@ const emit = defineEmits<{
 }>();
 
 const isNativeRuntime = runtimeBridge.isNativeRuntime();
+const appStore = useAppStore();
 const nativeBackgroundPhases = new Set(["resolving", "discovering", "downloading"]);
 const currentPage = ref(1);
 const jumpPageInput = ref("1");
 const coverCache = ref<Record<string, string>>({});
 const failedCoverSources = ref<Record<string, string>>({});
+const copiedTaskId = ref("");
+let copiedIconTimer: ReturnType<typeof setTimeout> | undefined;
+
+onBeforeUnmount(() => {
+  if (copiedIconTimer) {
+    clearTimeout(copiedIconTimer);
+  }
+});
 
 // 表格使用显式渲染依赖，让进度事件推进时即使任务对象引用变化较小也能刷新单元格。
 const taskRenderDependencyKey = computed(() =>
@@ -191,6 +201,21 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
     emit("resume", taskId);
   }
 }
+
+async function copyTaskDetailUrl(task: TaskItem) {
+  await navigator.clipboard.writeText(task.target.detailUrl);
+  copiedTaskId.value = task.id;
+  appStore.showNotice("已复制链接", "success");
+
+  if (copiedIconTimer) {
+    clearTimeout(copiedIconTimer);
+  }
+  copiedIconTimer = setTimeout(() => {
+    if (copiedTaskId.value === task.id) {
+      copiedTaskId.value = "";
+    }
+  }, 1600);
+}
 </script>
 
 <template>
@@ -212,7 +237,31 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
           <td class="task-table__title">
             <div class="title-cell">
               <strong>{{ formatTaskTitle(task) }}</strong>
-              <span class="table-text">{{ task.target.detailUrl }}</span>
+              <span class="task-url-copy">
+                <button
+                  type="button"
+                  class="task-url-copy__text table-text"
+                  title="点击复制链接"
+                  @click="void copyTaskDetailUrl(task)"
+                >
+                  {{ task.target.detailUrl }}
+                </button>
+                <button
+                  type="button"
+                  class="task-url-copy__button"
+                  title="点击复制链接"
+                  :aria-label="`复制 ${formatTaskTitle(task)} 的链接`"
+                  @click="void copyTaskDetailUrl(task)"
+                >
+                  <svg v-if="copiedTaskId === task.id" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="9" y="9" width="10" height="10" rx="2" />
+                    <path d="M5 15V7a2 2 0 0 1 2-2h8" />
+                  </svg>
+                </button>
+              </span>
             </div>
           </td>
           <td class="task-table__cover">
@@ -343,6 +392,71 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
   display: block;
   word-break: break-all;
   white-space: normal;
+}
+
+.task-url-copy {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.task-url-copy__text {
+  margin: 0;
+  padding: 1px 4px 2px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgba(141, 164, 160, 0.42);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    text-decoration-color 160ms ease;
+}
+
+.task-url-copy__text:hover,
+.task-url-copy__text:focus-visible {
+  background: rgba(77, 212, 198, 0.08);
+  color: var(--text);
+  text-decoration-color: rgba(77, 212, 198, 0.72);
+  outline: none;
+}
+
+.task-url-copy__button {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease;
+}
+
+.task-url-copy__button:hover,
+.task-url-copy__button:focus-visible {
+  background: rgba(77, 212, 198, 0.12);
+  color: var(--text);
+  outline: none;
+}
+
+.task-url-copy__button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .task-pagination {

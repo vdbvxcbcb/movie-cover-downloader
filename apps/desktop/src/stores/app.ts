@@ -1597,6 +1597,7 @@ export const useAppStore = defineStore("app", () => {
     activeTaskIds,
     queueHasActiveDownloads,
     clearNotice,
+    showNotice,
     syncCreateTaskDetailUrls,
     syncCreateTaskOutputRootDir,
     addCreateTaskDetailUrl,
