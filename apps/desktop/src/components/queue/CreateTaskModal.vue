@@ -404,7 +404,7 @@ function cancelReplacementSubmit() {
         <label class="field field--wide">
           <span>输出目录</span>
           <div class="field-inline">
-            <input v-model="form.outputRootDir" placeholder="例如：D:/cover" />
+            <input v-model="form.outputRootDir" placeholder="例如：D:\cover" />
             <ActionButton label="浏览" @click="void browseOutputDirectory()" />
           </div>
         </label>
