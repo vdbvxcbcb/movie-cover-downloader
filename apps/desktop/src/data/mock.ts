@@ -90,5 +90,6 @@ export function createInitialAppSeed(): AppSeedState {
     cookies: [],
     logs: structuredClone(initialLogs),
     queueConfig: structuredClone(defaultQueueConfig),
+    createTaskOutputRootDir: "",
   };
 }

@@ -90,13 +90,20 @@ function buildPersistErrorNotice(message: string) {
 }
 
 // 把当前 store 状态组装成持久化快照，Rust 会按这个结构写入 SQLite。
-function toSnapshot(tasks: TaskItem[], cookies: CookieProfile[], logs: AppSeedState["logs"], queueConfig: QueueConfig): AppSeedState {
+function toSnapshot(
+  tasks: TaskItem[],
+  cookies: CookieProfile[],
+  logs: AppSeedState["logs"],
+  queueConfig: QueueConfig,
+  createTaskOutputRootDir: string,
+): AppSeedState {
   return {
     schemaVersion: 2,
     tasks: clonePersistable(tasks),
     cookies: clonePersistable(cookies),
     logs: normalizeSnapshotLogs(logs),
     queueConfig: clonePersistable(queueConfig),
+    createTaskOutputRootDir,
   };
 }
 
@@ -667,7 +674,7 @@ export const useAppStore = defineStore("app", () => {
         clearPersistTimers();
         try {
           await runtimeBridge.saveState(
-            toSnapshot(tasks.value, cookies.value, logs.value, queueConfig.value),
+            toSnapshot(tasks.value, cookies.value, logs.value, queueConfig.value, createTaskOutputRootDir.value),
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -718,7 +725,10 @@ export const useAppStore = defineStore("app", () => {
 
   // 同步新增链接任务弹窗中的输出根目录，供自定义裁剪复用。
   function syncCreateTaskOutputRootDir(value: string) {
-    createTaskOutputRootDir.value = value.trim();
+    const nextValue = value.trim();
+    if (createTaskOutputRootDir.value === nextValue) return;
+    createTaskOutputRootDir.value = nextValue;
+    schedulePersist();
   }
 
   function getCreateTaskMoviePreview(detailUrl: string) {
@@ -1037,7 +1047,9 @@ export const useAppStore = defineStore("app", () => {
         if (snapshot) {
           tasks.value = rehydrateTasks(snapshot.tasks);
           const latestTask = tasks.value[tasks.value.length - 1];
-          if (latestTask?.target.outputRootDir) {
+          if (Object.prototype.hasOwnProperty.call(snapshot, "createTaskOutputRootDir")) {
+            createTaskOutputRootDir.value = snapshot.createTaskOutputRootDir?.trim() ?? "";
+          } else if (latestTask?.target.outputRootDir) {
             createTaskOutputRootDir.value = latestTask.target.outputRootDir;
           }
           const normalizedCookies = normalizeCookieProfiles(snapshot.cookies);

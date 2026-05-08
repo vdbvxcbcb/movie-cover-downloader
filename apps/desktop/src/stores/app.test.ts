@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createPinia, setActivePinia } from "pinia";
 import { formatTaskProgress, getTaskProgressPercent } from "../lib/presenters";
-import type { RuntimeDownloadTaskResult, RuntimeTaskProgressEvent, TaskDraft } from "../types/app";
+import type { AppSeedState, RuntimeDownloadTaskResult, RuntimeTaskProgressEvent, TaskDraft } from "../types/app";
 
 // 创建测试用 window/localStorage/prompt stub，避免 Pinia store 测试依赖真实浏览器环境。
 function createWindowStub() {
@@ -101,6 +101,23 @@ function createSuccessResult(imageCount = 1): RuntimeDownloadTaskResult {
 }
 
 // 初始化 Pinia store 测试环境，并注入可控的 runtimeBridge mock。
+function createPersistedSnapshot(overrides: Partial<AppSeedState> = {}): AppSeedState {
+  return {
+    schemaVersion: 2,
+    tasks: [],
+    cookies: [],
+    logs: [],
+    queueConfig: {
+      batchSize: 4,
+      concurrency: 2,
+      failureCooldownMs: 10_000,
+      maxAttempts: 3,
+    },
+    createTaskOutputRootDir: "",
+    ...overrides,
+  };
+}
+
 async function setupStore(overrides?: {
   loadState?: typeof import("../lib/runtime-bridge").runtimeBridge.loadState;
   saveState?: typeof import("../lib/runtime-bridge").runtimeBridge.saveState;
@@ -179,6 +196,26 @@ test("首次打开新增任务时输出目录保持空白", async () => {
 
   appStore.syncCreateTaskOutputRootDir("");
   assert.equal(appStore.createTaskOutputRootDir, "");
+});
+
+test("已设置的新增任务输出目录会在重启后恢复", async () => {
+  const savedSnapshots: AppSeedState[] = [];
+  const { appStore } = await setupStore({
+    saveState: async (snapshot) => {
+      savedSnapshots.push(snapshot);
+    },
+  });
+
+  appStore.syncCreateTaskOutputRootDir("E:/movie-cover");
+  await waitFor(() => savedSnapshots.length > 0);
+
+  assert.equal(savedSnapshots.at(-1)?.createTaskOutputRootDir, "E:/movie-cover");
+
+  const { appStore: restartedStore } = await setupStore({
+    loadState: async () => createPersistedSnapshot({ createTaskOutputRootDir: "E:/movie-cover" }),
+  });
+
+  assert.equal(restartedStore.createTaskOutputRootDir, "E:/movie-cover");
 });
 
 test("持久化状态加载失败后仍会完成 hydration 并允许后续保存", async () => {

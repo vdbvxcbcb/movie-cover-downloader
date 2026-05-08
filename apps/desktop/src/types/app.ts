@@ -198,6 +198,7 @@ export interface AppSeedState {
   cookies: CookieProfile[];
   logs: LogEntry[];
   queueConfig: QueueConfig;
+  createTaskOutputRootDir?: string;
 }
 
 export interface RuntimeDiscoveredAsset {
