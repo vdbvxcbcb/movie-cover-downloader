@@ -3,21 +3,24 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import ActionButton from "./ActionButton.vue";
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     label: string;
     title: string;
     description?: string;
     confirmLabel?: string;
     cancelLabel?: string;
+    variant?: "primary" | "ghost";
     size?: "md" | "sm";
     bubbleSize?: "compact" | "normal";
     disabled?: boolean;
+    beforeOpen?: () => boolean | Promise<boolean>;
   }>(),
   {
     description: "",
     confirmLabel: "确认",
     cancelLabel: "取消",
+    variant: "ghost",
     size: "md",
     bubbleSize: "compact",
     disabled: false,
@@ -62,7 +65,11 @@ function updateBubblePosition() {
 }
 
 // 打开气泡确认框，并在下一轮渲染后计算定位。
-function open() {
+async function open() {
+  if (props.beforeOpen && !(await props.beforeOpen())) {
+    return;
+  }
+
   isOpen.value = true;
   void nextTick(updateBubblePosition);
 }
@@ -129,7 +136,7 @@ onBeforeUnmount(() => {
 
 <template>
   <span ref="rootRef" class="pop-confirm-action">
-    <ActionButton :label="label" :size="size" :disabled="disabled" @click="open" />
+    <ActionButton :label="label" :variant="variant" :size="size" :disabled="disabled" @click="void open()" />
     <Teleport to="body">
       <span
         v-if="isOpen"
@@ -195,6 +202,8 @@ onBeforeUnmount(() => {
 .pop-confirm-action__bubble strong {
   font-size: 0.82rem;
   line-height: 1.25;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .pop-confirm-action__bubble span {

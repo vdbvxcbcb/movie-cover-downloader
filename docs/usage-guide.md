@@ -242,30 +242,30 @@ https://movie.douban.com/subject/35010610/
 任务加入队列后，程序会在输出目录下自动创建：
 
 ```text
-片名 + 日期
+片名
 ```
 
 其中：
 
-- 会根据豆瓣创建 `片名 + 日期`，再按抓图类型进入对应子目录：
+- 会根据豆瓣创建 `片名`，再按抓图类型进入对应子目录：
   `still / poster / wallpaper`
 
 例如豆瓣剧照：
 
 ```text
-D:\cover\示例电影 - 2026-05-01\still
+D:\cover\示例电影\still
 ```
 
 例如豆瓣海报：
 
 ```text
-D:\cover\示例电影 - 2026-05-01\poster
+D:\cover\示例电影\poster
 ```
 
 例如豆瓣壁纸：
 
 ```text
-D:\cover\示例电影 - 2026-05-01\wallpaper
+D:\cover\示例电影\wallpaper
 ```
 
 任务完成后，下载队列里“输出目录”这一列可以直接点击，打开的是该任务最终子目录，而不是根目录。
@@ -384,7 +384,7 @@ dbcl2="177473297:xxxxxx"; ck=hb-J; bid=DYDcN1_PDPs; ll="118289"; ap_v=0,6.0
 - 访问详情页
 - 根据任务选项自动改写到 `photos?type=S/R/W`
 - 进入图片抓取链路
-- 自动创建 `片名 + 日期\still|poster|wallpaper` 子目录
+- 自动创建 `片名\still|poster|wallpaper` 子目录
 - 真实下载到本地目录
 - 默认启用保护模式
 - 豆瓣任务串行执行，避免同一时间并发打多个豆瓣任务

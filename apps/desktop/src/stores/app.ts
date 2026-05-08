@@ -37,6 +37,10 @@ const resolvedTitleLogPrefix = "片名已解析: ";
 const discoveredImagesLogPattern = /^(?:\[[^\]]+\]\s*)?discovered\s+(\d+)\s+images\s+from\s+\S+\s+->\s+(.+)$/i;
 const savedImageLogPattern = /^(?:\[[^\]]+\]\s*)?saved image:\s*(.+)$/i;
 
+interface CreateTasksOptions {
+  replacementTaskIds?: string[];
+}
+
 // 生成任务、日志和 Cookie 记录使用的当前本地时间字符串。
 function timestampNow() {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -206,7 +210,16 @@ function extractSavedImagePathFromLogMessage(message: string) {
 
 // 比较目录时统一去掉结尾斜杠并转小写，避免 Windows 路径大小写差异。
 function normalizeComparablePath(path: string) {
-  return path.trim().replace(/[\\/]+$/, "").toLowerCase();
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function isSameTaskTarget(task: TaskItem, draft: TaskDraft) {
+  return (
+    normalizeComparableDetailUrl(task.target.detailUrl) === normalizeComparableDetailUrl(draft.detailUrl) &&
+    normalizeComparablePath(task.target.outputRootDir) === normalizeComparablePath(draft.outputRootDir) &&
+    task.target.doubanAssetType === draft.doubanAssetType &&
+    task.target.imageAspectRatio === draft.imageAspectRatio
+  );
 }
 
 // 找出任务真正生成的子输出目录；如果只是输出根目录则拒绝作为删除目标。
@@ -829,6 +842,21 @@ export const useAppStore = defineStore("app", () => {
     return tasks.value.find((task) => task.id === taskId);
   }
 
+  function findDuplicateTasksForDrafts(drafts: TaskDraft[]) {
+    const duplicateTaskIds = new Set<string>();
+    const duplicateTasks: TaskItem[] = [];
+
+    for (const draft of drafts) {
+      const duplicateTask = tasks.value.find((task) => isSameTaskTarget(task, draft));
+      if (!duplicateTask || duplicateTaskIds.has(duplicateTask.id)) continue;
+
+      duplicateTaskIds.add(duplicateTask.id);
+      duplicateTasks.push(duplicateTask);
+    }
+
+    return duplicateTasks;
+  }
+
   // 删除/清空队列只需要避开仍在真实执行的任务；已进入 paused 的任务允许取消并清理。
   const queueHasActiveDownloads = computed(() =>
     activeTaskIds.value.some((taskId) => {
@@ -1136,7 +1164,12 @@ export const useAppStore = defineStore("app", () => {
         doubanCookie: cookie?.value,
       });
 
-      replaceTask(buildCompletedTask(task, result, attempts));
+      const latestTask = getTaskById(task.id);
+      if (!latestTask) {
+        return;
+      }
+
+      replaceTask(buildCompletedTask(latestTask, result, attempts));
       progressTick.value += 1;
 
       if (cookie && result.discovery.source === "douban") {
@@ -1246,7 +1279,12 @@ export const useAppStore = defineStore("app", () => {
 
         const inFlight = new Set<Promise<void>>();
         for (const task of batch) {
-          const runner = processTask(task).finally(() => {
+          const latestTask = getTaskById(task.id);
+          if (!latestTask || !runnablePhases.has(latestTask.lifecycle.phase) || activeTaskIds.value.includes(latestTask.id)) {
+            continue;
+          }
+
+          const runner = processTask(latestTask).finally(() => {
             inFlight.delete(runner);
           });
           inFlight.add(runner);
@@ -1281,9 +1319,15 @@ export const useAppStore = defineStore("app", () => {
   }
 
   // 批量创建链接任务，写日志、关闭弹窗，并自动启动队列。
-  async function createTasks(drafts: TaskDraft[]) {
+  async function createTasks(drafts: TaskDraft[], options: CreateTasksOptions = {}) {
     await withPending("queue.create-task", async () => {
       syncCreateTaskOutputRootDir(drafts[0]?.outputRootDir ?? createTaskOutputRootDir.value);
+      const replacementTaskIds = new Set(options.replacementTaskIds ?? []);
+      const replacementTasks = tasks.value.filter((task) => replacementTaskIds.has(task.id));
+      const replacementOutputDirectories = replacementTasks.flatMap((task) => {
+        const outputDirectory = getTaskGeneratedOutputDirectory(task);
+        return outputDirectory ? [outputDirectory] : [];
+      });
       const createdTasks = drafts.map((draft) => {
         const preview = getCreateTaskMoviePreview(draft.detailUrl);
         return createTaskFromDraft(nextTaskId(), {
@@ -1292,14 +1336,32 @@ export const useAppStore = defineStore("app", () => {
           coverDataUrl: draft.coverDataUrl ?? preview?.coverDataUrl,
         });
       });
-      tasks.value = [...tasks.value, ...createdTasks];
+
+      if (replacementTaskIds.size > 0) {
+        await runtimeBridge.clearDownloadTasks(Array.from(replacementTaskIds));
+        for (const outputDirectory of replacementOutputDirectories) {
+          await runtimeBridge.clearDirectoryContents(outputDirectory.directoryPath, outputDirectory.rootDirectoryPath);
+        }
+        activeTaskIds.value = activeTaskIds.value.filter((taskId) => !replacementTaskIds.has(taskId));
+      }
+
+      tasks.value = [...tasks.value.filter((task) => !replacementTaskIds.has(task.id)), ...createdTasks];
       schedulePersist();
       await emitLog(
-        "INFO",
+        replacementTaskIds.size > 0 ? "WARN" : "INFO",
         "command",
-        `新增链接任务 ${createdTasks.length} 个 -> ${drafts[0]?.outputRootDir ?? ""} / 并发 ${queueConfig.value.concurrency}`,
+        replacementTaskIds.size > 0
+          ? `已覆盖重复任务 ${replacementTaskIds.size} 个，并新增链接任务 ${createdTasks.length} 个 -> ${drafts[0]?.outputRootDir ?? ""}`
+          : `新增链接任务 ${createdTasks.length} 个 -> ${drafts[0]?.outputRootDir ?? ""} / 并发 ${queueConfig.value.concurrency}`,
       );
-      showNotice(createdTasks.length > 1 ? `已新增 ${createdTasks.length} 个链接任务` : "已新增链接任务", "success");
+      showNotice(
+        replacementTaskIds.size > 0
+          ? `已覆盖 ${replacementTaskIds.size} 个旧任务并重新加入队列`
+          : createdTasks.length > 1
+            ? `已新增 ${createdTasks.length} 个链接任务`
+            : "已新增链接任务",
+        "success",
+      );
       createTaskOpen.value = false;
       createTaskDetailUrls.value = "";
       createTaskMoviePreviews.value = {};
@@ -1605,6 +1667,7 @@ export const useAppStore = defineStore("app", () => {
     getCreateTaskMoviePreview,
     removeCreateTaskDetailUrl,
     hasCreateTaskDetailUrl,
+    findDuplicateTasksForDrafts,
     toggleLogOnlyErrors,
     openCreateTask,
     closeCreateTask,

@@ -270,7 +270,7 @@ class RuntimeBridge {
     return directoryPath;
   }
 
-  // 清空输出根目录下的所有子目录和文件，但保留输出根目录本身。
+  // 清空输出目录下的所有子目录和文件，但保留输出目录本身。
   async clearDirectoryContents(directoryPath: string, rootDirectoryPath: string) {
     if (isTauriRuntime()) {
       return invoke<number>("clear_directory_contents", { directoryPath, rootDirectoryPath });

@@ -38,8 +38,8 @@ function handleAction(actionId: string) {
 }
 
 // 新增链接任务弹窗提交后，把校验完成的草稿交给队列 store 创建任务。
-function handleCreateTask(drafts: TaskDraft[]) {
-  void appStore.createTasks(drafts);
+function handleCreateTask(drafts: TaskDraft[], replacementTaskIds?: string[]) {
+  void appStore.createTasks(drafts, { replacementTaskIds });
 }
 
 // 手动 Cookie 导入弹窗提交后，交给 store 保存 Cookie 并写日志。

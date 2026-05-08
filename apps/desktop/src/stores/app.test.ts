@@ -541,6 +541,99 @@ test("scheduler and task list keep FIFO order", async () => {
   assert.deepEqual(started, [oldFirstUrl, oldSecondUrl, newUrl]);
 });
 
+test("创建重复任务时能找到相同链接输出目录分类和比例的旧任务", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  runtimeBridge.runDownloadTask = async () => createSuccessResult();
+
+  const draft = createDraft();
+  await appStore.createTasks([draft]);
+  await waitFor(() => appStore.tasks[0]?.lifecycle.phase === "completed");
+
+  assert.deepEqual(appStore.findDuplicateTasksForDrafts([draft]).map((task) => task.id), [appStore.tasks[0]!.id]);
+  assert.deepEqual(appStore.findDuplicateTasksForDrafts([createDraft({ outputRootDir: "D:\\cover" })]).map((task) => task.id), [
+    appStore.tasks[0]!.id,
+  ]);
+  assert.deepEqual(appStore.findDuplicateTasksForDrafts([createDraft({ imageAspectRatio: "9:16" })]), []);
+});
+
+test("确认覆盖重复任务时会清空旧输出目录并删除旧任务行", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  const clearedTaskIds: string[][] = [];
+  const clearedDirectories: Array<{ directoryPath: string; rootDirectoryPath: string }> = [];
+  const started: string[] = [];
+
+  runtimeBridge.runDownloadTask = async (payload) => {
+    started.push(payload.detailUrl);
+    return createSuccessResult();
+  };
+  runtimeBridge.clearDownloadTasks = async (taskIds: string[]) => {
+    clearedTaskIds.push(taskIds);
+    return taskIds.length;
+  };
+  runtimeBridge.clearDirectoryContents = async (directoryPath: string, rootDirectoryPath: string) => {
+    clearedDirectories.push({ directoryPath, rootDirectoryPath });
+    return 1;
+  };
+
+  const draft = createDraft();
+  await appStore.createTasks([draft]);
+  await waitFor(() => appStore.tasks[0]?.lifecycle.phase === "completed");
+
+  const oldTaskId = appStore.tasks[0]!.id;
+  appStore.tasks[0] = {
+    ...appStore.tasks[0]!,
+    outputDirectory: "D:/cover/Douban Title/wallpaper/wallpaper-original",
+  };
+
+  await appStore.createTasks([draft], { replacementTaskIds: [oldTaskId] });
+
+  assert.deepEqual(clearedTaskIds[clearedTaskIds.length - 1], [oldTaskId]);
+  assert.deepEqual(clearedDirectories, [
+    { directoryPath: "D:/cover/Douban Title/wallpaper/wallpaper-original", rootDirectoryPath: "D:/cover" },
+  ]);
+  assert.equal(appStore.tasks.length, 1);
+  assert.notEqual(appStore.tasks[0]?.id, oldTaskId);
+  assert.equal(appStore.tasks[0]?.target.detailUrl, draft.detailUrl);
+  await waitFor(() => started.length === 2);
+  assert.equal(appStore.tasks[0]?.lifecycle.phase, "completed");
+});
+
+test("确认覆盖尚未开始的重复任务后不会再启动旧任务", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  const firstUrl = "https://movie.douban.com/subject/34780991/";
+  const duplicateUrl = "https://movie.douban.com/subject/1292052/";
+  const startedTaskIds: string[] = [];
+  let releaseFirstTask: (() => void) | null = null;
+
+  appStore.queueConfig.concurrency = 1;
+  runtimeBridge.runDownloadTask = async (payload) => {
+    startedTaskIds.push(payload.taskId);
+
+    if (payload.detailUrl === firstUrl) {
+      await new Promise<void>((resolve) => {
+        releaseFirstTask = resolve;
+      });
+    }
+
+    return createSuccessResult();
+  };
+
+  await appStore.createTasks([createDraft({ detailUrl: firstUrl }), createDraft({ detailUrl: duplicateUrl })]);
+  await waitFor(() => startedTaskIds.length === 1);
+
+  const firstTaskId = appStore.tasks.find((task) => task.target.detailUrl === firstUrl)!.id;
+  const oldDuplicateTaskId = appStore.tasks.find((task) => task.target.detailUrl === duplicateUrl)!.id;
+  await appStore.createTasks([createDraft({ detailUrl: duplicateUrl })], { replacementTaskIds: [oldDuplicateTaskId] });
+  const replacementTaskId = appStore.tasks.find((task) => task.target.detailUrl === duplicateUrl)!.id;
+
+  releaseFirstTask?.();
+  await waitFor(() => startedTaskIds.includes(replacementTaskId));
+  await waitFor(() => appStore.tasks.every((task) => task.lifecycle.phase === "completed"));
+
+  assert(!startedTaskIds.includes(oldDuplicateTaskId));
+  assert.deepEqual(appStore.tasks.map((task) => task.id), [firstTaskId, replacementTaskId]);
+});
+
 test("原生任务处理中收到片名解析日志后会立即更新队列标题", async () => {
   const { appStore, runtimeBridge, emitRuntimeLogs } = await setupStore();
   let resolveTask: (() => void) | null = null;

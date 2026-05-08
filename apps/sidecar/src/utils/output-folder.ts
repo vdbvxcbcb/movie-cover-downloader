@@ -6,10 +6,9 @@ export function sanitizeNameSegment(input: string) {
   return input.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-// 生成影片输出目录名，格式为“片名 - YYYY-MM-DD”，方便用户按任务日期识别。
-export function buildOutputFolderName(title: string, date = new Date()) {
-  const isoDate = date.toISOString().slice(0, 10);
-  return `${sanitizeNameSegment(title)} - ${isoDate}`;
+// 生成影片输出目录名，只使用片名，便于重复任务覆盖同一输出目录。
+export function buildOutputFolderName(title: string) {
+  return sanitizeNameSegment(title);
 }
 
 // 把用户选择的输出根目录和影片目录名拼成最终任务输出目录。

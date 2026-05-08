@@ -1483,7 +1483,7 @@ fn delete_directory_path(
     Ok(true)
 }
 
-// 清空输出根目录下的所有子目录和文件，但保留输出根目录本身。
+// 清空输出目录下的所有子目录和文件，但保留输出目录本身。
 #[tauri::command]
 fn clear_directory_contents(
     directory_path: String,
@@ -1520,8 +1520,11 @@ fn clear_directory_contents(
     if directory.parent().is_none() {
         return Err(format!("拒绝清空磁盘根目录: {}", directory.display()));
     }
-    if directory != root_directory {
-        return Err(format!("拒绝清空非输出根目录: {}", directory.display()));
+    if directory != root_directory && !directory.starts_with(&root_directory) {
+        return Err(format!(
+            "拒绝清空输出根目录外的目录: {}",
+            directory.display()
+        ));
     }
 
     let mut cleared = 0usize;
@@ -2765,9 +2768,33 @@ mod tests {
     }
 
     #[test]
-    fn clear_directory_contents_rejects_non_root_directory() {
-        let temp_dir = test_temp_dir("clear-root-boundary");
+    fn clear_directory_contents_removes_children_but_keeps_task_directory() {
+        let temp_dir = test_temp_dir("clear-task-output");
         let child_dir = temp_dir.join("child");
+        let nested_dir = child_dir.join("nested");
+        fs::create_dir_all(&nested_dir).unwrap();
+        fs::write(child_dir.join("image.jpg"), "image").unwrap();
+        fs::write(nested_dir.join("thumb.jpg"), "thumb").unwrap();
+
+        let cleared = clear_directory_contents(
+            child_dir.to_string_lossy().into_owned(),
+            temp_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(cleared, 2);
+        assert!(child_dir.exists());
+        assert!(!child_dir.join("image.jpg").exists());
+        assert!(!nested_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn clear_directory_contents_rejects_directory_outside_root() {
+        let temp_dir = test_temp_dir("clear-root-boundary");
+        let outside_dir = test_temp_dir("clear-root-outside");
+        let child_dir = outside_dir.join("child");
         fs::create_dir_all(&child_dir).unwrap();
 
         let error = clear_directory_contents(
@@ -2776,10 +2803,11 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.contains("拒绝清空非输出根目录"));
+        assert!(error.contains("拒绝清空输出根目录外的目录"));
         assert!(child_dir.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
+        let _ = fs::remove_dir_all(outside_dir);
     }
 
     #[test]

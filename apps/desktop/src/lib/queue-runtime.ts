@@ -77,8 +77,7 @@ function deriveTitle(task: TaskItem) {
 
 // 生成演示输出目录名，格式和真实下载目录保持一致。
 function buildOutputFolderName(title: string) {
-  const date = new Date().toISOString().slice(0, 10);
-  return `${sanitizeFolderSegment(title)} - ${date}`;
+  return sanitizeFolderSegment(title);
 }
 
 function formatDirectoryImageAspectRatio(imageAspectRatio: TaskItem["target"]["imageAspectRatio"]) {

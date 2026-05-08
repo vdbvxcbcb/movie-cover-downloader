@@ -332,9 +332,9 @@ D:/cover
 每个下载任务会在输出根目录下生成影片目录和分类目录，例如：
 
 ```text
-D:/cover/让子弹飞 - 2026-05-02/still
-D:/cover/让子弹飞 - 2026-05-02/poster
-D:/cover/让子弹飞 - 2026-05-02/wallpaper
+D:/cover/让子弹飞/still
+D:/cover/让子弹飞/poster
+D:/cover/让子弹飞/wallpaper
 ```
 
 自定义裁剪图片固定保存到：

@@ -363,6 +363,7 @@ test("discover 成功时会按豆瓣抓图类型追加输出子目录", async ()
         result.outputDir,
         path.join("D:/cover", result.outputFolderName, testCase.expectedDir),
       );
+      assert.equal(result.outputFolderName, "示例电影");
       assert.equal(fetchCalls, 2);
     }
   } finally {

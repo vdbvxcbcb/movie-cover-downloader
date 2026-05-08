@@ -2,6 +2,7 @@
 // 新增链接任务弹窗：收集豆瓣链接、输出目录、抓取类型、数量和图片尺寸。
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import ActionButton from "../common/ActionButton.vue";
+import PopConfirmAction from "../common/PopConfirmAction.vue";
 import type {
   DoubanAssetType,
   ImageCountMode,
@@ -17,6 +18,7 @@ import {
   normalizeDetailUrlsInput,
   validateTaskDraftInput,
 } from "../../lib/task-draft-input";
+import { formatDoubanAssetTypeLabel } from "../../lib/douban-empty-category";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 import { useAppStore } from "../../stores/app";
 
@@ -30,7 +32,7 @@ const props = withDefaults(
 );
 const emit = defineEmits<{
   close: [];
-  submit: [drafts: TaskDraft[]];
+  submit: [drafts: TaskDraft[], replacementTaskIds?: string[]];
   updateDetailUrls: [value: string];
 }>();
 
@@ -48,6 +50,9 @@ const form = reactive({
   requestIntervalSeconds: "1" as "1" | "2" | "3" | "4" | "5",
 });
 const alertMessage = ref("");
+const pendingReplacementDrafts = ref<TaskDraft[]>([]);
+const pendingReplacementTaskIds = ref<string[]>([]);
+const replacementConfirmTitle = ref("");
 const resolvedTitleCache = new Map<string, string>();
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
@@ -188,6 +193,16 @@ function clearAlert() {
   alertMessage.value = "";
 }
 
+function formatImageAspectRatioLabel(imageAspectRatio: ImageAspectRatio) {
+  return imageAspectRatio === "original" ? "原图比例" : imageAspectRatio;
+}
+
+function getDraftTitle(draft: TaskDraft) {
+  const comparableUrl = normalizeComparableDetailUrl(draft.detailUrl);
+  const previewTitle = appStore.getCreateTaskMoviePreview(draft.detailUrl)?.title?.trim();
+  return previewTitle || resolvedTitleCache.get(comparableUrl) || "";
+}
+
 // 打开系统目录选择器，并把选择结果写回输出目录输入框。
 async function browseOutputDirectory() {
   const selected = await runtimeBridge.pickOutputDirectory(form.outputRootDir);
@@ -279,10 +294,7 @@ function handleDetailUrlsBlur(event: Event) {
   input.value = normalized;
   void resolveMissingDetailUrlTitles();
 }
-// 提交时只接收通过校验的豆瓣 subject 链接，任何错误都会阻止加入队列并展示原因。
-async function submit() {
-  await resolveMissingDetailUrlTitles();
-
+function buildValidatedDrafts() {
   const validation = validateTaskDraftInput({
     detailUrls: form.detailUrls,
     outputRootDir: form.outputRootDir,
@@ -294,7 +306,7 @@ async function submit() {
     if (validation.message) {
       showAlert(validation.message);
     }
-    return;
+    return null;
   }
 
   const drafts: TaskDraft[] = [];
@@ -312,8 +324,49 @@ async function submit() {
     });
   }
 
+  return drafts;
+}
+
+// 加入队列前先检测重复任务；重复时打开气泡确认框，非重复则直接提交。
+async function prepareSubmit() {
+  await resolveMissingDetailUrlTitles();
+
+  const drafts = buildValidatedDrafts();
+  if (!drafts) {
+    return false;
+  }
+
+  const duplicateTasks = appStore.findDuplicateTasksForDrafts(drafts);
+  if (duplicateTasks.length === 0) {
+    clearAlert();
+    emit("submit", drafts);
+    return false;
+  }
+
+  const duplicateTaskIds = new Set(duplicateTasks.map((task) => task.id));
+  const firstDuplicateDraft = drafts.find((draft) =>
+    duplicateTasks.some((task) => normalizeComparableDetailUrl(task.target.detailUrl) === normalizeComparableDetailUrl(draft.detailUrl)),
+  ) ?? drafts[0]!;
+  const firstDuplicateTask = duplicateTasks[0]!;
+  const title = getDraftTitle(firstDuplicateDraft) || (firstDuplicateTask.title === "待解析标题" ? "当前影片" : firstDuplicateTask.title);
+  replacementConfirmTitle.value =
+    `${title}${formatDoubanAssetTypeLabel(firstDuplicateDraft.doubanAssetType)}${formatImageAspectRatioLabel(firstDuplicateDraft.imageAspectRatio)}任务已存在，是否覆盖目录并替换图片？`;
+  pendingReplacementDrafts.value = drafts;
+  pendingReplacementTaskIds.value = Array.from(duplicateTaskIds);
   clearAlert();
-  emit("submit", drafts);
+  return true;
+}
+
+function confirmReplacementSubmit() {
+  clearAlert();
+  emit("submit", pendingReplacementDrafts.value, pendingReplacementTaskIds.value);
+  pendingReplacementDrafts.value = [];
+  pendingReplacementTaskIds.value = [];
+}
+
+function cancelReplacementSubmit() {
+  pendingReplacementDrafts.value = [];
+  pendingReplacementTaskIds.value = [];
 }
 </script>
 
@@ -506,7 +559,17 @@ async function submit() {
 
       <div class="topbar__actions">
         <ActionButton label="取消" @click="emit('close')" />
-        <ActionButton label="加入队列" variant="primary" @click="submit" />
+        <PopConfirmAction
+          label="加入队列"
+          variant="primary"
+          :title="replacementConfirmTitle"
+          confirm-label="确认"
+          cancel-label="取消"
+          bubble-size="normal"
+          :before-open="prepareSubmit"
+          @confirm="confirmReplacementSubmit"
+          @cancel="cancelReplacementSubmit"
+        />
       </div>
     </section>
   </div>
