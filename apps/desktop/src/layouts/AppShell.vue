@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 桌面端主框架：侧边栏、顶栏、弹窗和页面内容在这里组合。
-import { computed, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterView, useRoute } from "vue-router";
 import AppSidebar from "../components/chrome/AppSidebar.vue";
 import AppTopbar from "../components/chrome/AppTopbar.vue";
@@ -14,6 +14,7 @@ import type { CookieDraft, TaskDraft, TopAction } from "../types/app";
 
 const route = useRoute();
 const appStore = useAppStore();
+const noticeRevision = ref(0);
 
 // 根据当前路由 meta 计算页面标题、副标题和顶栏操作按钮。
 const pageMeta = computed(() => {
@@ -55,13 +56,10 @@ function handleStartLoginImport() {
 watch(
   () => appStore.notice,
   (value) => {
-    if (!value) return;
-    const timer = window.setTimeout(() => {
-      appStore.clearNotice();
-      window.clearTimeout(timer);
-    }, 2800);
+    if (value) {
+      noticeRevision.value += 1;
+    }
   },
-  { deep: true },
 );
 </script>
 
@@ -85,6 +83,7 @@ watch(
 
       <ToastNotice
         v-if="appStore.notice"
+        :key="noticeRevision"
         :message="appStore.notice.message"
         :tone="appStore.notice.tone"
         @close="appStore.clearNotice"

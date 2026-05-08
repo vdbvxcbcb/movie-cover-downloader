@@ -431,7 +431,7 @@ export const useAppStore = defineStore("app", () => {
   const queueBusy = ref(false);
   const createTaskOpen = ref(false);
   const createTaskDetailUrls = ref("");
-  const createTaskOutputRootDir = ref("D:/cover");
+  const createTaskOutputRootDir = ref("");
   const createTaskMoviePreviews = ref<Record<string, Partial<DoubanMoviePreview>>>({});
   const importCookieOpen = ref(false);
   const searchMovieOpen = ref(false);
@@ -446,7 +446,7 @@ export const useAppStore = defineStore("app", () => {
   const pendingActionIds = ref<string[]>([]);
   const activeTaskIds = ref<string[]>([]);
   // 自定义裁剪默认保存到最近任务的输出根目录；没有任务时回退 D:/cover。
-  const customCropOutputRootDir = computed(() => createTaskOutputRootDir.value);
+  const customCropOutputRootDir = computed(() => createTaskOutputRootDir.value || "D:/cover");
 
   let persistenceTimer: number | null = null;
   let logPersistenceTimer: number | null = null;
@@ -717,7 +717,7 @@ export const useAppStore = defineStore("app", () => {
 
   // 同步新增链接任务弹窗中的输出根目录，供自定义裁剪复用。
   function syncCreateTaskOutputRootDir(value: string) {
-    createTaskOutputRootDir.value = value.trim() || "D:/cover";
+    createTaskOutputRootDir.value = value.trim();
   }
 
   function getCreateTaskMoviePreview(detailUrl: string) {

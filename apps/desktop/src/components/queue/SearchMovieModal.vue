@@ -2,6 +2,7 @@
 // 豆瓣影片搜索弹窗：输入片名后通过 Tauri 调用 sidecar 搜索，并把详情页链接写入新增任务草稿。
 import { computed, ref } from "vue";
 import ActionButton from "../common/ActionButton.vue";
+import MessageNotice from "../common/MessageNotice.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 import { normalizeComparableDetailUrl } from "../../lib/task-draft-input";
@@ -17,6 +18,9 @@ const queryInput = ref("");
 const currentPage = ref(1);
 const loading = ref(false);
 const alertMessage = ref("");
+const alertTone = ref<"success" | "error" | "warn">("warn");
+const alertRevision = ref(0);
+const searchAttempted = ref(false);
 const searchPage = ref<DoubanSearchResultPage | null>(null);
 const addedDetailUrlSet = computed(() =>
   new Set(
@@ -33,7 +37,7 @@ const totalPages = computed(() => {
   return Math.max(1, Math.ceil(searchPage.value.total / searchPage.value.pageSize));
 });
 
-const hasSearched = computed(() => searchPage.value !== null || alertMessage.value !== "");
+const hasSearched = computed(() => searchPage.value !== null || searchAttempted.value);
 
 // 分页按钮只显示当前页附近的页码，避免结果很多时按钮挤满弹窗底部。
 const visiblePages = computed(() => {
@@ -48,8 +52,10 @@ function clearAlert() {
   alertMessage.value = "";
 }
 
-function showAlert(message: string) {
+function showAlert(message: string, tone: "success" | "error" | "warn" = "warn") {
   alertMessage.value = message;
+  alertTone.value = tone;
+  alertRevision.value += 1;
 }
 
 function getCoverSource(item: DoubanSearchResultItem) {
@@ -78,13 +84,13 @@ function addDetailUrl(item: DoubanSearchResultItem) {
     coverDataUrl: item.coverDataUrl,
   });
   if (added) {
-    showAlert(`已添加到${item.title}链接到新增链接抓图任务。`);
+    showAlert(`已添加到${item.title}链接到新增链接抓图任务。`, "success");
   }
 }
 
 function removeDetailUrl(item: DoubanSearchResultItem) {
   appStore.removeCreateTaskDetailUrl(item.detailUrl);
-  showAlert("已从新增链接抓图任务中删除。");
+  showAlert("已从新增链接抓图任务中删除。", "success");
 }
 
 // 组装搜索请求：query 只取用户输入片名，cat=1002 和 start/pageSize 在 sidecar 内固定处理。
@@ -94,6 +100,7 @@ async function search(page = 1) {
   const query = queryInput.value.trim();
   if (!query) {
     searchPage.value = null;
+    searchAttempted.value = true;
     showAlert("请输入要搜索的影片名称");
     return;
   }
@@ -103,6 +110,7 @@ async function search(page = 1) {
   try {
     const result = await runtimeBridge.searchDoubanMovies(query, page);
     searchPage.value = result;
+    searchAttempted.value = true;
     currentPage.value = result.page;
     if (result.items.length === 0) {
       showAlert("没有找到匹配的影片结果");
@@ -110,7 +118,8 @@ async function search(page = 1) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     searchPage.value = null;
-    showAlert(`搜索失败：${message}`);
+    searchAttempted.value = true;
+    showAlert(`搜索失败：${message}`, "error");
   } finally {
     loading.value = false;
   }
@@ -135,6 +144,14 @@ function resultKey(item: DoubanSearchResultItem) {
 
 <template>
   <div class="modal-backdrop">
+    <MessageNotice
+      v-if="alertMessage"
+      :key="`${alertRevision}:${alertMessage}`"
+      :message="alertMessage"
+      :tone="alertTone"
+      @close="clearAlert"
+    />
+
     <section class="modal-card search-movie-modal">
       <div class="panel__head modal-card__head">
         <div>
@@ -161,11 +178,6 @@ function resultKey(item: DoubanSearchResultItem) {
           </div>
         </label>
       </form>
-
-      <div v-if="alertMessage" class="search-movie-modal__alert" role="alert">
-        <span>{{ alertMessage }}</span>
-        <button type="button" aria-label="关闭提示" @click="clearAlert">×</button>
-      </div>
 
       <div class="search-movie-modal__body">
         <div v-if="loading" class="search-movie-modal__empty">正在搜索豆瓣电影...</div>
@@ -239,31 +251,6 @@ function resultKey(item: DoubanSearchResultItem) {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: stretch;
-}
-
-.search-movie-modal__alert {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 212, 121, 0.28);
-  background: rgba(255, 212, 121, 0.1);
-  color: #ffe2a8;
-  font-size: 0.9rem;
-}
-
-.search-movie-modal__alert button {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #ffe2a8;
 }
 
 .search-movie-modal__body {

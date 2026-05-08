@@ -2,6 +2,7 @@
 // 新增链接任务弹窗：收集豆瓣链接、输出目录、抓取类型、数量和图片尺寸。
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import ActionButton from "../common/ActionButton.vue";
+import MessageNotice from "../common/MessageNotice.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
 import type {
   DoubanAssetType,
@@ -18,7 +19,6 @@ import {
   normalizeDetailUrlsInput,
   validateTaskDraftInput,
 } from "../../lib/task-draft-input";
-import { formatDoubanAssetTypeLabel } from "../../lib/douban-empty-category";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 import { useAppStore } from "../../stores/app";
 
@@ -50,9 +50,11 @@ const form = reactive({
   requestIntervalSeconds: "1" as "1" | "2" | "3" | "4" | "5",
 });
 const alertMessage = ref("");
+const alertRevision = ref(0);
 const pendingReplacementDrafts = ref<TaskDraft[]>([]);
 const pendingReplacementTaskIds = ref<string[]>([]);
 const replacementConfirmTitle = ref("");
+const browsingOutputDirectory = ref(false);
 const resolvedTitleCache = new Map<string, string>();
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
@@ -186,6 +188,7 @@ const strategySummary = computed(() => {
 // 显示表单错误提示，阻止用户在校验失败时加入队列。
 function showAlert(message: string) {
   alertMessage.value = message;
+  alertRevision.value += 1;
 }
 
 // 清除表单提示，通常在用户重新输入或操作成功后调用。
@@ -193,22 +196,19 @@ function clearAlert() {
   alertMessage.value = "";
 }
 
-function formatImageAspectRatioLabel(imageAspectRatio: ImageAspectRatio) {
-  return imageAspectRatio === "original" ? "原图比例" : imageAspectRatio;
-}
-
-function getDraftTitle(draft: TaskDraft) {
-  const comparableUrl = normalizeComparableDetailUrl(draft.detailUrl);
-  const previewTitle = appStore.getCreateTaskMoviePreview(draft.detailUrl)?.title?.trim();
-  return previewTitle || resolvedTitleCache.get(comparableUrl) || "";
-}
-
 // 打开系统目录选择器，并把选择结果写回输出目录输入框。
 async function browseOutputDirectory() {
-  const selected = await runtimeBridge.pickOutputDirectory(form.outputRootDir);
-  if (!selected) return;
-  form.outputRootDir = selected;
-  clearAlert();
+  if (browsingOutputDirectory.value) return;
+
+  browsingOutputDirectory.value = true;
+  try {
+    const selected = await runtimeBridge.pickOutputDirectory(form.outputRootDir);
+    if (!selected) return;
+    form.outputRootDir = selected;
+    clearAlert();
+  } finally {
+    browsingOutputDirectory.value = false;
+  }
 }
 
 // 把限制数量固定在 1 到 100 之间，避免输入过小或过大。
@@ -344,13 +344,8 @@ async function prepareSubmit() {
   }
 
   const duplicateTaskIds = new Set(duplicateTasks.map((task) => task.id));
-  const firstDuplicateDraft = drafts.find((draft) =>
-    duplicateTasks.some((task) => normalizeComparableDetailUrl(task.target.detailUrl) === normalizeComparableDetailUrl(draft.detailUrl)),
-  ) ?? drafts[0]!;
-  const firstDuplicateTask = duplicateTasks[0]!;
-  const title = getDraftTitle(firstDuplicateDraft) || (firstDuplicateTask.title === "待解析标题" ? "当前影片" : firstDuplicateTask.title);
   replacementConfirmTitle.value =
-    `${title}${formatDoubanAssetTypeLabel(firstDuplicateDraft.doubanAssetType)}${formatImageAspectRatioLabel(firstDuplicateDraft.imageAspectRatio)}任务已存在，是否覆盖目录并替换图片？`;
+    `列表中任务已存在，是否覆盖目录并替换图片？`;
   pendingReplacementDrafts.value = drafts;
   pendingReplacementTaskIds.value = Array.from(duplicateTaskIds);
   clearAlert();
@@ -372,6 +367,14 @@ function cancelReplacementSubmit() {
 
 <template>
   <div class="modal-backdrop">
+    <MessageNotice
+      v-if="alertMessage"
+      :key="`${alertRevision}:${alertMessage}`"
+      :message="alertMessage"
+      tone="warn"
+      @close="clearAlert"
+    />
+
     <section class="modal-card create-task-modal">
       <div class="panel__head modal-card__head">
         <div>
@@ -381,11 +384,6 @@ function cancelReplacementSubmit() {
         <button type="button" class="modal-close" aria-label="关闭弹窗" @click="emit('close')">
           ×
         </button>
-      </div>
-
-      <div v-if="alertMessage" class="modal-alert" role="alert">
-        <strong>提示</strong>
-        <span>{{ alertMessage }}</span>
       </div>
 
       <div class="create-task-modal__grid">
@@ -405,7 +403,7 @@ function cancelReplacementSubmit() {
           <span>输出目录</span>
           <div class="field-inline">
             <input v-model="form.outputRootDir" placeholder="例如：D:\cover" />
-            <ActionButton label="浏览" @click="void browseOutputDirectory()" />
+            <ActionButton label="浏览" :disabled="browsingOutputDirectory" @click="void browseOutputDirectory()" />
           </div>
         </label>
         <label class="field">
@@ -587,20 +585,6 @@ function cancelReplacementSubmit() {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 18px;
-}
-
-.modal-alert {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin: 0 auto 16px;
-  padding: 12px 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 212, 121, 0.34);
-  background: linear-gradient(180deg, rgba(255, 212, 121, 0.14), rgba(255, 212, 121, 0.06));
-  color: #ffe2a8;
-  text-align: center;
 }
 
 .create-task-modal__field-label {

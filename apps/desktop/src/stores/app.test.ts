@@ -171,6 +171,16 @@ async function setupStore(overrides?: {
   };
 }
 
+test("首次打开新增任务时输出目录保持空白", async () => {
+  const { appStore } = await setupStore();
+
+  assert.equal(appStore.createTaskOutputRootDir, "");
+  assert.equal(appStore.customCropOutputRootDir, "D:/cover");
+
+  appStore.syncCreateTaskOutputRootDir("");
+  assert.equal(appStore.createTaskOutputRootDir, "");
+});
+
 test("持久化状态加载失败后仍会完成 hydration 并允许后续保存", async () => {
   let saveCalls = 0;
   const { appStore } = await setupStore({

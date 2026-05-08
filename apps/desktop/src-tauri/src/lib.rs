@@ -35,6 +35,9 @@ use windows_sys::Win32::{
     },
 };
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 // 日志 id 在 Rust 侧生成，避免前端批量接收时出现重复 key。
 static LOG_ID_SEED: AtomicU64 = AtomicU64::new(10_000);
 
@@ -1567,8 +1570,15 @@ fn pick_output_directory(initial_path: Option<String>) -> Result<Option<String>,
          if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $dialog.SelectedPath }}"
     );
 
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-STA", "-Command", &command])
+    let mut picker_command = Command::new("powershell.exe");
+    picker_command.args(["-NoProfile", "-STA", "-Command", &command]);
+
+    #[cfg(target_os = "windows")]
+    {
+        picker_command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = picker_command
         .output()
         .map_err(|error| format!("打开目录选择器失败: {error}"))?;
 
@@ -1653,7 +1663,7 @@ fn run_download_task_blocking(
     {
         #[cfg(target_os = "windows")]
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
+        command.creation_flags(CREATE_NO_WINDOW);
     }
 
     // Cookie 只在当前子进程环境中传递，不写入 sidecar 命令行，减少泄露风险。
