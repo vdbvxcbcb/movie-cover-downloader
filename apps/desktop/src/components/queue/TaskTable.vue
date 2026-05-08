@@ -39,6 +39,21 @@ const failedCoverSources = ref<Record<string, string>>({});
 const copiedTaskId = ref("");
 let copiedIconTimer: ReturnType<typeof setTimeout> | undefined;
 
+function retainRecordKeys(record: Record<string, string>, keys: Set<string>) {
+  let changed = false;
+  const next: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(record)) {
+    if (keys.has(key)) {
+      next[key] = value;
+    } else {
+      changed = true;
+    }
+  }
+
+  return changed ? next : record;
+}
+
 onBeforeUnmount(() => {
   if (copiedIconTimer) {
     clearTimeout(copiedIconTimer);
@@ -73,6 +88,9 @@ watch(
   () => {
     currentPage.value = pagination.value.currentPage;
     jumpPageInput.value = String(pagination.value.currentPage);
+    const taskUrls = new Set(props.tasks.map((task) => task.target.detailUrl));
+    coverCache.value = retainRecordKeys(coverCache.value, taskUrls);
+    failedCoverSources.value = retainRecordKeys(failedCoverSources.value, taskUrls);
   },
   { deep: true, immediate: true },
 );

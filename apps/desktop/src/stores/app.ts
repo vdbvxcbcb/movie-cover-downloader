@@ -30,6 +30,7 @@ const resumablePhases = new Set(["resolving", "discovering", "downloading"]);
 const pausablePhases = new Set(["resolving", "discovering", "downloading", "retrying"]);
 const terminalProgressPhases = new Set(["completed", "failed", "paused"]);
 const cookieRetentionMs = 30 * 24 * 60 * 60 * 1000;
+const retainedRuntimeLogCount = 200;
 
 // store 内部等待工具，用于队列冷却、登录窗口轮询等异步等待场景。
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -63,7 +64,7 @@ function clonePersistable<T>(value: T): T {
 
 // 重新载入本地快照时会裁剪日志并修正重复 id，避免旧数据导致 Vue 列表 key 冲突。
 function normalizeSnapshotLogs(logs: AppSeedState["logs"]) {
-  const nextLogs = clonePersistable(logs.slice(0, 200));
+  const nextLogs = clonePersistable(logs.slice(0, retainedRuntimeLogCount));
   const usedIds = new Set<number>();
   let maxId = nextLogs.reduce((currentMax, entry) => Math.max(currentMax, entry.id), 0);
 
@@ -622,7 +623,7 @@ export const useAppStore = defineStore("app", () => {
   void runtimeBridge.onRuntimeLogBatch((entries) => {
     if (entries.length === 0) return;
     applyRuntimeLogTaskUpdates(entries);
-    logs.value.unshift(...entries.slice().reverse());
+    logs.value = [...entries.slice().reverse(), ...logs.value].slice(0, retainedRuntimeLogCount);
     schedulePersist("logs");
   });
 

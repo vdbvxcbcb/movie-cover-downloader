@@ -12,6 +12,8 @@ const doubanTypeMap = {
   R: { category: "poster", orientation: "vertical", label: "Poster" },
   W: { category: "still", orientation: "horizontal", label: "Wallpaper" },
 } as const;
+const doubanCategoryPageSize = 30;
+const maxDoubanCategoryPages = 1000;
 
 type DoubanPhotoType = keyof typeof doubanTypeMap;
 type DoubanPhotoPageKind = "ok" | "empty" | "auth" | "risk" | "unexpected";
@@ -31,18 +33,19 @@ function extractDoubanCategoryCount(html: string) {
 
 // 豆瓣分类页只暴露部分缩略图，需要根据总数推导分页 start 参数继续抓取。
 // 根据分类页总数生成分页 URL 列表；豆瓣每页约 30 张，因此按 start=30 递增。
-function buildDoubanCategoryPageUrls(categoryUrl: string, html: string) {
+function resolveDoubanCategoryPageCount(html: string) {
   const count = extractDoubanCategoryCount(html);
-  if (!count || count <= 30) {
-    return [categoryUrl];
+  if (!count || count <= doubanCategoryPageSize) {
+    return 1;
   }
 
-  const totalPages = Math.ceil(count / 30);
-  return Array.from({ length: totalPages }, (_, index) => {
-    const nextUrl = new URL(categoryUrl);
-    nextUrl.searchParams.set("start", String(index * 30));
-    return nextUrl.toString();
-  });
+  return Math.min(Math.ceil(count / doubanCategoryPageSize), maxDoubanCategoryPages);
+}
+
+function buildDoubanCategoryPageUrl(categoryUrl: string, pageIndex: number) {
+  const nextUrl = new URL(categoryUrl);
+  nextUrl.searchParams.set("start", String(pageIndex * doubanCategoryPageSize));
+  return nextUrl.toString();
 }
 
 // 把豆瓣缩略图域名升级成更清晰的大图域名，尽量保存原始质量更高的图片。
@@ -206,13 +209,17 @@ export class DoubanAdapter implements SourceAdapter {
     }
 
     const images: DiscoveredImage[] = [];
-    const pageUrls = buildDoubanCategoryPageUrls(resolved.imagePageUrl, photoPage.html);
+    const pageCount = resolveDoubanCategoryPageCount(photoPage.html);
 
-    for (const [pageIndex, pageUrl] of pageUrls.entries()) {
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
       if (task.imageCountMode === "limited" && images.length >= task.maxImages) {
         break;
       }
 
+      const pageUrl =
+        pageIndex === 0 && pageCount === 1
+          ? resolved.imagePageUrl
+          : buildDoubanCategoryPageUrl(resolved.imagePageUrl, pageIndex);
       if (pageIndex > 0) {
         context.logger.info(`fetching douban category page: ${pageUrl}`, task.id);
       }

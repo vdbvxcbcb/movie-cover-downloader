@@ -56,8 +56,26 @@ const pendingReplacementTaskIds = ref<string[]>([]);
 const replacementConfirmTitle = ref("");
 const browsingOutputDirectory = ref(false);
 const resolvedTitleCache = new Map<string, string>();
+const titlePreviewResolveConcurrency = 3;
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, run: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await run(items[index]!);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
 
 function getDetailUrlDisplayEntries(value: string) {
   return normalizeDetailUrlsInput(value)
@@ -95,15 +113,17 @@ async function resolveMissingDetailUrlTitles() {
     return;
   }
 
-  const resolvedPairs = await Promise.all(
-    Array.from(pendingUrls.entries()).map(async ([comparableUrl, detailUrl]) => {
+  const resolvedPairs = await mapWithConcurrency(
+    Array.from(pendingUrls.entries()),
+    titlePreviewResolveConcurrency,
+    async ([comparableUrl, detailUrl]) => {
       try {
         const preview = await runtimeBridge.resolveDoubanMoviePreview(detailUrl);
         return [comparableUrl, detailUrl, preview] as const;
       } catch {
         return [comparableUrl, detailUrl, null] as const;
       }
-    }),
+    },
   );
 
   if (currentRevision !== titleResolveRevision) {
