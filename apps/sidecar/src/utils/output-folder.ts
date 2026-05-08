@@ -3,7 +3,12 @@ import path from "node:path";
 
 // 清理目录名或文件名片段中的非法字符，避免 Windows/macOS/Linux 文件系统保存失败。
 export function sanitizeNameSegment(input: string) {
-  return input.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
+  const segment = input.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().replace(/\.+$/g, "").trim();
+  if (!segment || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(segment)) {
+    return "Untitled";
+  }
+
+  return segment;
 }
 
 // 生成影片输出目录名，只使用片名，便于重复任务覆盖同一输出目录。

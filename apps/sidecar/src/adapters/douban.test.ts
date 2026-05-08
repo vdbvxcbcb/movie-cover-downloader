@@ -5,6 +5,7 @@ import test from "node:test";
 
 import type { SidecarTask } from "../shared/contracts.js";
 import type { SidecarLogger } from "../shared/logger.js";
+import { buildOutputFolderName, sanitizeNameSegment } from "../utils/output-folder.js";
 import { fetchText, resolveRequestIntervalMs } from "./base.js";
 import { classifyDoubanPhotoPage, DoubanAdapter } from "./douban.js";
 
@@ -56,6 +57,15 @@ function createContext() {
     cookieHeader: "dbcl2=1",
   };
 }
+
+test("输出目录片名会拒绝路径特殊片段和 Windows 保留名", () => {
+  assert.equal(buildOutputFolderName("示例电影"), "示例电影");
+  assert.equal(buildOutputFolderName(".."), "Untitled");
+  assert.equal(buildOutputFolderName("."), "Untitled");
+  assert.equal(buildOutputFolderName("CON"), "Untitled");
+  assert.equal(buildOutputFolderName("海报."), "海报");
+  assert.equal(sanitizeNameSegment("///"), "Untitled");
+});
 
 // 构造 fetch mock 返回值，模拟豆瓣 HTML、最终 URL 和 Content-Type。
 function createFetchResponse(
