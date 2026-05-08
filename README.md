@@ -1,6 +1,6 @@
 # Movie Cover Downloader
 
-一个面向 Windows 的影视封面下载器桌面应用，当前只支持豆瓣电影。应用提供豆瓣影片搜索、搜索结果链接一键加入任务、任务队列、Cookie 管理、实时下载进度、本地输出目录管理、自定义裁剪能力。
+一个面向 Windows 的豆瓣影视图片下载器桌面应用，用于制作视频封面，当前只支持豆瓣电影。应用提供豆瓣影片搜索、搜索结果链接一键加入任务、任务队列、Cookie 管理、实时下载进度、本地输出目录管理、自定义裁剪能力。
 
 ## 快速入口
 
@@ -9,9 +9,14 @@
 
 ## 视频演示
 
-https://github.com/user-attachments/assets/0bed5a38-133b-4590-828e-c62ecd151aac
 
-https://github.com/user-attachments/assets/273a1685-f2d1-4185-8b3e-6d035861cc55
+https://github.com/user-attachments/assets/908c6e0d-6f0f-4608-9224-5a001f564801
+
+
+
+https://github.com/user-attachments/assets/e4e03bf4-594c-4769-b632-072f80325735
+
+
 
 ## 下载安装
 
