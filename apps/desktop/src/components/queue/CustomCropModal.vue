@@ -22,6 +22,7 @@ const emit = defineEmits<{
 }>();
 
 const fileInput = ref<HTMLInputElement | null>(null);
+const modalCard = ref<HTMLElement | null>(null);
 const workspace = ref<HTMLElement | null>(null);
 const imageElement = ref<HTMLImageElement | null>(null);
 const isDraggingFile = ref(false);
@@ -72,6 +73,19 @@ const dragState = reactive<{
   cropHeight: 0,
 });
 
+const modalOffset = reactive({
+  x: 0,
+  y: 0,
+});
+
+const modalDragState = reactive({
+  active: false,
+  startX: 0,
+  startY: 0,
+  offsetX: 0,
+  offsetY: 0,
+});
+
 // 是否已经选择图片；模板据此切换上传态和裁剪态。
 const hasImage = computed(() => Boolean(imageState.url));
 // 当前裁剪比例的数字值，拖拽和导出时都使用它计算宽高。
@@ -80,6 +94,9 @@ const ratioValue = computed(() => (selectedRatio.value === "3:4" ? 3 / 4 : 9 / 1
 const zoomLabel = computed(() => `${zoom.value.toFixed(1)}x`);
 // 把当前裁剪框展示尺寸换算回原图像素尺寸，展示给用户确认。
 const cropSizeLabel = computed(() => `${Math.round(crop.width / displayScale())} x ${Math.round(crop.height / displayScale())}`);
+const modalPositionStyle = computed(() => ({
+  transform: `translate(${modalOffset.x}px, ${modalOffset.y}px)`,
+}));
 // 自定义裁剪最终保存目录，固定在输出根目录下的 custom-crop-photo。
 const customCropOutputDir = computed(() => `${props.outputRootDir.replace(/[\\/]+$/, "")}/custom-crop-photo`);
 // 遮罩拆成四块固定覆盖图片区域，避免拖拽裁剪框时遮罩跟着整体移动。
@@ -140,6 +157,21 @@ function imageBounds() {
 // 通用数值限制工具，确保拖拽或缩放后的值不越界。
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+// 将弹窗拖拽限制在应用视口内，避免拖到屏幕外难以找回。
+function clampModalOffset(x: number, y: number) {
+  if (!modalCard.value) return { x, y };
+
+  const margin = 24;
+  const rect = modalCard.value.getBoundingClientRect();
+  const baseLeft = rect.left - modalOffset.x;
+  const baseTop = rect.top - modalOffset.y;
+
+  return {
+    x: clamp(x, margin - baseLeft, window.innerWidth - margin - baseLeft - rect.width),
+    y: clamp(y, margin - baseTop, window.innerHeight - margin - baseTop - rect.height),
+  };
 }
 
 // 把遮罩矩形坐标转换成 CSS style，并把负尺寸压到 0。
@@ -402,6 +434,44 @@ function stopCropDrag() {
   window.removeEventListener("pointermove", handleCropDrag);
 }
 
+// 标题栏作为移动手柄，避开按钮和表单控件，防止影响裁剪框、上传区等原有操作。
+function startModalDrag(event: PointerEvent) {
+  const target = event.target as HTMLElement;
+  if (target.closest("button, input, select, textarea, a")) return;
+
+  event.preventDefault();
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  modalDragState.active = true;
+  modalDragState.startX = event.clientX;
+  modalDragState.startY = event.clientY;
+  modalDragState.offsetX = modalOffset.x;
+  modalDragState.offsetY = modalOffset.y;
+  window.addEventListener("pointermove", handleModalDrag);
+  window.addEventListener("pointerup", stopModalDrag, { once: true });
+}
+
+function handleModalDrag(event: PointerEvent) {
+  if (!modalDragState.active) return;
+
+  const next = clampModalOffset(
+    modalDragState.offsetX + event.clientX - modalDragState.startX,
+    modalDragState.offsetY + event.clientY - modalDragState.startY,
+  );
+  modalOffset.x = next.x;
+  modalOffset.y = next.y;
+}
+
+function stopModalDrag() {
+  modalDragState.active = false;
+  window.removeEventListener("pointermove", handleModalDrag);
+}
+
+function clampModalToViewport() {
+  const next = clampModalOffset(modalOffset.x, modalOffset.y);
+  modalOffset.x = next.x;
+  modalOffset.y = next.y;
+}
+
 // 根据当前时间和比例生成自定义裁剪图片文件名。
 function buildOutputFileName() {
   const stamp = new Date()
@@ -471,6 +541,8 @@ async function downloadCrop() {
 }
 
 onMounted(async () => {
+  window.addEventListener("resize", clampModalToViewport);
+
   if (!runtimeBridge.isNativeRuntime()) return;
 
   unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
@@ -497,14 +569,16 @@ watch(zoom, () => updateImageLayout(false));
 onBeforeUnmount(() => {
   if (imageState.url) URL.revokeObjectURL(imageState.url);
   window.removeEventListener("pointermove", handleCropDrag);
+  window.removeEventListener("pointermove", handleModalDrag);
+  window.removeEventListener("resize", clampModalToViewport);
   void unlistenDragDrop?.();
 });
 </script>
 
 <template>
   <div class="modal-backdrop">
-    <section class="modal-card custom-crop-modal">
-      <div class="panel__head modal-card__head">
+    <section ref="modalCard" class="modal-card custom-crop-modal" :style="modalPositionStyle">
+      <div class="panel__head modal-card__head custom-crop-modal__drag-handle" @pointerdown="startModalDrag">
         <div>
           <p class="eyebrow">Custom Crop</p>
           <h3>自定义裁剪</h3>
@@ -593,6 +667,17 @@ onBeforeUnmount(() => {
   width: min(1180px, 100%);
   max-height: calc(100vh - 48px);
   overflow: auto;
+  will-change: transform;
+}
+
+.custom-crop-modal__drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.custom-crop-modal__drag-handle:active {
+  cursor: grabbing;
 }
 
 .crop-alert {
