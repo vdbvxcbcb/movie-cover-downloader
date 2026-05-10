@@ -8,6 +8,7 @@ import ImportCookieModal from "../components/cookies/ImportCookieModal.vue";
 import ToastNotice from "../components/common/ToastNotice.vue";
 import CreateTaskModal from "../components/queue/CreateTaskModal.vue";
 import CustomCropModal from "../components/queue/CustomCropModal.vue";
+import ImageProcessModal from "../components/queue/ImageProcessModal.vue";
 import SearchMovieModal from "../components/queue/SearchMovieModal.vue";
 import { useAppStore } from "../stores/app";
 import type { CookieDraft, TaskDraft, TopAction } from "../types/app";
@@ -109,6 +110,12 @@ watch(
     v-if="appStore.customCropOpen"
     :output-root-dir="appStore.customCropOutputRootDir"
     @close="appStore.closeCustomCrop"
+  />
+  <ImageProcessModal
+    v-if="appStore.imageProcessOpen"
+    :output-root-dir="appStore.imageProcessOutputRootDir"
+    @close="appStore.closeImageProcess"
+    @update-output-root-dir="appStore.syncImageProcessOutputRootDir"
   />
   <ImportCookieModal
     v-if="appStore.importCookieOpen"

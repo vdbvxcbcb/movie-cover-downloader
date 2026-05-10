@@ -288,6 +288,15 @@ class RuntimeBridge {
     const bytes = await invoke<number[]>("read_local_image_file", { filePath, rootDirectoryPath });
     return new Uint8Array(bytes);
   }
+  // 图片处理弹窗读取用户拖入的本地图片；这是显式拖拽输入，不绑定输出根目录。
+  async readDroppedImageFile(filePath: string) {
+    if (!isTauriRuntime()) {
+      throw new Error("拖拽读取本地图片仅在 Tauri 桌面环境可用");
+    }
+
+    const bytes = await invoke<number[]>("read_dropped_image_file", { filePath });
+    return new Uint8Array(bytes);
+  }
   // 保存自定义裁剪结果；桌面端写入输出目录，浏览器预览则触发下载。
   async saveCustomCroppedImage(outputRootDir: string, fileName: string, imageBytes: Uint8Array) {
     if (isTauriRuntime()) {
@@ -306,6 +315,26 @@ class RuntimeBridge {
     URL.revokeObjectURL(url);
     return fileName;
   }
+  // 保存图片处理弹窗导出的成品图；桌面端写入用户选择的目录，浏览器预览触发下载。
+  async saveProcessedImage(outputRootDir: string, fileName: string, imageBytes: Uint8Array, format: "jpg" | "png") {
+    if (isTauriRuntime()) {
+      return invoke<string>("save_processed_image", {
+        outputRootDir,
+        fileName,
+        imageBytes: Array.from(imageBytes),
+      });
+    }
+
+    const mimeType = format === "jpg" ? "image/jpeg" : "image/png";
+    const url = URL.createObjectURL(new Blob([imageBytes], { type: mimeType }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    return fileName;
+  }
+
   // 打开独立的豆瓣登录 WebView，使用无痕窗口避免复用旧登录状态。
   async openDoubanLoginWindow(windowLabel: string) {
     if (!isTauriRuntime()) {

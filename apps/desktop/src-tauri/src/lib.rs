@@ -553,8 +553,9 @@ fn sqlite_has_any_state(connection: &Connection) -> Result<bool, String> {
     let tasks = count_rows(connection, "tasks")?;
     let cookies = count_rows(connection, "cookies")?;
     let logs = count_rows(connection, "app_logs")?;
+    let meta = count_rows(connection, "app_meta")?;
 
-    Ok(tasks > 0 || cookies > 0 || logs > 0)
+    Ok(tasks > 0 || cookies > 0 || logs > 0 || meta > 0)
 }
 
 // 从快照根对象读取数组字段；字段缺失时返回空数组，让旧快照也能被温和处理。
@@ -586,6 +587,14 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
         .get("queueConfig")
         .cloned()
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let create_task_output_root_dir = snapshot
+        .get("createTaskOutputRootDir")
+        .cloned()
+        .unwrap_or_else(|| Value::String(String::new()));
+    let image_process_output_root_dir = snapshot
+        .get("imageProcessOutputRootDir")
+        .cloned()
+        .unwrap_or_else(|| Value::String(String::new()));
 
     // 整体快照写入采用“先清空再重建”的事务模型，保证任务/Cookie/日志始终来自同一版本快照。
     let transaction = connection
@@ -657,6 +666,10 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
         .map_err(|error| format!("序列化 schemaVersion 失败: {error}"))?;
     let queue_config_json = serde_json::to_string(&queue_config)
         .map_err(|error| format!("序列化 queueConfig 失败: {error}"))?;
+    let create_task_output_root_dir_json = serde_json::to_string(&create_task_output_root_dir)
+        .map_err(|error| format!("序列化 createTaskOutputRootDir 失败: {error}"))?;
+    let image_process_output_root_dir_json = serde_json::to_string(&image_process_output_root_dir)
+        .map_err(|error| format!("序列化 imageProcessOutputRootDir 失败: {error}"))?;
 
     transaction
         .execute(
@@ -670,6 +683,21 @@ fn write_snapshot_to_sqlite(connection: &mut Connection, snapshot: &Value) -> Re
             params!["queueConfig", queue_config_json],
         )
         .map_err(|error| format!("写入 queueConfig 失败: {error}"))?;
+    transaction
+        .execute(
+            "INSERT OR REPLACE INTO app_meta (key, value_json) VALUES (?1, ?2)",
+            params!["createTaskOutputRootDir", create_task_output_root_dir_json],
+        )
+        .map_err(|error| format!("写入 createTaskOutputRootDir 失败: {error}"))?;
+    transaction
+        .execute(
+            "INSERT OR REPLACE INTO app_meta (key, value_json) VALUES (?1, ?2)",
+            params![
+                "imageProcessOutputRootDir",
+                image_process_output_root_dir_json
+            ],
+        )
+        .map_err(|error| format!("写入 imageProcessOutputRootDir 失败: {error}"))?;
 
     transaction
         .commit()
@@ -717,6 +745,20 @@ fn load_snapshot_from_sqlite(connection: &Connection) -> Result<Option<Value>, S
             |row| row.get::<_, String>(0),
         )
         .ok();
+    let create_task_output_root_dir_json = connection
+        .query_row(
+            "SELECT value_json FROM app_meta WHERE key = ?1",
+            params!["createTaskOutputRootDir"],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    let image_process_output_root_dir_json = connection
+        .query_row(
+            "SELECT value_json FROM app_meta WHERE key = ?1",
+            params!["imageProcessOutputRootDir"],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
 
     let schema_version = schema_version_json
         .as_deref()
@@ -726,6 +768,14 @@ fn load_snapshot_from_sqlite(connection: &Connection) -> Result<Option<Value>, S
         .as_deref()
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let create_task_output_root_dir = create_task_output_root_dir_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| Value::String(String::new()));
+    let image_process_output_root_dir = image_process_output_root_dir_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| Value::String(String::new()));
 
     let mut tasks_statement = connection
         .prepare("SELECT payload_json FROM tasks ORDER BY rowid ASC")
@@ -780,6 +830,14 @@ fn load_snapshot_from_sqlite(connection: &Connection) -> Result<Option<Value>, S
     root.insert("cookies".to_string(), Value::Array(cookies));
     root.insert("logs".to_string(), Value::Array(logs));
     root.insert("queueConfig".to_string(), queue_config);
+    root.insert(
+        "createTaskOutputRootDir".to_string(),
+        create_task_output_root_dir,
+    );
+    root.insert(
+        "imageProcessOutputRootDir".to_string(),
+        image_process_output_root_dir,
+    );
 
     Ok(Some(Value::Object(root)))
 }
@@ -1562,7 +1620,8 @@ fn pick_output_directory(initial_path: Option<String>) -> Result<Option<String>,
         .unwrap_or_default();
 
     let command = format!(
-        "Add-Type -AssemblyName System.Windows.Forms; \
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+         Add-Type -AssemblyName System.Windows.Forms; \
          $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; \
          $dialog.Description = '选择输出目录'; \
          $dialog.ShowNewFolderButton = $true; \
@@ -1586,7 +1645,11 @@ fn pick_output_directory(initial_path: Option<String>) -> Result<Option<String>,
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
 
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let selected = String::from_utf8(output.stdout)
+        .map_err(|error| format!("目录选择器返回了无法识别的路径编码: {error}"))?
+        .trim_start_matches('\u{feff}')
+        .trim()
+        .to_string();
     if selected.is_empty() {
         return Ok(None);
     }
@@ -2083,6 +2146,26 @@ fn read_local_image_file(
 
     fs::read(&path).map_err(|error| format!("读取拖拽图片失败: {error}"))
 }
+
+#[tauri::command]
+fn read_dropped_image_file(file_path: String) -> Result<Vec<u8>, String> {
+    let path = PathBuf::from(file_path.trim());
+    if !path.is_file() {
+        return Err("拖拽的不是可读取的图片文件".to_string());
+    }
+    let path = fs::canonicalize(&path).map_err(|error| format!("解析图片路径失败: {error}"))?;
+
+    if !is_supported_local_image_path(&path) {
+        return Err("仅支持 JPG、PNG、WEBP、GIF、BMP 图片文件".to_string());
+    }
+
+    let metadata = fs::metadata(&path).map_err(|error| format!("读取图片信息失败: {error}"))?;
+    if metadata.len() > 100 * 1024 * 1024 {
+        return Err("图片文件超过 100MB，暂不支持拖拽上传".to_string());
+    }
+
+    fs::read(&path).map_err(|error| format!("读取拖拽图片失败: {error}"))
+}
 // 保存自定义裁剪图片前清理 Windows/macOS/Linux 都不适合出现在文件名里的字符。
 fn sanitize_output_file_name(file_name: &str) -> String {
     let sanitized = file_name
@@ -2104,6 +2187,45 @@ fn sanitize_output_file_name(file_name: &str) -> String {
 }
 
 // 自定义裁剪保存命令：固定写到输出根目录/custom-crop-photo 下。
+fn sanitize_processed_image_file_name(file_name: &str) -> Result<String, String> {
+    let sanitized = sanitize_output_file_name(file_name)
+        .trim()
+        .trim_end_matches(['.', ' '])
+        .to_string();
+    let path = PathBuf::from(&sanitized);
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .ok_or_else(|| "图片文件名必须包含 jpg 或 png 扩展名".to_string())?;
+    if !matches!(extension.as_str(), "jpg" | "jpeg" | "png") {
+        return Err("图片文件名只支持 jpg 或 png 扩展名".to_string());
+    }
+
+    let raw_stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .trim();
+    let stem = raw_stem.trim_matches('.').trim();
+    let reserved_names = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let safe_stem = if stem.is_empty()
+        || stem == "."
+        || stem == ".."
+        || raw_stem.contains("..")
+        || reserved_names.contains(&stem.to_ascii_uppercase().as_str())
+    {
+        "processed-image"
+    } else {
+        stem
+    };
+
+    Ok(format!("{safe_stem}.{extension}"))
+}
+
 #[tauri::command]
 fn save_custom_cropped_image(
     output_root_dir: String,
@@ -2122,6 +2244,35 @@ fn save_custom_cropped_image(
 
     Ok(output_path.to_string_lossy().into_owned())
 }
+// 保存图片处理弹窗导出的成品图。
+#[tauri::command]
+fn save_processed_image(
+    output_root_dir: String,
+    file_name: String,
+    image_bytes: Vec<u8>,
+) -> Result<String, String> {
+    if image_bytes.is_empty() {
+        return Err("图片内容为空".to_string());
+    }
+
+    let output_dir = PathBuf::from(output_root_dir.trim());
+    if output_dir.as_os_str().is_empty() {
+        return Err("图片输出目录不能为空".to_string());
+    }
+
+    if !output_dir.is_absolute() {
+        return Err("图片输出目录必须是绝对路径".to_string());
+    }
+
+    fs::create_dir_all(&output_dir).map_err(|error| format!("创建图片输出目录失败: {error}"))?;
+    let output_dir =
+        fs::canonicalize(&output_dir).map_err(|error| format!("解析图片输出目录失败: {error}"))?;
+    let output_path = output_dir.join(sanitize_processed_image_file_name(&file_name)?);
+    fs::write(&output_path, image_bytes).map_err(|error| format!("保存图片失败: {error}"))?;
+
+    Ok(output_path.to_string_lossy().into_owned())
+}
+
 // 早期内部输出目录命令，仍保留在 handler 中以兼容已有前端调用。
 #[tauri::command]
 fn open_output_dir(app: AppHandle) -> Result<String, String> {
@@ -2227,7 +2378,9 @@ pub fn run() {
             clear_directory_contents,
             pick_output_directory,
             read_local_image_file,
+            read_dropped_image_file,
             save_custom_cropped_image,
+            save_processed_image,
             run_download_task,
             search_douban_movies,
             resolve_douban_movie_title,
@@ -2246,9 +2399,10 @@ mod tests {
     use super::{
         clear_directory_contents, delete_directory_path, format_sidecar_exit_error, hex_decode,
         is_recoverable_sqlite_error, load_snapshot_from_sqlite, next_runtime_log_seed,
-        open_state_db_path, read_local_image_file, resolve_douban_login_cookie_status,
-        resolve_sidecar_entry_arg, resolve_sidecar_event_task_id, resolve_sidecar_node,
-        rotate_corrupted_state_db, run_blocking_job, save_snapshot_to_sqlite_path_with_recovery,
+        open_state_db_path, read_dropped_image_file, read_local_image_file,
+        resolve_douban_login_cookie_status, resolve_sidecar_entry_arg,
+        resolve_sidecar_event_task_id, resolve_sidecar_node, rotate_corrupted_state_db,
+        run_blocking_job, save_processed_image, save_snapshot_to_sqlite_path_with_recovery,
         validate_task_id, TaskControlRegistry,
     };
     use std::{
@@ -2520,6 +2674,31 @@ mod tests {
 
         assert_eq!(loaded["tasks"][0]["id"].as_str(), Some("new-task"));
         assert_eq!(loaded["tasks"][1]["id"].as_str(), Some("old-task"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn load_snapshot_restores_image_process_output_root_dir_without_rows() {
+        let temp_dir = test_temp_dir("image-process-meta");
+        let db_path = temp_dir.join("runtime-state.sqlite");
+        let snapshot = serde_json::json!({
+            "schemaVersion": 2,
+            "tasks": [],
+            "cookies": [],
+            "logs": [],
+            "queueConfig": {},
+            "imageProcessOutputRootDir": "D:/image-output"
+        });
+
+        save_snapshot_to_sqlite_path_with_recovery(&db_path, &snapshot).unwrap();
+        let connection = open_state_db_path(&db_path).unwrap();
+        let loaded = load_snapshot_from_sqlite(&connection).unwrap().unwrap();
+
+        assert_eq!(
+            loaded["imageProcessOutputRootDir"].as_str(),
+            Some("D:/image-output")
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -2855,6 +3034,53 @@ mod tests {
         let _ = fs::remove_dir_all(root_dir);
         let _ = fs::remove_dir_all(outside_dir);
     }
+
+    #[test]
+    fn read_dropped_image_file_accepts_image_without_output_root() {
+        let temp_dir = test_temp_dir("read-dropped-image");
+        let image_path = temp_dir.join("cover.png");
+        fs::write(&image_path, b"image").unwrap();
+
+        let bytes = read_dropped_image_file(image_path.to_string_lossy().into_owned()).unwrap();
+
+        assert_eq!(bytes, b"image");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn save_processed_image_rejects_relative_output_dir() {
+        let error = save_processed_image(
+            "relative-output".to_string(),
+            "processed.png".to_string(),
+            vec![1, 2, 3],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("绝对路径"));
+    }
+
+    #[test]
+    fn save_processed_image_sanitizes_reserved_file_name() {
+        let temp_dir = test_temp_dir("save-processed");
+
+        let output_path = save_processed_image(
+            temp_dir.to_string_lossy().into_owned(),
+            "../CON .png".to_string(),
+            vec![1, 2, 3],
+        )
+        .unwrap();
+
+        let output_path = PathBuf::from(output_path);
+        assert_eq!(
+            output_path.file_name().and_then(|value| value.to_str()),
+            Some("processed-image.png")
+        );
+        assert!(output_path.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
     #[test]
     fn next_runtime_log_seed_uses_loaded_log_max_id_plus_one() {
         let logs = vec![

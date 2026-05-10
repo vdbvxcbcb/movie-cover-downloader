@@ -42,8 +42,9 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
           />
           <ActionButton label="3、添加链接任务" :disabled="disableCookieRequiredActions" @click="appStore.openCreateTask()" />
           <ActionButton label="4、自定义裁剪" :disabled="disableCookieRequiredActions" @click="appStore.openCustomCrop()" />
+          <ActionButton label="5、图片处理" @click="appStore.openImageProcess()" />
           <PopConfirmAction
-            label="5、清空队列任务"
+            label="6、清空队列任务"
             title="清空全部任务？"
             description="队列记录和输出目录下的所有目录和文件会一起删除。"
             confirm-label="清空"

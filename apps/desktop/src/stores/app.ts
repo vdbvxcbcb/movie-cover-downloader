@@ -96,6 +96,7 @@ function toSnapshot(
   logs: AppSeedState["logs"],
   queueConfig: QueueConfig,
   createTaskOutputRootDir: string,
+  imageProcessOutputRootDir: string,
 ): AppSeedState {
   return {
     schemaVersion: 2,
@@ -104,6 +105,7 @@ function toSnapshot(
     logs: normalizeSnapshotLogs(logs),
     queueConfig: clonePersistable(queueConfig),
     createTaskOutputRootDir,
+    imageProcessOutputRootDir,
   };
 }
 
@@ -444,6 +446,8 @@ export const useAppStore = defineStore("app", () => {
   const importCookieOpen = ref(false);
   const searchMovieOpen = ref(false);
   const customCropOpen = ref(false);
+  const imageProcessOpen = ref(false);
+  const imageProcessOutputRootDir = ref("");
   const logOnlyErrors = ref(false);
   const progressTick = ref(0);
   const tasks = ref<TaskItem[]>(seed.tasks);
@@ -674,7 +678,14 @@ export const useAppStore = defineStore("app", () => {
         clearPersistTimers();
         try {
           await runtimeBridge.saveState(
-            toSnapshot(tasks.value, cookies.value, logs.value, queueConfig.value, createTaskOutputRootDir.value),
+            toSnapshot(
+              tasks.value,
+              cookies.value,
+              logs.value,
+              queueConfig.value,
+              createTaskOutputRootDir.value,
+              imageProcessOutputRootDir.value,
+            ),
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -728,6 +739,13 @@ export const useAppStore = defineStore("app", () => {
     const nextValue = value.trim();
     if (createTaskOutputRootDir.value === nextValue) return;
     createTaskOutputRootDir.value = nextValue;
+    schedulePersist();
+  }
+
+  function syncImageProcessOutputRootDir(value: string) {
+    const nextValue = value.trim();
+    if (imageProcessOutputRootDir.value === nextValue) return;
+    imageProcessOutputRootDir.value = nextValue;
     schedulePersist();
   }
 
@@ -833,6 +851,14 @@ export const useAppStore = defineStore("app", () => {
   // 关闭自定义裁剪弹窗。
   function closeCustomCrop() {
     customCropOpen.value = false;
+  }
+
+  function openImageProcess() {
+    imageProcessOpen.value = true;
+  }
+
+  function closeImageProcess() {
+    imageProcessOpen.value = false;
   }
 
   // 判断某个异步动作是否执行中，用于按钮 loading/disabled 状态。
@@ -1052,6 +1078,7 @@ export const useAppStore = defineStore("app", () => {
           } else if (latestTask?.target.outputRootDir) {
             createTaskOutputRootDir.value = latestTask.target.outputRootDir;
           }
+          imageProcessOutputRootDir.value = snapshot.imageProcessOutputRootDir?.trim() ?? "";
           const normalizedCookies = normalizeCookieProfiles(snapshot.cookies);
           cookies.value = normalizedCookies.cookies;
           cookiesChanged = normalizedCookies.changed;
@@ -1659,6 +1686,8 @@ export const useAppStore = defineStore("app", () => {
     importCookieOpen,
     searchMovieOpen,
     customCropOpen,
+    imageProcessOpen,
+    imageProcessOutputRootDir,
     logOnlyErrors,
     progressTick,
     tasks,
@@ -1675,6 +1704,7 @@ export const useAppStore = defineStore("app", () => {
     showNotice,
     syncCreateTaskDetailUrls,
     syncCreateTaskOutputRootDir,
+    syncImageProcessOutputRootDir,
     addCreateTaskDetailUrl,
     upsertCreateTaskMoviePreview,
     getCreateTaskMoviePreview,
@@ -1690,6 +1720,8 @@ export const useAppStore = defineStore("app", () => {
     closeSearchMovie,
     openCustomCrop,
     closeCustomCrop,
+    openImageProcess,
+    closeImageProcess,
     createTasks,
     importCookie,
     startDoubanLoginImport,

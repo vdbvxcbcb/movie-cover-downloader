@@ -199,6 +199,7 @@ export interface AppSeedState {
   logs: LogEntry[];
   queueConfig: QueueConfig;
   createTaskOutputRootDir?: string;
+  imageProcessOutputRootDir?: string;
 }
 
 export interface RuntimeDiscoveredAsset {
