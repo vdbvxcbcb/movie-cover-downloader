@@ -61,6 +61,10 @@ interface Annotation {
   rotation: number;
   arrowReverseX?: boolean;
   arrowReverseY?: boolean;
+  arrowStartX?: number;
+  arrowStartY?: number;
+  arrowEndX?: number;
+  arrowEndY?: number;
 }
 
 type ProcessBridge = typeof runtimeBridge & {
@@ -669,9 +673,14 @@ const annotationDrag = reactive({
   originY: 0,
   originW: 0,
   originH: 0,
+  originArrowStartX: 0,
+  originArrowStartY: 0,
+  originArrowEndX: 0,
+  originArrowEndY: 0,
   originFontSize: 0,
   originRotation: 0,
   startAngle: 0,
+  hasMoved: false,
 });
 const creationDrag = reactive({
   startX: 0,
@@ -788,6 +797,79 @@ function measuredTextAnnotation(annotation: Annotation, anchorX: "left" | "right
     y: anchorY === "bottom" ? clamp(bottom - h, 0, 1 - h) : clamp(annotation.y, 0, 1 - h),
     w,
     h,
+  };
+}
+
+function arrowEndpoints(annotation: Annotation) {
+  if (
+    typeof annotation.arrowStartX === "number" &&
+    typeof annotation.arrowStartY === "number" &&
+    typeof annotation.arrowEndX === "number" &&
+    typeof annotation.arrowEndY === "number"
+  ) {
+    return {
+      startX: annotation.arrowStartX,
+      startY: annotation.arrowStartY,
+      endX: annotation.arrowEndX,
+      endY: annotation.arrowEndY,
+    };
+  }
+
+  return {
+    startX: annotation.arrowReverseX ? annotation.x + annotation.w : annotation.x,
+    startY: annotation.arrowReverseY ? annotation.y + annotation.h : annotation.y,
+    endX: annotation.arrowReverseX ? annotation.x : annotation.x + annotation.w,
+    endY: annotation.arrowReverseY ? annotation.y : annotation.y + annotation.h,
+  };
+}
+
+function normalizeArrowAnnotation(annotation: Annotation, startX: number, startY: number, endX: number, endY: number): Annotation {
+  const nextStartX = clamp(startX, 0, 1);
+  const nextStartY = clamp(startY, 0, 1);
+  const nextEndX = clamp(endX, 0, 1);
+  const nextEndY = clamp(endY, 0, 1);
+  const x = Math.min(nextStartX, nextEndX);
+  const y = Math.min(nextStartY, nextEndY);
+  const w = Math.abs(nextEndX - nextStartX);
+  const h = Math.abs(nextEndY - nextStartY);
+
+  return {
+    ...annotation,
+    x,
+    y,
+    w,
+    h,
+    arrowReverseX: nextEndX < nextStartX,
+    arrowReverseY: nextEndY < nextStartY,
+    arrowStartX: nextStartX,
+    arrowStartY: nextStartY,
+    arrowEndX: nextEndX,
+    arrowEndY: nextEndY,
+  };
+}
+
+function arrowLayout(annotation: Annotation) {
+  const boardWidth = Math.max(1, previewBoard.value?.clientWidth ?? 980);
+  const boardHeight = Math.max(1, previewBoard.value?.clientHeight ?? 640);
+  const paddingX = Math.max(12, annotation.strokeWidth * 2.4) / boardWidth;
+  const paddingY = Math.max(12, annotation.strokeWidth * 2.4) / boardHeight;
+  const endpoints = arrowEndpoints(annotation);
+  const left = clamp(Math.min(endpoints.startX, endpoints.endX) - paddingX, 0, 1);
+  const top = clamp(Math.min(endpoints.startY, endpoints.endY) - paddingY, 0, 1);
+  const right = clamp(Math.max(endpoints.startX, endpoints.endX) + paddingX, left + 0.001, 1);
+  const bottom = clamp(Math.max(endpoints.startY, endpoints.endY) + paddingY, top + 0.001, 1);
+  const w = Math.max(0.001, right - left);
+  const h = Math.max(0.001, bottom - top);
+
+  return {
+    left,
+    top,
+    w,
+    h,
+    startX: ((endpoints.startX - left) / w) * 100,
+    startY: ((endpoints.startY - top) / h) * 100,
+    endX: ((endpoints.endX - left) / w) * 100,
+    endY: ((endpoints.endY - top) / h) * 100,
   };
 }
 
@@ -1096,29 +1178,35 @@ function resizeTextAnnotationFromDrag(annotation: Annotation, deltaX: number, de
 }
 
 function updateArrowPointFromDrag(annotation: Annotation, deltaX: number, deltaY: number, point: "start" | "end") {
-  const startX = annotation.arrowReverseX ? annotationDrag.originX + annotationDrag.originW : annotationDrag.originX;
-  const startY = annotation.arrowReverseY ? annotationDrag.originY + annotationDrag.originH : annotationDrag.originY;
-  const endX = annotation.arrowReverseX ? annotationDrag.originX : annotationDrag.originX + annotationDrag.originW;
-  const endY = annotation.arrowReverseY ? annotationDrag.originY : annotationDrag.originY + annotationDrag.originH;
+  const startX = annotationDrag.originArrowStartX;
+  const startY = annotationDrag.originArrowStartY;
+  const endX = annotationDrag.originArrowEndX;
+  const endY = annotationDrag.originArrowEndY;
   const movedX = clamp((point === "start" ? startX : endX) + deltaX, 0, 1);
   const movedY = clamp((point === "start" ? startY : endY) + deltaY, 0, 1);
   const nextStartX = point === "start" ? movedX : startX;
   const nextStartY = point === "start" ? movedY : startY;
   const nextEndX = point === "end" ? movedX : endX;
   const nextEndY = point === "end" ? movedY : endY;
-  const minSize = 0.04;
-  const w = Math.max(minSize, Math.abs(nextEndX - nextStartX));
-  const h = Math.max(minSize, Math.abs(nextEndY - nextStartY));
 
-  return {
-    ...annotation,
-    x: clamp(Math.min(nextStartX, nextEndX), 0, 1 - w),
-    y: clamp(Math.min(nextStartY, nextEndY), 0, 1 - h),
-    w,
-    h,
-    arrowReverseX: nextEndX < nextStartX,
-    arrowReverseY: nextEndY < nextStartY,
-  };
+  return normalizeArrowAnnotation(annotation, nextStartX, nextStartY, nextEndX, nextEndY);
+}
+
+function moveArrowFromDrag(annotation: Annotation, deltaX: number, deltaY: number) {
+  const minX = Math.min(annotationDrag.originArrowStartX, annotationDrag.originArrowEndX);
+  const maxX = Math.max(annotationDrag.originArrowStartX, annotationDrag.originArrowEndX);
+  const minY = Math.min(annotationDrag.originArrowStartY, annotationDrag.originArrowEndY);
+  const maxY = Math.max(annotationDrag.originArrowStartY, annotationDrag.originArrowEndY);
+  const safeDeltaX = clamp(deltaX, -minX, 1 - maxX);
+  const safeDeltaY = clamp(deltaY, -minY, 1 - maxY);
+
+  return normalizeArrowAnnotation(
+    annotation,
+    annotationDrag.originArrowStartX + safeDeltaX,
+    annotationDrag.originArrowStartY + safeDeltaY,
+    annotationDrag.originArrowEndX + safeDeltaX,
+    annotationDrag.originArrowEndY + safeDeltaY,
+  );
 }
 
 function removeSlotImage(index: number) {
@@ -1204,6 +1292,24 @@ function selectDrawingTool(kind: DrawingKind) {
 }
 
 function annotationStyle(annotation: Annotation) {
+  if (annotation.kind === "arrow") {
+    const layout = arrowLayout(annotation);
+    return {
+      left: `${layout.left * 100}%`,
+      top: `${layout.top * 100}%`,
+      width: `${layout.w * 100}%`,
+      height: `${layout.h * 100}%`,
+      color: annotation.color,
+      fontSize: `${annotation.fontSize}px`,
+      "--annotation-line-width": `${annotation.strokeWidth}px`,
+      "--annotation-rotation": `${annotation.rotation}deg`,
+      "--arrow-start-x": `${layout.startX}%`,
+      "--arrow-start-y": `${layout.startY}%`,
+      "--arrow-end-x": `${layout.endX}%`,
+      "--arrow-end-y": `${layout.endY}%`,
+    };
+  }
+
   return {
     left: `${annotation.x * 100}%`,
     top: `${annotation.y * 100}%`,
@@ -1217,15 +1323,81 @@ function annotationStyle(annotation: Annotation) {
 }
 
 function arrowHandleStyle(annotation: Annotation, point: "start" | "end") {
-  const isStart = point === "start";
-  const atRight = isStart ? annotation.arrowReverseX : !annotation.arrowReverseX;
-  const atBottom = isStart ? annotation.arrowReverseY : !annotation.arrowReverseY;
+  const layout = arrowLayout(annotation);
   return {
-    left: atRight ? "auto" : "-7px",
-    right: atRight ? "-7px" : "auto",
-    top: atBottom ? "auto" : "-7px",
-    bottom: atBottom ? "-7px" : "auto",
+    left: `${point === "start" ? layout.startX : layout.endX}%`,
+    top: `${point === "start" ? layout.startY : layout.endY}%`,
   };
+}
+
+function arrowPreviewGeometry(annotation: Annotation) {
+  const layout = arrowLayout(annotation);
+  const boardWidth = Math.max(1, previewBoard.value?.clientWidth ?? 980);
+  const boardHeight = Math.max(1, previewBoard.value?.clientHeight ?? 640);
+  const boxWidth = Math.max(1, layout.w * boardWidth);
+  const boxHeight = Math.max(1, layout.h * boardHeight);
+  const startX = (layout.startX / 100) * boxWidth;
+  const startY = (layout.startY / 100) * boxHeight;
+  const endX = (layout.endX / 100) * boxWidth;
+  const endY = (layout.endY / 100) * boxHeight;
+  const angle = Math.atan2(endY - startY, endX - startX);
+  const headLength = clamp(annotation.strokeWidth * 2.6, 8, 18);
+  const headWidth = clamp(annotation.strokeWidth * 1.9, 6, 14);
+  const baseX = endX - headLength * Math.cos(angle);
+  const baseY = endY - headLength * Math.sin(angle);
+  const normalX = Math.cos(angle + Math.PI / 2);
+  const normalY = Math.sin(angle + Math.PI / 2);
+
+  return {
+    boxWidth,
+    boxHeight,
+    startX,
+    startY,
+    endX,
+    endY,
+    bodyEndX: baseX,
+    bodyEndY: baseY,
+    headPoints: [
+      [endX, endY],
+      [baseX + (headWidth / 2) * normalX, baseY + (headWidth / 2) * normalY],
+      [baseX - (headWidth / 2) * normalX, baseY - (headWidth / 2) * normalY],
+    ],
+  };
+}
+
+function arrowSvgViewBox(annotation: Annotation) {
+  const geometry = arrowPreviewGeometry(annotation);
+  return `0 0 ${geometry.boxWidth} ${geometry.boxHeight}`;
+}
+
+function arrowSvgCoordinate(annotation: Annotation, point: "start" | "end", axis: "x" | "y") {
+  const geometry = arrowPreviewGeometry(annotation);
+  if (point === "start") return axis === "x" ? geometry.startX : geometry.startY;
+  return axis === "x" ? geometry.endX : geometry.endY;
+}
+
+function arrowBodyEndCoordinate(annotation: Annotation, axis: "x" | "y") {
+  const geometry = arrowPreviewGeometry(annotation);
+  return axis === "x" ? geometry.bodyEndX : geometry.bodyEndY;
+}
+
+function arrowHeadPoints(annotation: Annotation) {
+  return arrowPreviewGeometry(annotation)
+    .headPoints.map(([x, y]) => `${x},${y}`)
+    .join(" ");
+}
+
+function shouldShowAnnotationToolbar(annotation: Annotation) {
+  if (selectedAnnotationId.value !== annotation.id) return false;
+  return draggingAnnotationId.value !== annotation.id && creatingAnnotationId.value !== annotation.id;
+}
+
+function shouldShowArrowHandles(annotation: Annotation) {
+  return annotation.kind === "arrow" && selectedAnnotationId.value === annotation.id;
+}
+
+function shouldShowResizeHandles(annotation: Annotation) {
+  return annotation.kind !== "arrow" && selectedAnnotationId.value === annotation.id;
 }
 
 function resizeHandlesFor(kind: AnnotationKind) {
@@ -1267,10 +1439,16 @@ function startAnnotationDrag(event: PointerEvent, annotation: Annotation, mode: 
   annotationDragMode.value = mode;
   annotationDrag.startX = event.clientX;
   annotationDrag.startY = event.clientY;
+  annotationDrag.hasMoved = false;
   annotationDrag.originX = annotation.x;
   annotationDrag.originY = annotation.y;
   annotationDrag.originW = annotation.w;
   annotationDrag.originH = annotation.h;
+  const endpoints = arrowEndpoints(annotation);
+  annotationDrag.originArrowStartX = endpoints.startX;
+  annotationDrag.originArrowStartY = endpoints.startY;
+  annotationDrag.originArrowEndX = endpoints.endX;
+  annotationDrag.originArrowEndY = endpoints.endY;
   annotationDrag.originFontSize = annotation.fontSize;
   annotationDrag.originRotation = annotation.rotation;
 
@@ -1293,10 +1471,16 @@ function startTextAnnotationPointer(event: PointerEvent, annotation: Annotation)
   annotationDragMode.value = "move";
   annotationDrag.startX = event.clientX;
   annotationDrag.startY = event.clientY;
+  annotationDrag.hasMoved = false;
   annotationDrag.originX = annotation.x;
   annotationDrag.originY = annotation.y;
   annotationDrag.originW = annotation.w;
   annotationDrag.originH = annotation.h;
+  const endpoints = arrowEndpoints(annotation);
+  annotationDrag.originArrowStartX = endpoints.startX;
+  annotationDrag.originArrowStartY = endpoints.startY;
+  annotationDrag.originArrowEndX = endpoints.endX;
+  annotationDrag.originArrowEndY = endpoints.endY;
   annotationDrag.originFontSize = annotation.fontSize;
   annotationDrag.originRotation = annotation.rotation;
   window.addEventListener("pointermove", handleAnnotationDrag);
@@ -1307,6 +1491,10 @@ function handleAnnotationDrag(event: PointerEvent) {
   if (!draggingAnnotationId.value || !previewBoard.value) return;
 
   const rect = previewBoard.value.getBoundingClientRect();
+  const movedPixels = Math.hypot(event.clientX - annotationDrag.startX, event.clientY - annotationDrag.startY);
+  if (movedPixels > 3) {
+    annotationDrag.hasMoved = true;
+  }
   const deltaX = (event.clientX - annotationDrag.startX) / rect.width;
   const deltaY = (event.clientY - annotationDrag.startY) / rect.height;
   annotations.value = annotations.value.map((annotation) => {
@@ -1329,6 +1517,9 @@ function handleAnnotationDrag(event: PointerEvent) {
     if (annotationDragMode.value === "arrow-start") {
       return updateArrowPointFromDrag(annotation, deltaX, deltaY, "start");
     }
+    if (annotation.kind === "arrow") {
+      return moveArrowFromDrag(annotation, deltaX, deltaY);
+    }
     return {
       ...annotation,
       x: clamp(annotationDrag.originX + deltaX, 0, 1 - annotation.w),
@@ -1338,8 +1529,13 @@ function handleAnnotationDrag(event: PointerEvent) {
 }
 
 function stopAnnotationDrag() {
+  const draggedAnnotation = annotations.value.find((annotation) => annotation.id === draggingAnnotationId.value);
+  if (draggedAnnotation && draggedAnnotation.kind !== "text" && annotationDrag.hasMoved) {
+    selectedAnnotationId.value = "";
+  }
   draggingAnnotationId.value = "";
   annotationDragMode.value = "move";
+  annotationDrag.hasMoved = false;
   window.removeEventListener("pointermove", handleAnnotationDrag);
 }
 
@@ -1358,6 +1554,28 @@ function pointFromBoardEvent(event: PointerEvent) {
 }
 
 function buildDrawnAnnotation(kind: DrawingKind, startX: number, startY: number, endX: number, endY: number): Annotation {
+  if (kind === "arrow") {
+    return normalizeArrowAnnotation(
+      {
+        id: createId(kind),
+        kind,
+        x: startX,
+        y: startY,
+        w: 0,
+        h: 0,
+        text: "",
+        color: "#ff3b30",
+        fontSize: defaultAnnotationFontSize,
+        strokeWidth: 5,
+        rotation: 0,
+      },
+      startX,
+      startY,
+      endX,
+      endY,
+    );
+  }
+
   const minSize = 0.025;
   const x = Math.min(startX, endX);
   const y = Math.min(startY, endY);
@@ -1375,8 +1593,6 @@ function buildDrawnAnnotation(kind: DrawingKind, startX: number, startY: number,
     fontSize: defaultAnnotationFontSize,
     strokeWidth: 5,
     rotation: 0,
-    arrowReverseX: kind === "arrow" ? endX < startX : undefined,
-    arrowReverseY: kind === "arrow" ? endY < startY : undefined,
   };
 }
 
@@ -1413,6 +1629,7 @@ function finishAnnotationCreate(event: PointerEvent) {
   updateAnnotationCreate(event);
   activeDrawingKind.value = null;
   creatingAnnotationId.value = "";
+  selectedAnnotationId.value = "";
   window.setTimeout(() => {
     suppressNextBoardClick.value = false;
   }, 0);
@@ -1639,20 +1856,26 @@ function drawAnnotations(context: CanvasRenderingContext2D, width: number, heigh
       context.textBaseline = "top";
       context.fillText(annotation.text, x, y);
     } else if (annotation.kind === "arrow") {
-      const startX = annotation.arrowReverseX ? x + w : x;
-      const startY = annotation.arrowReverseY ? y + h : y;
-      const endX = annotation.arrowReverseX ? x : x + w;
-      const endY = annotation.arrowReverseY ? y : y + h;
+      const endpoints = arrowEndpoints(annotation);
+      const startX = endpoints.startX * width;
+      const startY = endpoints.startY * height;
+      const endX = endpoints.endX * width;
+      const endY = endpoints.endY * height;
+      const angle = Math.atan2(endY - startY, endX - startX);
+      const headLength = clamp(lineWidth * 2.6, 8 * scale, 18 * scale);
+      const headWidth = clamp(lineWidth * 1.9, 6 * scale, 14 * scale);
+      const baseX = endX - headLength * Math.cos(angle);
+      const baseY = endY - headLength * Math.sin(angle);
+      const normalX = Math.cos(angle + Math.PI / 2);
+      const normalY = Math.sin(angle + Math.PI / 2);
       context.beginPath();
       context.moveTo(startX, startY);
-      context.lineTo(endX, endY);
+      context.lineTo(baseX, baseY);
       context.stroke();
-      const angle = Math.atan2(endY - startY, endX - startX);
-      const headLength = Math.max(lineWidth * 5, width / 54);
       context.beginPath();
       context.moveTo(endX, endY);
-      context.lineTo(endX - headLength * Math.cos(angle - Math.PI / 6), endY - headLength * Math.sin(angle - Math.PI / 6));
-      context.lineTo(endX - headLength * Math.cos(angle + Math.PI / 6), endY - headLength * Math.sin(angle + Math.PI / 6));
+      context.lineTo(baseX + (headWidth / 2) * normalX, baseY + (headWidth / 2) * normalY);
+      context.lineTo(baseX - (headWidth / 2) * normalX, baseY - (headWidth / 2) * normalY);
       context.closePath();
       context.fill();
     } else if (annotation.kind === "rect") {
@@ -1935,7 +2158,7 @@ onBeforeUnmount(() => {
                     <button type="button" title="删除图片" aria-label="删除图片" @click="removeSlotImage(index)">×</button>
                     <button type="button" title="放大" aria-label="放大" @click="zoomSlot(index, 0.12)">＋</button>
                     <button type="button" title="缩小" aria-label="缩小" @click="zoomSlot(index, -0.12)">－</button>
-                    <button type="button" title="还原" aria-label="还原" @click="resetSlotZoom(index)">1</button>
+                    <button type="button" title="还原" aria-label="还原" @click="resetSlotZoom(index)">●</button>
                   </span>
                 </div>
               </div>
@@ -1965,25 +2188,21 @@ onBeforeUnmount(() => {
                     @pointerdown="startTextAnnotationPointer($event, annotation)"
                     @click.stop
                   />
-                  <svg v-else-if="annotation.kind === 'arrow'" class="annotation-arrow" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                    <defs>
-                      <marker :id="`${annotation.id}-arrow`" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-                        <path d="M 0 0 L 8 4 L 0 8 z" fill="currentColor" />
-                      </marker>
-                    </defs>
+                  <svg v-else-if="annotation.kind === 'arrow'" class="annotation-arrow" :viewBox="arrowSvgViewBox(annotation)" aria-hidden="true">
                     <line
-                      :x1="annotation.arrowReverseX ? 98 : 2"
-                      :y1="annotation.arrowReverseY ? 98 : 2"
-                      :x2="annotation.arrowReverseX ? 2 : 98"
-                      :y2="annotation.arrowReverseY ? 2 : 98"
+                      :x1="arrowSvgCoordinate(annotation, 'start', 'x')"
+                      :y1="arrowSvgCoordinate(annotation, 'start', 'y')"
+                      :x2="arrowBodyEndCoordinate(annotation, 'x')"
+                      :y2="arrowBodyEndCoordinate(annotation, 'y')"
                       :stroke-width="annotation.strokeWidth"
                       stroke="currentColor"
-                      :marker-end="`url(#${annotation.id}-arrow)`"
+                      stroke-linecap="round"
                     />
+                    <polygon :points="arrowHeadPoints(annotation)" fill="currentColor" />
                   </svg>
                   <span v-else class="annotation-shape"></span>
 
-                  <div v-if="selectedAnnotationId === annotation.id" class="annotation-toolbar" @pointerdown.stop @click.stop>
+                  <div v-if="shouldShowAnnotationToolbar(annotation)" class="annotation-toolbar" @pointerdown.stop @click.stop>
                     <input
                       v-if="annotation.kind === 'text'"
                       class="annotation-toolbar__number"
@@ -2015,7 +2234,7 @@ onBeforeUnmount(() => {
                   </div>
 
                   <button
-                    v-if="annotation.kind === 'arrow'"
+                    v-if="shouldShowArrowHandles(annotation)"
                     type="button"
                     class="annotation-handle annotation-handle--arrow-start"
                     :style="arrowHandleStyle(annotation, 'start')"
@@ -2023,14 +2242,14 @@ onBeforeUnmount(() => {
                     @pointerdown.stop.prevent="startAnnotationDrag($event, annotation, 'arrow-start')"
                   ></button>
                   <button
-                    v-if="annotation.kind === 'arrow'"
+                    v-if="shouldShowArrowHandles(annotation)"
                     type="button"
                     class="annotation-handle annotation-handle--arrow-end"
                     :style="arrowHandleStyle(annotation, 'end')"
                     aria-label="调整箭头终点"
                     @pointerdown.stop.prevent="startAnnotationDrag($event, annotation, 'arrow-end')"
                   ></button>
-                  <template v-if="annotation.kind === 'rect' || annotation.kind === 'circle' || annotation.kind === 'text'">
+                  <template v-if="shouldShowResizeHandles(annotation)">
                     <button
                       v-for="handle in resizeHandlesFor(annotation.kind)"
                       :key="handle"
@@ -2615,6 +2834,10 @@ onBeforeUnmount(() => {
   outline-offset: 4px;
 }
 
+.annotation-item--arrow.annotation-item--active {
+  outline: none;
+}
+
 .annotation-item--text {
   display: flex;
   align-items: flex-start;
@@ -2796,11 +3019,18 @@ onBeforeUnmount(() => {
 }
 
 .annotation-handle--arrow-start {
-  cursor: move;
+  cursor: grab;
+  transform: translate(-50%, -50%);
 }
 
 .annotation-handle--arrow-end {
-  cursor: move;
+  cursor: grab;
+  transform: translate(-50%, -50%);
+}
+
+.annotation-handle--arrow-start:active,
+.annotation-handle--arrow-end:active {
+  cursor: grabbing;
 }
 
 .annotation-rotate-handle {

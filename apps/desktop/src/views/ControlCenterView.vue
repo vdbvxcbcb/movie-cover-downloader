@@ -42,7 +42,7 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
           />
           <ActionButton label="3、添加链接任务" :disabled="disableCookieRequiredActions" @click="appStore.openCreateTask()" />
           <ActionButton label="4、自定义裁剪" :disabled="disableCookieRequiredActions" @click="appStore.openCustomCrop()" />
-          <ActionButton label="5、图片处理" @click="appStore.openImageProcess()" />
+          <ActionButton label="5、图片处理" :disabled="disableCookieRequiredActions" @click="appStore.openImageProcess()" />
           <PopConfirmAction
             label="6、清空队列任务"
             title="清空全部任务？"
