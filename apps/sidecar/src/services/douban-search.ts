@@ -15,6 +15,7 @@ interface RawDoubanSearchItem {
 
 interface RawDoubanSearchData {
   count?: number;
+  error_info?: string;
   items?: RawDoubanSearchItem[];
   start?: number;
   total?: number;
@@ -117,14 +118,13 @@ function normalizeSearchItem(item: RawDoubanSearchItem): DoubanSearchResultItem 
   };
 }
 
-
 async function fetchCoverDataUrl(coverUrl: string | undefined, config: RuntimeConfig) {
   if (!coverUrl) return undefined;
 
   try {
     const response = await fetch(coverUrl, {
       headers: buildHeaders(
-        { config, logger: silentLogger },
+        { config, logger: silentLogger, cookieHeader: config.doubanCookie },
         {
           accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
           referer: "https://search.douban.com/",
@@ -145,13 +145,31 @@ async function fetchCoverDataUrl(coverUrl: string | undefined, config: RuntimeCo
 }
 
 async function attachCoverDataUrls(items: DoubanSearchResultItem[], config: RuntimeConfig) {
-  return Promise.all(
-    items.map(async (item) => ({
-      ...item,
-      coverDataUrl: await fetchCoverDataUrl(item.coverUrl, config),
-    })),
-  );
+  const cache = new Map<string, Promise<string | undefined>>();
+  const results = new Array<DoubanSearchResultItem>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+
+      const item = items[index]!;
+      let coverDataUrl: string | undefined;
+      if (item.coverUrl) {
+        const cached = cache.get(item.coverUrl) ?? fetchCoverDataUrl(item.coverUrl, config);
+        cache.set(item.coverUrl, cached);
+        coverDataUrl = await cached;
+      }
+      results[index] = { ...item, coverDataUrl };
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(2, items.length) }, () => worker()));
+  return results;
 }
+
 function buildSearchUrl(query: string, page: number, pageSize: number) {
   const safePage = Math.max(1, page);
   const start = (safePage - 1) * pageSize;
@@ -172,7 +190,7 @@ export async function searchDoubanMovies(query: string, options: SearchOptions):
   const page = Math.max(1, options.page);
   const pageSize = Math.max(1, options.pageSize);
   const response = await fetch(buildSearchUrl(normalizedQuery, page, pageSize), {
-    headers: buildHeaders({ config: options.config, logger: silentLogger }),
+    headers: buildHeaders({ config: options.config, logger: silentLogger, cookieHeader: options.config.doubanCookie }),
     redirect: "follow",
     signal: AbortSignal.timeout(options.config.requestTimeoutMs),
   });
@@ -183,14 +201,14 @@ export async function searchDoubanMovies(query: string, options: SearchOptions):
   }
 
   const data = parseSearchData(html);
+  if (data.error_info) {
+    throw new Error(cleanText(data.error_info));
+  }
   const rawItems = Array.isArray(data.items) ? data.items : [];
-  const items = await attachCoverDataUrls(
-    rawItems.flatMap((item) => {
-      const normalized = normalizeSearchItem(item);
-      return normalized ? [normalized] : [];
-    }),
-    options.config,
-  );
+  const items = await attachCoverDataUrls(rawItems.flatMap((item) => {
+    const normalized = normalizeSearchItem(item);
+    return normalized ? [normalized] : [];
+  }), options.config);
   const start = Number.isFinite(data.start) ? Number(data.start) : (page - 1) * pageSize;
   const actualPageSize = Number.isFinite(data.count) && Number(data.count) > 0 ? Number(data.count) : pageSize;
 

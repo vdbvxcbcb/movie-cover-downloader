@@ -1,19 +1,20 @@
 // 豆瓣适配器：解析详情页、分类页和图片列表，并识别登录/风控/空分类。
 import path from "node:path";
 import type { FetchedHtmlPage, SourceAdapter } from "./base.js";
-import { dedupeUrls, extractTitleFromHtml, fetchText, normalizeWhitespace } from "./base.js";
+import { buildHeaders, dedupeUrls, extractTitleFromHtml, fetchText, normalizeWhitespace } from "./base.js";
 import type { AdapterContext } from "./base.js";
 import type { DiscoveredImage, DiscoveryResult, SidecarTask } from "../shared/contracts.js";
 import { buildOutputDir, buildOutputFolderName, formatDirectoryImageAspectRatio } from "../utils/output-folder.js";
 import { createResolvedSkeleton } from "../utils/source-detector.js";
 
 const doubanTypeMap = {
-  S: { category: "still", orientation: "horizontal", label: "Still" },
-  R: { category: "poster", orientation: "vertical", label: "Poster" },
-  W: { category: "still", orientation: "horizontal", label: "Wallpaper" },
+  S: { category: "still", doubanAssetType: "still", orientation: "horizontal", label: "Still" },
+  R: { category: "poster", doubanAssetType: "poster", orientation: "vertical", label: "Poster" },
+  W: { category: "still", doubanAssetType: "wallpaper", orientation: "horizontal", label: "Wallpaper" },
 } as const;
 const doubanCategoryPageSize = 30;
 const maxDoubanCategoryPages = 1000;
+const maxPreviewImageBytes = 1_200_000;
 
 type DoubanPhotoType = keyof typeof doubanTypeMap;
 type DoubanPhotoPageKind = "ok" | "empty" | "auth" | "risk" | "unexpected";
@@ -53,6 +54,113 @@ function upgradeDoubanImageUrl(imageUrl: string) {
   return imageUrl.replace(/\/view\/photo\/[a-z_]+\/public\//i, "/view/photo/l/public/");
 }
 
+function inferPreviewContentType(imageUrl: string, contentType: string | null) {
+  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase();
+  if (normalizedContentType?.startsWith("image/")) {
+    return normalizedContentType;
+  }
+
+  const pathname = new URL(imageUrl).pathname.toLowerCase();
+  if (pathname.endsWith(".webp")) return "image/webp";
+  if (pathname.endsWith(".png")) return "image/png";
+  return "image/jpeg";
+}
+
+async function fetchPreviewDataUrl(imageUrl: string, pageUrl: string, context: AdapterContext) {
+  try {
+    const response = await fetch(imageUrl, {
+      headers: buildHeaders(context, {
+        accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        referer: pageUrl,
+      }),
+      redirect: "follow",
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (contentLength > maxPreviewImageBytes) {
+      return undefined;
+    }
+
+    const bytes = await readPreviewBytes(response);
+    if (!bytes) {
+      return undefined;
+    }
+
+    const contentType = inferPreviewContentType(response.url || imageUrl, response.headers.get("content-type"));
+    return `data:${contentType};base64,${bytes.toString("base64")}`;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readPreviewBytes(response: Response) {
+  if (!response.body) {
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength === 0 || bytes.byteLength > maxPreviewImageBytes) {
+      return undefined;
+    }
+    return Buffer.from(bytes);
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      total += value.byteLength;
+      if (total > maxPreviewImageBytes) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return total === 0 ? undefined : Buffer.concat(chunks, total);
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, run: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await run(items[index]!);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
+async function attachPreviewDataUrls(images: DiscoveredImage[], pageUrl: string, context: AdapterContext) {
+  if (!context.includePreviewDataUrl || images.length === 0) {
+    return images;
+  }
+
+  return mapWithConcurrency(
+    images,
+    Math.max(1, context.config.concurrency),
+    async (image) => {
+      const previewDataUrl = await fetchPreviewDataUrl(image.previewUrl ?? image.imageUrl, pageUrl, context);
+      return previewDataUrl ? { ...image, previewDataUrl } : image;
+    },
+  );
+}
+
 // 解析图片时优先升级到原图域名，并用 Set 去重，避免缩略图重复下载。
 // 从豆瓣图片页 HTML 解析图片链接，升级大图 URL、补齐分类/方向信息并去重。
 function extractDoubanImages(
@@ -70,8 +178,10 @@ function extractDoubanImages(
       source: "douban",
       title: `${title} ${config.label} ${offset + index + 1}`,
       imageUrl: upgradeDoubanImageUrl(imageUrl),
+      previewUrl: imageUrl,
       pageUrl,
       category: config.category,
+      doubanAssetType: config.doubanAssetType,
       orientation: config.orientation,
     };
   });
@@ -237,13 +347,29 @@ export class DoubanAdapter implements SourceAdapter {
       }
 
       const pageImages = extractDoubanImages(pageHtml.html, pageUrl, title, pageType, images.length);
-      if (task.imageCountMode === "limited") {
-        const remaining = task.maxImages - images.length;
-        images.push(...pageImages.slice(0, Math.max(remaining, 0)));
-        continue;
+      const nextImagesWithoutPreview =
+        task.imageCountMode === "limited"
+          ? pageImages.slice(0, Math.max(task.maxImages - images.length, 0))
+          : pageImages;
+      const nextImages = await attachPreviewDataUrls(nextImagesWithoutPreview, pageUrl, protectedContext);
+
+      if (nextImages.length > 0) {
+        images.push(...nextImages);
+        context.onImagesDiscovered?.(nextImages, {
+          taskId: task.id,
+          doubanAssetType: task.doubanAssetType,
+          pageUrl,
+          normalizedTitle: title,
+        });
       }
 
-      images.push(...pageImages);
+      if (task.imageCountMode === "limited") {
+        const remaining = task.maxImages - images.length;
+        if (remaining <= 0) {
+          break;
+        }
+        continue;
+      }
     }
 
     const finalImages = task.imageCountMode === "unlimited" ? images : images.slice(0, task.maxImages);

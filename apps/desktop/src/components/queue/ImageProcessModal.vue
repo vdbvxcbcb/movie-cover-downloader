@@ -45,6 +45,7 @@ interface SlotImage {
   url: string;
   name: string;
   scale: number;
+  opacity: number;
 }
 
 interface Annotation {
@@ -630,6 +631,7 @@ const backgroundInput = ref<HTMLInputElement | null>(null);
 const previewBoard = ref<HTMLElement | null>(null);
 const selectedLayoutId = ref("q4-grid");
 const activeSlotIndex = ref(0);
+const selectedSlotIndex = ref<number | null>(null);
 const draggedSlotIndex = ref<number | null>(null);
 const hoveredSlotIndex = ref<number | null>(null);
 const selectedAnnotationId = ref("");
@@ -661,7 +663,8 @@ const settings = reactive({
   backgroundColor: defaultBackgroundColor,
   backgroundUrl: "",
   backgroundName: "",
-  imageOpacity: 100,
+  backgroundOpacity: 100,
+  backgroundOverlay: false,
 });
 
 const slotImages = ref<(SlotImage | null)[]>(Array.from({ length: 9 }, () => null));
@@ -703,7 +706,8 @@ const boardStyle = computed(() => ({
   aspectRatio: settings.ratio.replace(":", " / "),
   "--board-fit-width": `min(100%, ${Math.round(Math.max(320, Math.min(1240, (viewportHeight.value - 210) * aspectRatioValue.value)))}px)`,
   backgroundColor: settings.backgroundColor,
-  backgroundImage: settings.backgroundUrl ? `url(${settings.backgroundUrl})` : "none",
+  "--background-image": settings.backgroundUrl ? `url(${settings.backgroundUrl})` : "none",
+  "--background-opacity": String(settings.backgroundOpacity / 100),
   "--border-top": `${settings.borderTop}px`,
   "--border-right": `${settings.borderRight}px`,
   "--border-bottom": `${settings.borderBottom}px`,
@@ -711,9 +715,25 @@ const boardStyle = computed(() => ({
   "--gap": `${settings.gap}px`,
   "--cell-radius": `${settings.radius}px`,
 } as Record<string, string>));
-const imageFilterStyle = computed(() => ({
-  opacity: String(settings.imageOpacity / 100),
-}));
+const selectedSlotImage = computed(() =>
+  selectedSlotIndex.value === null ? null : slotImages.value[selectedSlotIndex.value] ?? null,
+);
+const selectedImageOpacity = computed({
+  get() {
+    return selectedSlotImage.value?.opacity ?? 100;
+  },
+  set(value: number) {
+    if (selectedSlotIndex.value === null) return;
+    const current = slotImages.value[selectedSlotIndex.value];
+    if (!current) return;
+    const nextImages = [...slotImages.value];
+    nextImages[selectedSlotIndex.value] = {
+      ...current,
+      opacity: clamp(Number(value) || 100, 20, 100),
+    };
+    slotImages.value = nextImages;
+  },
+});
 const displaySavedOutputPath = computed(() => normalizeDisplayPath(savedOutputPath.value));
 const hasImages = computed(() => slotImages.value.some(Boolean));
 const layoutShellClass = computed(() => ({
@@ -725,6 +745,7 @@ const drawingBoardClass = computed(() => ({
   "preview-board--draw-arrow": activeDrawingKind.value === "arrow",
   "preview-board--draw-rect": activeDrawingKind.value === "rect",
   "preview-board--draw-circle": activeDrawingKind.value === "circle",
+  "preview-board--background-overlay": settings.backgroundOverlay && Boolean(settings.backgroundUrl),
 }));
 
 watch(
@@ -738,6 +759,9 @@ watch(
 
 watch(selectedLayoutId, () => {
   activeSlotIndex.value = 0;
+  if (selectedSlotIndex.value !== null && selectedSlotIndex.value >= visibleCells.value.length) {
+    selectedSlotIndex.value = null;
+  }
 });
 
 function showNotice(message: string, tone: NoticeTone = "warn") {
@@ -917,8 +941,10 @@ function setSlotImage(index: number, file: File) {
     url: URL.createObjectURL(file),
     name: file.name,
     scale: 1,
+    opacity: 100,
   };
   slotImages.value = nextImages;
+  selectedSlotIndex.value = index;
   clearNotice();
 }
 
@@ -957,6 +983,15 @@ function openSlotFilePicker(index: number) {
   fileInput.value?.click();
 }
 
+function handleSlotClick(index: number) {
+  if (slotImages.value[index]) {
+    selectedSlotIndex.value = index;
+    return;
+  }
+
+  openSlotFilePicker(index);
+}
+
 function handleSlotFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = Array.from(input.files ?? []);
@@ -993,6 +1028,11 @@ function swapSlotImages(source: number, target: number) {
   const nextImages = [...slotImages.value];
   [nextImages[source], nextImages[target]] = [nextImages[target] ?? null, nextImages[source] ?? null];
   slotImages.value = nextImages;
+  if (selectedSlotIndex.value === source) {
+    selectedSlotIndex.value = target;
+  } else if (selectedSlotIndex.value === target) {
+    selectedSlotIndex.value = source;
+  }
 }
 
 function slotIndexFromClientPosition(clientX: number, clientY: number) {
@@ -1214,6 +1254,9 @@ function removeSlotImage(index: number) {
   revokeSlotImage(nextImages[index] ?? null);
   nextImages[index] = null;
   slotImages.value = nextImages;
+  if (selectedSlotIndex.value === index) {
+    selectedSlotIndex.value = null;
+  }
 }
 
 function zoomSlot(index: number, delta: number) {
@@ -1253,6 +1296,7 @@ function shuffleImages() {
     }
   });
   slotImages.value = nextImages;
+  selectedSlotIndex.value = null;
 }
 
 function clearImagesAndAnnotations() {
@@ -1260,6 +1304,7 @@ function clearImagesAndAnnotations() {
     revokeSlotImage(image);
   }
   slotImages.value = Array.from({ length: 9 }, () => null);
+  selectedSlotIndex.value = null;
   annotations.value = [];
   activeDrawingKind.value = null;
 }
@@ -1681,6 +1726,7 @@ function removeBackgroundImage() {
   }
   settings.backgroundUrl = "";
   settings.backgroundName = "";
+  settings.backgroundOverlay = false;
 }
 
 function resetBackgroundColor() {
@@ -1698,7 +1744,7 @@ function cellStyle(cell: LayoutCell) {
 
 function imageStyle(image: SlotImage) {
   return {
-    ...imageFilterStyle.value,
+    opacity: String(image.opacity / 100),
     transform: `scale(${image.scale})`,
   };
 }
@@ -1775,9 +1821,12 @@ async function renderCanvas(format: OutputFormat) {
   context.fillStyle = settings.backgroundColor;
   context.fillRect(0, 0, width, height);
 
-  if (settings.backgroundUrl) {
-    const background = await loadImage(settings.backgroundUrl);
-    drawCoverImage(context, background, 0, 0, width, height);
+  const backgroundImage = settings.backgroundUrl ? await loadImage(settings.backgroundUrl) : null;
+  if (backgroundImage && !settings.backgroundOverlay) {
+    context.save();
+    context.globalAlpha = settings.backgroundOpacity / 100;
+    drawCoverImage(context, backgroundImage, 0, 0, width, height);
+    context.restore();
   }
 
   const scaleX = width / Math.max(1, previewBoard.value?.clientWidth ?? width);
@@ -1807,13 +1856,20 @@ async function renderCanvas(format: OutputFormat) {
 
     if (slotImage) {
       const image = await loadImage(slotImage.url);
-      context.globalAlpha = settings.imageOpacity / 100;
+      context.globalAlpha = slotImage.opacity / 100;
       drawCoverImage(context, image, x, y, cellWidth, cellHeight, slotImage.scale);
       context.globalAlpha = 1;
     } else {
       context.fillStyle = "rgba(255, 255, 255, 0.05)";
       context.fillRect(x, y, cellWidth, cellHeight);
     }
+    context.restore();
+  }
+
+  if (backgroundImage && settings.backgroundOverlay) {
+    context.save();
+    context.globalAlpha = settings.backgroundOpacity / 100;
+    drawCoverImage(context, backgroundImage, 0, 0, width, height);
     context.restore();
   }
 
@@ -2129,19 +2185,20 @@ onBeforeUnmount(() => {
                 <div
                   v-for="(cell, index) in visibleCells"
                   :key="`${selectedLayout.id}-${index}`"
-                  :role="slotImages[index] ? undefined : 'button'"
-                  :tabindex="slotImages[index] ? undefined : 0"
-                  :aria-label="slotImages[index] ? undefined : '上传图片'"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="slotImages[index] ? `选择图片 ${slotImages[index]?.name}` : '上传图片'"
                   class="preview-cell"
                   :class="{
                     'preview-cell--empty': !slotImages[index],
                     'preview-cell--drag-over': hoveredSlotIndex === index,
                     'preview-cell--swap-source': draggedSlotIndex === index,
+                    'preview-cell--selected': selectedSlotIndex === index && Boolean(slotImages[index]),
                   }"
                   :style="cellStyle(cell)"
-                  @click="!slotImages[index] && openSlotFilePicker(index)"
-                  @keydown.enter.prevent="!slotImages[index] && openSlotFilePicker(index)"
-                  @keydown.space.prevent="!slotImages[index] && openSlotFilePicker(index)"
+                  @click="handleSlotClick(index)"
+                  @keydown.enter.prevent="handleSlotClick(index)"
+                  @keydown.space.prevent="handleSlotClick(index)"
                   @dragenter="handleSlotDragEnter($event, index)"
                   @dragover="handleSlotDragEnter($event, index)"
                   @dragleave="handleSlotDragLeave($event, index)"
@@ -2320,11 +2377,22 @@ onBeforeUnmount(() => {
               <span>背景色</span>
               <div class="color-field__actions">
                 <input v-model="settings.backgroundColor" type="color" aria-label="背景色" />
-                <ActionButton label="重置背景" size="sm" @click="resetBackgroundColor" />
+                <ActionButton label="重置背景色" size="sm" @click="resetBackgroundColor" />
               </div>
             </div>
+            <label class="range-field">
+              <span>背景图透明度 {{ settings.backgroundUrl ? `${settings.backgroundOpacity}%` : "未上传" }}</span>
+              <input v-model.number="settings.backgroundOpacity" type="range" min="0" max="100" :disabled="!settings.backgroundUrl" />
+            </label>
             <div class="setting-actions">
               <ActionButton label="上传背景图" size="sm" @click="backgroundInput?.click()" />
+              <ActionButton
+                :label="settings.backgroundOverlay ? '取消' : '重叠'"
+                :variant="settings.backgroundOverlay ? 'primary' : 'ghost'"
+                size="sm"
+                :disabled="!settings.backgroundUrl"
+                @click="settings.backgroundOverlay = !settings.backgroundOverlay"
+              />
               <ActionButton label="移除" size="sm" :disabled="!settings.backgroundUrl" @click="removeBackgroundImage" />
             </div>
             <p v-if="settings.backgroundName" class="setting-meta">{{ settings.backgroundName }}</p>
@@ -2333,9 +2401,10 @@ onBeforeUnmount(() => {
           <section class="settings-section">
             <h4>图片</h4>
             <label class="range-field">
-              <span>图片透明度 {{ settings.imageOpacity }}%</span>
-              <input v-model.number="settings.imageOpacity" type="range" min="20" max="100" />
+              <span>图片透明度 {{ selectedSlotImage ? `${selectedImageOpacity}%` : "未选择" }}</span>
+              <input v-model.number="selectedImageOpacity" type="range" min="20" max="100" :disabled="!selectedSlotImage" />
             </label>
+            <p class="setting-meta">{{ selectedSlotImage ? selectedSlotImage.name : "点击画布中的某一张图片后，可单独调整透明度。" }}</p>
           </section>
 
           <section class="settings-section">
@@ -2365,7 +2434,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .image-process-modal {
   width: min(1840px, calc(100vw - 16px));
-  height: min(980px, calc(100vh - 16px));
+  height: min(1040px, calc(100vh - 8px));
   padding: 18px;
   overflow: hidden;
 }
@@ -2378,7 +2447,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 250px minmax(420px, 1fr) 320px;
   gap: 14px;
-  height: calc(100% - 64px);
+  height: calc(100% - 58px);
   min-height: 0;
   transition: grid-template-columns 1s ease;
 }
@@ -2563,17 +2632,18 @@ onBeforeUnmount(() => {
 }
 
 .canvas-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
+  display: block;
   padding: 14px;
 }
 
 .tool-strip {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 8;
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  justify-self: center;
   width: max-content;
   max-width: 100%;
   padding: 6px;
@@ -2582,6 +2652,7 @@ onBeforeUnmount(() => {
   background: rgba(4, 16, 19, 0.72);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(14px);
+  transform: translateX(-50%);
 }
 
 .tool-strip button,
@@ -2620,7 +2691,9 @@ onBeforeUnmount(() => {
 .preview-shell {
   display: grid;
   place-items: center;
+  height: 100%;
   min-height: 0;
+  padding-top: 56px;
   overflow: auto;
   border-radius: 16px;
   background:
@@ -2637,9 +2710,23 @@ onBeforeUnmount(() => {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.28);
+}
+
+.preview-board::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: var(--background-image);
   background-position: center;
   background-size: cover;
-  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.28);
+  opacity: var(--background-opacity);
+  pointer-events: none;
+}
+
+.preview-board--background-overlay::before {
+  z-index: 2;
 }
 
 .export-alert {
@@ -2710,6 +2797,7 @@ onBeforeUnmount(() => {
 .preview-inner {
   position: absolute;
   inset: var(--border-top) var(--border-right) var(--border-bottom) var(--border-left);
+  z-index: 1;
 }
 
 .preview-cell {
@@ -2718,6 +2806,10 @@ onBeforeUnmount(() => {
   border: 0;
   background: transparent;
   color: var(--muted);
+}
+
+.preview-cell--selected {
+  z-index: 2;
 }
 
 .preview-cell__surface {
@@ -2741,6 +2833,37 @@ onBeforeUnmount(() => {
 .preview-cell--drag-over .preview-cell__surface {
   border-style: solid;
   border-color: rgba(255, 255, 255, 0.86);
+}
+
+.preview-cell--selected::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--gap) / 2);
+  z-index: 3;
+  border: 2px solid rgba(77, 212, 198, 0.98);
+  border-radius: var(--cell-radius);
+  box-shadow:
+    inset 0 0 0 1px rgba(4, 16, 19, 0.78),
+    inset 0 0 0 3px rgba(255, 255, 255, 0.16),
+    0 0 0 1px rgba(4, 16, 19, 0.9),
+    0 0 0 4px rgba(77, 212, 198, 0.22),
+    0 16px 34px rgba(77, 212, 198, 0.13);
+  pointer-events: none;
+}
+
+.preview-cell--selected::before {
+  content: "";
+  position: absolute;
+  right: calc(var(--gap) / 2 + 8px);
+  bottom: calc(var(--gap) / 2 + 8px);
+  z-index: 4;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(4, 16, 19, 0.92);
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(77, 212, 198, 0.22);
+  pointer-events: none;
 }
 
 .preview-cell--swap-source .preview-cell__surface {
@@ -2815,6 +2938,7 @@ onBeforeUnmount(() => {
 .annotation-layer {
   position: absolute;
   inset: 0;
+  z-index: 3;
   pointer-events: none;
 }
 

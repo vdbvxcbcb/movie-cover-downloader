@@ -95,6 +95,7 @@ watch(
   <CreateTaskModal
     v-if="appStore.createTaskOpen"
     :detail-urls="appStore.createTaskDetailUrls"
+    :selected-photo-seed="appStore.selectedPhotoDownloadSeed"
     @close="appStore.closeCreateTask"
     @submit="handleCreateTask"
     @update-detail-urls="appStore.syncCreateTaskDetailUrls"

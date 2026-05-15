@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 新增链接任务弹窗：收集豆瓣链接、输出目录、抓取类型、数量和图片尺寸。
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import MessageNotice from "../common/MessageNotice.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
@@ -10,6 +10,10 @@ import type {
   ImageAspectRatio,
   OutputImageFormat,
   RequestIntervalSeconds,
+  RuntimeDiscoveredAsset,
+  SelectableDoubanPhoto,
+  SelectedDoubanPhoto,
+  SelectedPhotoDownloadSeed,
   TaskDraft,
 } from "../../types/app";
 import {
@@ -25,9 +29,11 @@ import { useAppStore } from "../../stores/app";
 const props = withDefaults(
   defineProps<{
     detailUrls?: string;
+    selectedPhotoSeed?: SelectedPhotoDownloadSeed | null;
   }>(),
   {
     detailUrls: "",
+    selectedPhotoSeed: null,
   },
 );
 const emit = defineEmits<{
@@ -56,9 +62,26 @@ const pendingReplacementTaskIds = ref<string[]>([]);
 const replacementConfirmTitle = ref("");
 const browsingOutputDirectory = ref(false);
 const resolvedTitleCache = new Map<string, string>();
+const activeMode = ref<"auto" | "selected">("auto");
+const selectedPhotoLink = ref("");
+const selectedPhotoTitle = ref("");
+const selectedPhotoCover = ref("");
+const selectedPhotos = ref<SelectableDoubanPhoto[]>([]);
+const selectedPhotoFilter = ref<"all" | DoubanAssetType>("all");
+const discoveringSelectedPhotos = ref(false);
+const selectedDiscoveryTaskId = ref("");
+const selectedPhotoDiscoveryStartedKey = ref("");
+const selectedPhotoLoadedUrls = ref(new Set<string>());
+const selectedPhotoFailedUrls = ref(new Set<string>());
+const selectedPhotoDiscoveryStopRequested = ref(false);
+const selectedPhotoPreviewIndex = ref<number | null>(null);
+const selectedPhotoLargeFailedIds = ref(new Set<string>());
+const selectedPhotoRenderBatchSize = 28;
 const titlePreviewResolveConcurrency = 3;
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
+let stopDoubanPhotoDiscoveryProgress: (() => void) | null = null;
+let selectedPhotoClickTimer: number | null = null;
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, run: (item: T) => Promise<R>) {
   const results = new Array<R>(items.length);
@@ -177,6 +200,16 @@ onBeforeUnmount(() => {
   if (titleResolveTimer !== null) {
     window.clearTimeout(titleResolveTimer);
   }
+  if (selectedPhotoClickTimer !== null) {
+    window.clearTimeout(selectedPhotoClickTimer);
+  }
+  void stopSelectedPhotoDiscovery();
+  stopDoubanPhotoDiscoveryProgress?.();
+  document.removeEventListener("keydown", handleSelectedPhotoPreviewKeydown);
+});
+
+onMounted(() => {
+  document.addEventListener("keydown", handleSelectedPhotoPreviewKeydown);
 });
 
 watch(
@@ -250,10 +283,379 @@ const canDecreaseMaxImages = computed(() => currentMaxImagesValue.value > 1);
 // 数量拨轮加号是否可用，最大值为 100。
 const canIncreaseMaxImages = computed(() => currentMaxImagesValue.value < 100);
 
+const selectedPhotoCounts = computed(() => ({
+  all: selectedPhotos.value.length,
+  still: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "still").length,
+  poster: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "poster").length,
+  wallpaper: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "wallpaper").length,
+}));
+const filteredSelectedPhotos = computed(() =>
+  selectedPhotoFilter.value === "all"
+    ? selectedPhotos.value
+    : selectedPhotos.value.filter((photo) => photo.doubanAssetType === selectedPhotoFilter.value),
+);
+const visibleSelectedPhotos = computed(() => {
+  const filtered = filteredSelectedPhotos.value;
+  if (!discoveringSelectedPhotos.value) {
+    return filtered;
+  }
+  if (filtered.length <= selectedPhotoRenderBatchSize) {
+    return filtered;
+  }
+
+  const fullBatchCount = Math.floor(filtered.length / selectedPhotoRenderBatchSize) * selectedPhotoRenderBatchSize;
+  return filtered.slice(0, fullBatchCount);
+});
+const selectedPhotoCount = computed(() => selectedPhotos.value.filter((photo) => photo.selected).length);
+const selectedPhotoDownloadLabel = computed(() =>
+  selectedPhotoCount.value > 0 ? `下载选中 ${selectedPhotoCount.value} 张` : "请选择图片",
+);
+const showSelectedPhotoGridLoading = computed(() => discoveringSelectedPhotos.value && filteredSelectedPhotos.value.length > 0);
+const selectedPhotoPreviewItems = computed(() => selectedPhotos.value);
+const activeSelectedPhotoPreview = computed(() => {
+  const index = selectedPhotoPreviewIndex.value;
+  return index === null ? null : selectedPhotoPreviewItems.value[index] ?? null;
+});
+
+function formatSelectedPhotoCategory(photo: SelectableDoubanPhoto) {
+  if (photo.doubanAssetType === "poster") return "海报";
+  if (photo.doubanAssetType === "wallpaper") return "壁纸";
+  return "剧照";
+}
+
+function isSelectedPhotoLoaded(photo: SelectableDoubanPhoto) {
+  return selectedPhotoLoadedUrls.value.has(getSelectedPhotoPreviewUrl(photo));
+}
+
+function isSelectedPhotoFailed(photo: SelectableDoubanPhoto) {
+  return selectedPhotoFailedUrls.value.has(getSelectedPhotoPreviewUrl(photo));
+}
+
+function getSelectedPhotoPreviewUrl(photo: SelectableDoubanPhoto) {
+  return photo.previewDataUrl || photo.previewUrl || photo.imageUrl;
+}
+
+function getSelectedPhotoLargePreviewUrl(photo: SelectableDoubanPhoto) {
+  return selectedPhotoLargeFailedIds.value.has(photo.id) ? getSelectedPhotoPreviewUrl(photo) : photo.imageUrl;
+}
+
+function handleSelectedPhotoLargeError(photo: SelectableDoubanPhoto) {
+  const failedIds = new Set(selectedPhotoLargeFailedIds.value);
+  failedIds.add(photo.id);
+  selectedPhotoLargeFailedIds.value = failedIds;
+}
+
+function closeSelectedPhotoPreview() {
+  selectedPhotoPreviewIndex.value = null;
+}
+
+function openSelectedPhotoPreview(photoId: string) {
+  if (selectedPhotoClickTimer !== null) {
+    window.clearTimeout(selectedPhotoClickTimer);
+    selectedPhotoClickTimer = null;
+  }
+
+  const index = selectedPhotoPreviewItems.value.findIndex((photo) => photo.id === photoId);
+  if (index >= 0) {
+    selectedPhotoPreviewIndex.value = index;
+  }
+}
+
+function stepSelectedPhotoPreview(delta: -1 | 1) {
+  const total = selectedPhotoPreviewItems.value.length;
+  const current = selectedPhotoPreviewIndex.value;
+  if (total === 0 || current === null) return;
+  selectedPhotoPreviewIndex.value = (current + delta + total) % total;
+}
+
+function handleSelectedPhotoPreviewKeydown(event: KeyboardEvent) {
+  if (selectedPhotoPreviewIndex.value === null) return;
+  if (event.key === "Escape") {
+    closeSelectedPhotoPreview();
+    return;
+  }
+  if (event.key === "ArrowLeft") {
+    stepSelectedPhotoPreview(-1);
+    return;
+  }
+  if (event.key === "ArrowRight") {
+    stepSelectedPhotoPreview(1);
+  }
+}
+
+function handleSelectedPhotoLoad(photo: SelectableDoubanPhoto) {
+  const previewUrl = getSelectedPhotoPreviewUrl(photo);
+  const loadedUrls = new Set(selectedPhotoLoadedUrls.value);
+  const failedUrls = new Set(selectedPhotoFailedUrls.value);
+  loadedUrls.add(previewUrl);
+  failedUrls.delete(previewUrl);
+  selectedPhotoLoadedUrls.value = loadedUrls;
+  selectedPhotoFailedUrls.value = failedUrls;
+}
+
+function handleSelectedPhotoError(photo: SelectableDoubanPhoto) {
+  const previewUrl = getSelectedPhotoPreviewUrl(photo);
+  const loadedUrls = new Set(selectedPhotoLoadedUrls.value);
+  const failedUrls = new Set(selectedPhotoFailedUrls.value);
+  loadedUrls.delete(previewUrl);
+  failedUrls.add(previewUrl);
+  selectedPhotoLoadedUrls.value = loadedUrls;
+  selectedPhotoFailedUrls.value = failedUrls;
+}
+
+const selectedDiscoveryStatusLabel = computed(() => {
+  if (discoveringSelectedPhotos.value) {
+    return selectedPhotos.value.length > 0
+      ? `正在解析，已缓存 ${selectedPhotos.value.length} 张`
+      : "正在解析全部图片...";
+  }
+
+  return selectedPhotos.value.length > 0 ? `已缓存 ${selectedPhotos.value.length} 张图片` : "";
+});
+
+function getUsableDoubanCookie() {
+  return appStore.cookies.find((cookie) => cookie.source === "douban" && cookie.status !== "cooling" && cookie.value)?.value;
+}
+
+function normalizeSelectedPhotoUrl(value: string) {
+  const detailUrl = extractDetailUrlFromDisplayLine(value.trim());
+  if (!detailUrl) {
+    throw new Error("请填写豆瓣影片链接。");
+  }
+
+  const parsed = new URL(detailUrl);
+  if (parsed.protocol !== "https:" || parsed.hostname !== "movie.douban.com") {
+    throw new Error("只能填写 movie.douban.com 的影片链接。");
+  }
+
+  if (!/^\/subject\/\d+\/(?:all_photos\/?|photos\/?)?$/i.test(parsed.pathname)) {
+    throw new Error("只支持 subject、all_photos 或 photos?type= 链接。");
+  }
+
+  return detailUrl;
+}
+
+function toSelectablePhoto(photo: SelectedDoubanPhoto): SelectableDoubanPhoto {
+  return {
+    ...photo,
+    selected: false,
+  };
+}
+
+function normalizeDiscoveredPhoto(photo: RuntimeDiscoveredAsset): SelectedDoubanPhoto {
+  return {
+    ...photo,
+    doubanAssetType: photo.doubanAssetType ?? (photo.category === "poster" ? "poster" : "still"),
+  };
+}
+
+function mergeSelectedDiscoveredPhotos(images: RuntimeDiscoveredAsset[]) {
+  if (images.length === 0) return;
+
+  const existingByUrl = new Map(selectedPhotos.value.map((photo) => [photo.imageUrl, photo]));
+  const nextPhotos = [...selectedPhotos.value];
+
+  for (const image of images) {
+    const normalized = normalizeDiscoveredPhoto(image);
+    const existing = existingByUrl.get(normalized.imageUrl);
+    if (existing) {
+      Object.assign(existing, {
+        ...normalized,
+        selected: existing.selected,
+      });
+      continue;
+    }
+
+    const nextPhoto = toSelectablePhoto(normalized);
+    existingByUrl.set(nextPhoto.imageUrl, nextPhoto);
+    nextPhotos.push(nextPhoto);
+  }
+
+  selectedPhotos.value = nextPhotos;
+}
+
+function syncSelectedPhotoSeed(seed: SelectedPhotoDownloadSeed | null) {
+  if (!seed) return;
+  activeMode.value = "selected";
+  selectedPhotoLink.value = seed.detailUrl;
+  selectedPhotoTitle.value = seed.title ?? "";
+  selectedPhotoCover.value = seed.coverDataUrl ?? seed.coverUrl ?? "";
+  selectedPhotos.value = [];
+  selectedPhotoLoadedUrls.value = new Set();
+  selectedPhotoFailedUrls.value = new Set();
+  selectedPhotoLargeFailedIds.value = new Set();
+  selectedPhotoPreviewIndex.value = null;
+  selectedDiscoveryTaskId.value = "";
+  selectedPhotoFilter.value = "all";
+  clearAlert();
+
+  const seedKey = `${seed.detailUrl}:${seed.title ?? ""}`;
+  if (seed.autoDiscover && selectedPhotoDiscoveryStartedKey.value !== seedKey) {
+    selectedPhotoDiscoveryStartedKey.value = seedKey;
+    window.setTimeout(() => {
+      void discoverSelectedPhotos();
+    }, 0);
+  }
+}
+
+watch(
+  () => props.selectedPhotoSeed,
+  (seed) => syncSelectedPhotoSeed(seed),
+  { immediate: true },
+);
+
 // 数字拨轮点击一次只增加或减少 1，并同步清除旧错误提示。
 function stepMaxImages(delta: -1 | 1) {
   form.maxImagesInput = String(clampMaxImages(currentMaxImagesValue.value + delta));
   clearAlert();
+}
+
+async function discoverSelectedPhotos() {
+  if (discoveringSelectedPhotos.value) return;
+
+  let detailUrl = "";
+  try {
+    detailUrl = normalizeSelectedPhotoUrl(selectedPhotoLink.value);
+  } catch (error) {
+    showAlert(error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  const taskId = `selected-discovery-${Date.now()}`;
+  selectedDiscoveryTaskId.value = taskId;
+  selectedPhotos.value = [];
+  selectedPhotoLoadedUrls.value = new Set();
+  selectedPhotoFailedUrls.value = new Set();
+  selectedPhotoLargeFailedIds.value = new Set();
+  selectedPhotoPreviewIndex.value = null;
+  selectedPhotoDiscoveryStopRequested.value = false;
+  discoveringSelectedPhotos.value = true;
+  clearAlert();
+  try {
+    const discovery = await runtimeBridge.discoverDoubanPhotos({
+      taskId,
+      detailUrl,
+      outputRootDir: form.outputRootDir.trim() || "D:/cover",
+      sourceHint: "auto",
+      outputImageFormat: form.outputImageFormat,
+      imageAspectRatio: form.imageAspectRatio,
+      requestIntervalSeconds: Number(form.requestIntervalSeconds) as RequestIntervalSeconds,
+      doubanCookie: getUsableDoubanCookie(),
+    });
+    selectedPhotoTitle.value = selectedPhotoTitle.value || discovery.normalizedTitle;
+    mergeSelectedDiscoveredPhotos(discovery.images);
+    if (selectedPhotos.value.length === 0) {
+      showAlert("没有解析到可下载图片。");
+    }
+  } catch (error) {
+    if (!selectedPhotoDiscoveryStopRequested.value) {
+      showAlert(`解析图片失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  } finally {
+    if (selectedDiscoveryTaskId.value === taskId) {
+      discoveringSelectedPhotos.value = false;
+      selectedPhotoDiscoveryStopRequested.value = false;
+      selectedDiscoveryTaskId.value = "";
+    }
+  }
+}
+
+void runtimeBridge.onDoubanPhotoDiscoveryProgress((event) => {
+  if (!selectedDiscoveryTaskId.value || event.taskId !== selectedDiscoveryTaskId.value) {
+    return;
+  }
+
+  if (event.normalizedTitle && !selectedPhotoTitle.value) {
+    selectedPhotoTitle.value = event.normalizedTitle;
+  }
+
+  mergeSelectedDiscoveredPhotos(event.images);
+}).then((unlisten) => {
+  stopDoubanPhotoDiscoveryProgress = unlisten;
+});
+
+function toggleSelectedPhoto(photoId: string) {
+  selectedPhotos.value = selectedPhotos.value.map((photo) =>
+    photo.id === photoId ? { ...photo, selected: !photo.selected } : photo,
+  );
+}
+
+function handleSelectedPhotoClick(photoId: string) {
+  if (selectedPhotoClickTimer !== null) {
+    window.clearTimeout(selectedPhotoClickTimer);
+  }
+  selectedPhotoClickTimer = window.setTimeout(() => {
+    selectedPhotoClickTimer = null;
+    toggleSelectedPhoto(photoId);
+  }, 180);
+}
+
+function selectAllPhotos() {
+  selectedPhotos.value = selectedPhotos.value.map((photo) => ({ ...photo, selected: true }));
+}
+
+function clearSelectedPhotos() {
+  selectedPhotos.value = selectedPhotos.value.map((photo) => ({ ...photo, selected: false }));
+}
+
+async function stopSelectedPhotoDiscovery() {
+  const taskId = selectedDiscoveryTaskId.value;
+  if (!discoveringSelectedPhotos.value || !taskId) return;
+
+  selectedPhotoDiscoveryStopRequested.value = true;
+  discoveringSelectedPhotos.value = false;
+  try {
+    await runtimeBridge.cancelDoubanPhotoDiscovery(taskId);
+  } catch {
+    // 解析进程可能已经自然结束；不阻塞用户下载已选图片。
+  }
+}
+
+async function confirmSelectedPhotoDownload() {
+  await stopSelectedPhotoDiscovery();
+  submitSelectedPhotoDownload();
+}
+
+function submitSelectedPhotoDownload() {
+  let detailUrl = "";
+  try {
+    detailUrl = normalizeSelectedPhotoUrl(selectedPhotoLink.value);
+  } catch (error) {
+    showAlert(error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  const selectedImages = selectedPhotos.value
+    .filter((photo) => photo.selected)
+    .map(({ selected: _selected, previewDataUrl: _previewDataUrl, ...photo }) => photo);
+  if (selectedImages.length === 0) {
+    showAlert("请先勾选需要下载的图片。");
+    return;
+  }
+
+  if (!form.outputRootDir.trim()) {
+    showAlert("请先填写输出目录。");
+    return;
+  }
+
+  const draft: TaskDraft = {
+    detailUrl,
+    outputRootDir: form.outputRootDir.trim(),
+    sourceHint: "auto",
+    doubanAssetType: "still",
+    imageCountMode: "limited",
+    maxImages: selectedImages.length,
+    outputImageFormat: form.outputImageFormat,
+    imageAspectRatio: form.imageAspectRatio,
+    requestIntervalSeconds: Number(form.requestIntervalSeconds) as RequestIntervalSeconds,
+    coverUrl: props.selectedPhotoSeed?.coverUrl,
+    coverDataUrl: props.selectedPhotoSeed?.coverDataUrl,
+    selectedImages,
+    selectedPhotoTitle: selectedPhotoTitle.value || undefined,
+  };
+
+  clearAlert();
+  emit("submit", [draft]);
 }
 
 // 阻止 e、正负号、小数点等非整数输入进入数量输入框。
@@ -395,18 +797,40 @@ function cancelReplacementSubmit() {
       @close="clearAlert"
     />
 
-    <section class="modal-card create-task-modal">
+    <section
+      class="modal-card create-task-modal"
+      :class="{ 'create-task-modal--auto': activeMode === 'auto', 'create-task-modal--selected': activeMode === 'selected' }"
+    >
       <div class="panel__head modal-card__head">
         <div>
           <p class="eyebrow">New URL Task</p>
-          <h3>新增链接抓图任务</h3>
+          <h3>添加下载任务</h3>
         </div>
         <button type="button" class="modal-close" aria-label="关闭弹窗" @click="emit('close')">
           ×
         </button>
       </div>
 
-      <div class="create-task-modal__grid">
+      <div class="mode-switch" aria-label="下载任务模式">
+        <button
+          type="button"
+          class="mode-switch__item"
+          :class="{ 'mode-switch__item--active': activeMode === 'auto' }"
+          @click="activeMode = 'auto'"
+        >
+          自动下载
+        </button>
+        <button
+          type="button"
+          class="mode-switch__item"
+          :class="{ 'mode-switch__item--active': activeMode === 'selected' }"
+          @click="activeMode = 'selected'"
+        >
+          选图下载
+        </button>
+      </div>
+
+      <div v-if="activeMode === 'auto'" class="create-task-modal__grid">
         <label class="field field--wide">
           <span>详情页链接（批量）</span>
           <textarea
@@ -575,7 +999,7 @@ function cancelReplacementSubmit() {
         </label>
       </div>
 
-      <div class="topbar__actions">
+      <div v-if="activeMode === 'auto'" class="topbar__actions">
         <ActionButton label="取消" @click="emit('close')" />
         <PopConfirmAction
           label="加入队列"
@@ -589,22 +1013,759 @@ function cancelReplacementSubmit() {
           @cancel="cancelReplacementSubmit"
         />
       </div>
+
+      <div v-else class="selected-download">
+        <section class="selected-download__hero">
+          <div v-if="selectedPhotoCover" class="selected-download__cover">
+            <img :src="selectedPhotoCover" :alt="selectedPhotoTitle || '影片封面'" />
+          </div>
+          <div class="selected-download__link">
+            <label class="field">
+              <span>豆瓣图片链接</span>
+              <div class="field-inline">
+                <input
+                  v-model="selectedPhotoLink"
+                  :disabled="discoveringSelectedPhotos"
+                  placeholder="支持 subject / all_photos / photos?type= 链接"
+                  @input="clearAlert"
+                />
+                <ActionButton
+                  label="解析全部图片"
+                  :disabled="discoveringSelectedPhotos"
+                  @click="void discoverSelectedPhotos()"
+                />
+              </div>
+            </label>
+            <p class="selected-download__title">{{ selectedPhotoTitle || "等待解析影片图片" }}</p>
+          </div>
+        </section>
+
+        <section class="selected-download__library">
+          <div class="selected-download__summary">
+            <div>
+              <span>全部图片</span>
+              <strong>共 {{ selectedPhotoCounts.all }} 张 / 已选 {{ selectedPhotoCount }} 张</strong>
+            </div>
+            <div class="selected-download__bulk">
+              <ActionButton label="全选" size="sm" :disabled="selectedPhotos.length === 0" @click="selectAllPhotos" />
+              <ActionButton label="取消全选" size="sm" :disabled="selectedPhotoCount === 0" @click="clearSelectedPhotos" />
+            </div>
+          </div>
+
+          <p v-if="selectedDiscoveryStatusLabel" class="selected-download__status">
+            <span>{{ selectedDiscoveryStatusLabel }}</span>
+            <span v-if="discoveringSelectedPhotos" class="selected-spin selected-spin--inline" aria-label="正在加载">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </span>
+          </p>
+
+          <div class="selected-download__filters">
+            <button
+              type="button"
+              :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'all' }"
+              @click="selectedPhotoFilter = 'all'"
+            >
+              全部 {{ selectedPhotoCounts.all }}
+            </button>
+            <button
+              type="button"
+              :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'still' }"
+              @click="selectedPhotoFilter = 'still'"
+            >
+              剧照 {{ selectedPhotoCounts.still }}
+            </button>
+            <button
+              type="button"
+              :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'poster' }"
+              @click="selectedPhotoFilter = 'poster'"
+            >
+              海报 {{ selectedPhotoCounts.poster }}
+            </button>
+            <button
+              type="button"
+              :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'wallpaper' }"
+              @click="selectedPhotoFilter = 'wallpaper'"
+            >
+              壁纸 {{ selectedPhotoCounts.wallpaper }}
+            </button>
+          </div>
+
+          <div v-if="discoveringSelectedPhotos && selectedPhotos.length === 0" class="selected-download__empty">正在解析全部图片，发现后会立即显示...</div>
+          <div
+            v-else-if="filteredSelectedPhotos.length"
+            class="selected-photo-grid"
+          >
+            <button
+              v-for="photo in visibleSelectedPhotos"
+              :key="photo.id"
+              type="button"
+              class="selected-photo-card"
+              :class="{ 'selected-photo-card--selected': photo.selected }"
+              @click="handleSelectedPhotoClick(photo.id)"
+              @dblclick.stop="openSelectedPhotoPreview(photo.id)"
+            >
+              <span class="selected-photo-card__checkbox" :class="{ 'selected-photo-card__checkbox--checked': photo.selected }" aria-hidden="true"></span>
+              <span class="selected-photo-card__tag">{{ formatSelectedPhotoCategory(photo) }}</span>
+              <span class="selected-photo-card__media">
+                <span
+                  v-if="!isSelectedPhotoLoaded(photo) && !isSelectedPhotoFailed(photo)"
+                  class="selected-photo-card__loading"
+                  aria-hidden="true"
+                ></span>
+                <span v-if="isSelectedPhotoFailed(photo)" class="selected-photo-card__placeholder" aria-hidden="true">
+                  <span class="selected-photo-card__placeholder-icon"></span>
+                </span>
+                <img
+                  v-show="!isSelectedPhotoFailed(photo)"
+                  :src="getSelectedPhotoPreviewUrl(photo)"
+                  :alt="photo.title"
+                  loading="lazy"
+                  @load="handleSelectedPhotoLoad(photo)"
+                  @error="handleSelectedPhotoError(photo)"
+                />
+              </span>
+              <span class="selected-photo-card__meta">
+                <span>{{ photo.title || formatSelectedPhotoCategory(photo) }}</span>
+              </span>
+            </button>
+            <div v-if="showSelectedPhotoGridLoading" class="selected-photo-grid__loading" aria-live="polite">
+              <span class="selected-spin selected-spin--large" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </span>
+              <span>继续解析中...</span>
+            </div>
+          </div>
+          <div v-else class="selected-download__empty">
+            {{ discoveringSelectedPhotos ? "当前分类还没有图片，继续解析中..." : "输入链接后解析全部图片" }}
+          </div>
+        </section>
+
+        <section class="selected-download__bar">
+          <label class="field selected-download__output">
+            <span>输出目录</span>
+            <div class="field-inline">
+              <input v-model="form.outputRootDir" placeholder="例如：D:\cover" />
+              <ActionButton label="浏览" :disabled="browsingOutputDirectory" @click="void browseOutputDirectory()" />
+            </div>
+          </label>
+
+          <div class="selected-download__settings">
+            <label class="field">
+              <span>图片尺寸</span>
+              <select v-model="form.imageAspectRatio">
+                <option value="original">原图尺寸</option>
+                <option value="9:16">9:16</option>
+                <option value="3:4">3:4</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>输出格式</span>
+              <select v-model="form.outputImageFormat">
+                <option value="jpg">JPG</option>
+                <option value="png">PNG</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>请求间隔</span>
+              <select v-model="form.requestIntervalSeconds">
+                <option value="1">1 秒</option>
+                <option value="2">2 秒</option>
+                <option value="3">3 秒</option>
+                <option value="4">4 秒</option>
+                <option value="5">5 秒</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="topbar__actions selected-download__actions">
+            <ActionButton label="取消" @click="emit('close')" />
+            <PopConfirmAction
+              :label="selectedPhotoDownloadLabel"
+              variant="primary"
+              title="是否下载选中的所有图片，不再解析？"
+              confirm-label="下载"
+              cancel-label="取消"
+              bubble-size="normal"
+              :disabled="selectedPhotoCount === 0"
+              @confirm="void confirmSelectedPhotoDownload()"
+            />
+          </div>
+        </section>
+      </div>
     </section>
+
+    <Teleport to="body">
+      <div
+        v-if="activeSelectedPhotoPreview"
+        class="selected-photo-preview"
+        role="dialog"
+        aria-modal="true"
+        @click.self="closeSelectedPhotoPreview"
+      >
+        <button type="button" class="selected-photo-preview__close" aria-label="关闭预览" @click="closeSelectedPhotoPreview">×</button>
+        <button
+          type="button"
+          class="selected-photo-preview__nav selected-photo-preview__nav--prev"
+          aria-label="上一张"
+          @click="stepSelectedPhotoPreview(-1)"
+        >
+          ‹
+        </button>
+        <img
+          class="selected-photo-preview__image"
+          :src="getSelectedPhotoLargePreviewUrl(activeSelectedPhotoPreview)"
+          :alt="activeSelectedPhotoPreview.title"
+          @error="handleSelectedPhotoLargeError(activeSelectedPhotoPreview)"
+        />
+        <button
+          type="button"
+          class="selected-photo-preview__nav selected-photo-preview__nav--next"
+          aria-label="下一张"
+          @click="stepSelectedPhotoPreview(1)"
+        >
+          ›
+        </button>
+        <div class="selected-photo-preview__counter">
+          {{ (selectedPhotoPreviewIndex ?? 0) + 1 }} / {{ selectedPhotoPreviewItems.length }}
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
 .create-task-modal {
-  width: min(900px, 100%);
+  width: min(1180px, 100%);
   max-height: calc(100vh - 48px);
   overflow: auto;
+}
+
+.create-task-modal--auto {
+  overflow: visible;
+}
+
+.create-task-modal--selected {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: calc(100vh - 48px);
+  overflow: hidden;
+}
+
+.mode-switch {
+  display: inline-flex;
+  gap: 8px;
+  padding: 5px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.mode-switch__item {
+  min-width: 116px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 12px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.mode-switch__item--active {
+  color: #031113;
+  background: linear-gradient(135deg, var(--accent), #7ce5c9);
+}
+
+.selected-download {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  min-height: 0;
+}
+
+.selected-download__hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.selected-download__cover {
+  width: 72px;
+  height: 96px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.selected-download__cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.selected-download__link {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.selected-download__title {
+  color: var(--muted);
+}
+
+.selected-download__library {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(3, 10, 13, 0.28);
+}
+
+.selected-download__summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+}
+
+.selected-download__summary div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.selected-download__summary span,
+.selected-download__title {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.selected-download__status {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 20px;
+  color: var(--accent);
+  font-size: 0.86rem;
+}
+
+.selected-spin {
+  position: relative;
+  display: inline-block;
+  color: var(--accent);
+  animation: selected-spin-rotate 1.05s linear infinite;
+}
+
+.selected-spin span {
+  position: absolute;
+  width: 32%;
+  height: 32%;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 1;
+}
+
+.selected-spin span:nth-child(1) {
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.selected-spin span:nth-child(2) {
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  opacity: 0.72;
+}
+
+.selected-spin span:nth-child(3) {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0.46;
+}
+
+.selected-spin span:nth-child(4) {
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  opacity: 0.24;
+}
+
+.selected-spin--inline {
+  width: 14px;
+  height: 14px;
+}
+
+.selected-spin--large {
+  width: 34px;
+  height: 34px;
+}
+
+.selected-download__bulk,
+.selected-download__filters,
+.selected-download__settings {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.selected-download__filters button {
+  min-height: 38px;
+  padding: 0 13px;
+  border-radius: 12px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+}
+
+.selected-download__filters button:hover,
+.selected-download__filter--active {
+  color: var(--text) !important;
+  border-color: var(--line-strong) !important;
+  background: rgba(77, 212, 198, 0.1) !important;
+}
+
+.selected-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 8px 2px;
+}
+
+.selected-photo-grid__loading {
+  grid-column: 1 / -1;
+  min-height: 118px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: var(--accent);
+  border: 1px dashed rgba(77, 212, 198, 0.22);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(77, 212, 198, 0.06), rgba(77, 212, 198, 0.02)),
+    rgba(4, 16, 19, 0.62);
+  font-size: 0.86rem;
+}
+
+.selected-photo-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 34px;
+  height: 188px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(7, 23, 27, 0.92);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.selected-photo-card:hover {
+  border-color: rgba(77, 212, 198, 0.58);
+  background: rgba(11, 33, 38, 0.96);
+  transform: translateY(-1px);
+}
+
+.selected-photo-card--selected {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 0 0 2px rgba(77, 212, 198, 0.96),
+    0 0 0 1px rgba(77, 212, 198, 0.36);
+}
+
+.selected-photo-card__media {
+  position: relative;
+  display: block;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), transparent),
+    rgba(255, 255, 255, 0.04);
+}
+
+.selected-photo-card__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.selected-photo-card__loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(110deg, rgba(255, 255, 255, 0.04) 8%, rgba(255, 255, 255, 0.1) 18%, rgba(255, 255, 255, 0.04) 33%),
+    rgba(15, 37, 42, 0.92);
+  background-size: 200% 100%;
+  animation: selected-photo-loading 1.1s linear infinite;
+}
+
+.selected-photo-card__loading::after {
+  content: "";
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 2px solid rgba(223, 240, 235, 0.2);
+  border-top-color: var(--accent);
+  animation: selected-photo-spinner 760ms linear infinite;
+}
+
+.selected-photo-card__placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #f6f6f3;
+}
+
+.selected-photo-card__placeholder-icon {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 2px solid #deded9;
+}
+
+.selected-photo-card__placeholder-icon::before,
+.selected-photo-card__placeholder-icon::after {
+  content: "";
+  position: absolute;
+}
+
+.selected-photo-card__placeholder-icon::before {
+  left: 10px;
+  top: 9px;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #deded9;
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+}
+
+.selected-photo-card__placeholder-icon::after {
+  left: 13px;
+  top: 5px;
+  width: 12px;
+  height: 9px;
+  border: 2px solid #deded9;
+  border-bottom: 0;
+  border-radius: 9px 9px 0 0;
+}
+
+@keyframes selected-photo-loading {
+  to {
+    background-position-x: -200%;
+  }
+}
+
+@keyframes selected-photo-spinner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes selected-spin-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selected-spin {
+    animation: none;
+  }
+}
+
+.selected-photo-card__tag {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  max-width: calc(100% - 42px);
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: rgba(223, 240, 235, 0.92);
+  background: rgba(3, 10, 13, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.selected-photo-card__meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: rgba(223, 240, 235, 0.9);
+  background: rgba(3, 10, 13, 0.78);
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.selected-photo-card__meta span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-photo-card__checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(223, 240, 235, 0.78);
+  background: rgba(3, 10, 13, 0.72);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.selected-photo-card:hover .selected-photo-card__checkbox {
+  border-color: var(--accent);
+}
+
+.selected-photo-card__checkbox--checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.selected-photo-card__checkbox--checked::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 5px;
+  height: 9px;
+  border: solid #031113;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.selected-download__empty {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.selected-photo-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  display: grid;
+  place-items: center;
+  padding: 56px 76px 72px;
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(2px);
+}
+
+.selected-photo-preview__image {
+  max-width: min(86vw, 1120px);
+  max-height: calc(100vh - 150px);
+  object-fit: contain;
+  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.44);
+}
+
+.selected-photo-preview__close,
+.selected-photo-preview__nav {
+  position: fixed;
+  display: grid;
+  place-items: center;
+  border: 0;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(8px);
+}
+
+.selected-photo-preview__close {
+  top: 24px;
+  right: 24px;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  font-size: 1.5rem;
+}
+
+.selected-photo-preview__nav {
+  top: 50%;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  font-size: 2rem;
+  transform: translateY(-50%);
+}
+
+.selected-photo-preview__nav--prev {
+  left: 28px;
+}
+
+.selected-photo-preview__nav--next {
+  right: 28px;
+}
+
+.selected-photo-preview__counter {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  min-width: 72px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.18);
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.selected-download__bar {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) auto auto;
+  gap: 14px;
+  align-items: end;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.selected-download__output {
+  min-width: 0;
+}
+
+.selected-download__settings .field {
+  min-width: 120px;
+}
+
+.selected-download__actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
 }
 
 .create-task-modal__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 18px;
+  gap: 12px 16px;
+  margin-bottom: 12px;
 }
 
 .create-task-modal__field-label {
@@ -614,8 +1775,8 @@ function cancelReplacementSubmit() {
 
 .strategy-card {
   display: grid;
-  gap: 14px;
-  padding: 16px;
+  gap: 10px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 20px;
   background:
@@ -625,17 +1786,17 @@ function cancelReplacementSubmit() {
 
 .strategy-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 1.15fr) minmax(0, 1fr);
+  gap: 10px;
 }
 
 .strategy-panel {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  padding: 14px;
-  border-radius: 18px;
+  padding: 10px;
+  border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: rgba(4, 16, 19, 0.44);
 }
@@ -656,7 +1817,7 @@ function cancelReplacementSubmit() {
 }
 
 .field-hint--spacer {
-  visibility: hidden;
+  display: none;
 }
 
 /* 数量输入与限制/无限制按钮同排，宽度受控以避免挤压右侧策略区域。 */
@@ -682,7 +1843,7 @@ function cancelReplacementSubmit() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 48px;
+  height: 42px;
   min-width: 88px;
   padding: 0 16px;
   border-radius: 14px;
@@ -715,7 +1876,7 @@ function cancelReplacementSubmit() {
   grid-template-columns: 44px minmax(0, 1fr) 44px;
   align-items: stretch;
   width: 100%;
-  min-height: 50px;
+  min-height: 44px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -770,8 +1931,8 @@ function cancelReplacementSubmit() {
 }
 
 .create-task-modal textarea {
-  height: 124px;
-  min-height: 124px;
+  height: 108px;
+  min-height: 108px;
   line-height: 1.25;
   white-space: pre;
   overflow-x: auto;
@@ -783,7 +1944,7 @@ function cancelReplacementSubmit() {
   }
 
   .strategy-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

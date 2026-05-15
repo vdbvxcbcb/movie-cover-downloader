@@ -19,6 +19,7 @@ import type {
   NoticePayload,
   QueueConfig,
   RuntimeDownloadTaskResult,
+  SelectedPhotoDownloadSeed,
   RuntimeTaskProgressEvent,
   TaskDraft,
   TaskItem,
@@ -224,6 +225,10 @@ function normalizeComparablePath(path: string) {
 }
 
 function isSameTaskTarget(task: TaskItem, draft: TaskDraft) {
+  if (task.target.selectedImages?.length || draft.selectedImages?.length) {
+    return false;
+  }
+
   return (
     normalizeComparableDetailUrl(task.target.detailUrl) === normalizeComparableDetailUrl(draft.detailUrl) &&
     normalizeComparablePath(task.target.outputRootDir) === normalizeComparablePath(draft.outputRootDir) &&
@@ -441,6 +446,7 @@ export const useAppStore = defineStore("app", () => {
   const queueBusy = ref(false);
   const createTaskOpen = ref(false);
   const createTaskDetailUrls = ref("");
+  const selectedPhotoDownloadSeed = ref<SelectedPhotoDownloadSeed | null>(null);
   const createTaskOutputRootDir = ref("");
   const createTaskMoviePreviews = ref<Record<string, Partial<DoubanMoviePreview>>>({});
   const importCookieOpen = ref(false);
@@ -816,12 +822,24 @@ export const useAppStore = defineStore("app", () => {
 
   // 打开新增链接任务弹窗。
   function openCreateTask() {
+    selectedPhotoDownloadSeed.value = null;
+    createTaskOpen.value = true;
+  }
+
+  function openSelectedPhotoDownload(seed: SelectedPhotoDownloadSeed) {
+    selectedPhotoDownloadSeed.value = {
+      ...seed,
+      autoDiscover: seed.autoDiscover ?? false,
+    };
+    upsertCreateTaskMoviePreview(seed.detailUrl, seed);
+    searchMovieOpen.value = false;
     createTaskOpen.value = true;
   }
 
   // 关闭新增链接任务弹窗。
   function closeCreateTask() {
     createTaskOpen.value = false;
+    selectedPhotoDownloadSeed.value = null;
   }
 
   // 打开 Cookie 导入弹窗。
@@ -966,7 +984,9 @@ export const useAppStore = defineStore("app", () => {
 
     return {
       ...task,
-      title: result.discovery.normalizedTitle,
+      title: task.target.selectedImages?.length
+        ? `${task.target.selectedPhotoTitle || result.discovery.normalizedTitle} 选图下载`
+        : result.discovery.normalizedTitle,
       lifecycle: {
         phase: "completed",
         attempts,
@@ -1190,7 +1210,7 @@ export const useAppStore = defineStore("app", () => {
     });
 
     try {
-      const result = await runtimeBridge.runDownloadTask({
+      const basePayload = {
         taskId: task.id,
         detailUrl: task.target.detailUrl,
         outputRootDir: task.target.outputRootDir,
@@ -1202,7 +1222,14 @@ export const useAppStore = defineStore("app", () => {
         imageAspectRatio: task.target.imageAspectRatio,
         requestIntervalSeconds: task.target.requestIntervalSeconds,
         doubanCookie: cookie?.value,
-      });
+      };
+      const result = task.target.selectedImages?.length
+        ? await runtimeBridge.runSelectedPhotoDownload({
+            ...basePayload,
+            selectedImages: task.target.selectedImages,
+            selectedPhotoTitle: task.target.selectedPhotoTitle,
+          })
+        : await runtimeBridge.runDownloadTask(basePayload);
 
       const latestTask = getTaskById(task.id);
       if (!latestTask) {
@@ -1376,6 +1403,7 @@ export const useAppStore = defineStore("app", () => {
           coverDataUrl: draft.coverDataUrl ?? preview?.coverDataUrl,
         });
       });
+      const hasSelectedPhotoTasks = drafts.some((draft) => draft.selectedImages?.length);
 
       if (replacementTaskIds.size > 0) {
         await runtimeBridge.clearDownloadTasks(Array.from(replacementTaskIds));
@@ -1392,18 +1420,21 @@ export const useAppStore = defineStore("app", () => {
         "command",
         replacementTaskIds.size > 0
           ? `已覆盖重复任务 ${replacementTaskIds.size} 个，并新增链接任务 ${createdTasks.length} 个 -> ${drafts[0]?.outputRootDir ?? ""}`
-          : `新增链接任务 ${createdTasks.length} 个 -> ${drafts[0]?.outputRootDir ?? ""} / 并发 ${queueConfig.value.concurrency}`,
+          : `${hasSelectedPhotoTasks ? "新增选图下载任务" : "新增链接任务"} ${createdTasks.length} 个 -> ${drafts[0]?.outputRootDir ?? ""} / 并发 ${queueConfig.value.concurrency}`,
       );
       showNotice(
         replacementTaskIds.size > 0
           ? `已覆盖 ${replacementTaskIds.size} 个旧任务并重新加入队列`
-          : createdTasks.length > 1
+          : hasSelectedPhotoTasks
+            ? "已新增选图下载任务"
+            : createdTasks.length > 1
             ? `已新增 ${createdTasks.length} 个链接任务`
             : "已新增链接任务",
         "success",
       );
       createTaskOpen.value = false;
       createTaskDetailUrls.value = "";
+      selectedPhotoDownloadSeed.value = null;
       createTaskMoviePreviews.value = {};
       queueRunning.value = true;
       void drainQueue();
@@ -1682,6 +1713,7 @@ export const useAppStore = defineStore("app", () => {
     queueBusy,
     createTaskOpen,
     createTaskDetailUrls,
+    selectedPhotoDownloadSeed,
     createTaskOutputRootDir,
     importCookieOpen,
     searchMovieOpen,
@@ -1713,6 +1745,7 @@ export const useAppStore = defineStore("app", () => {
     findDuplicateTasksForDrafts,
     toggleLogOnlyErrors,
     openCreateTask,
+    openSelectedPhotoDownload,
     closeCreateTask,
     openImportCookie,
     openSearchMovie,

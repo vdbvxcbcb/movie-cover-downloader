@@ -107,6 +107,43 @@ struct DownloadTaskPayload {
     douban_cookie: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SelectedPhotoPayload {
+    id: String,
+    source: String,
+    title: String,
+    image_url: String,
+    page_url: Option<String>,
+    category: String,
+    douban_asset_type: String,
+    orientation: String,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiscoverDoubanPhotosPayload {
+    task_id: String,
+    detail_url: String,
+    output_root_dir: String,
+    source_hint: String,
+    output_image_format: String,
+    image_aspect_ratio: String,
+    request_interval_seconds: Option<u32>,
+    douban_cookie: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectedPhotoDownloadPayload {
+    #[serde(flatten)]
+    task: DownloadTaskPayload,
+    selected_images: Vec<SelectedPhotoPayload>,
+    selected_photo_title: Option<String>,
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 // 豆瓣登录小窗口的 Cookie 检查结果：pending 表示继续等，ready 表示可以导入，closed 表示用户关窗。
@@ -878,6 +915,18 @@ fn task_control_file_path(app: &AppHandle, task_id: &str) -> Result<PathBuf, Str
     Ok(base_dir.join("task-control").join(format!("{task_id}.txt")))
 }
 
+fn selected_images_payload_file_path(app: &AppHandle, task_id: &str) -> Result<PathBuf, String> {
+    let task_id = validate_task_id(task_id)?;
+    let base_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法获取应用数据目录: {error}"))?;
+
+    Ok(base_dir
+        .join("task-payload")
+        .join(format!("selected-images-{task_id}.json")))
+}
+
 // pid 文件和控制文件同名不同扩展名，用于清空/删除任务时找到后台 sidecar 进程。
 fn task_pid_file_path(control_file_path: &Path) -> PathBuf {
     control_file_path.with_extension("pid")
@@ -1132,6 +1181,79 @@ fn parse_sidecar_stderr_line(
 }
 
 // Windows 目录选择器通过 PowerShell 调用，单引号需要转义，避免路径里有特殊字符时命令失败。
+fn parse_douban_photos_discover_stdout_line(
+    app: &AppHandle,
+    fallback_task_id: &str,
+    line: &str,
+    result_holder: &Arc<Mutex<Option<Value>>>,
+    error_holder: &Arc<Mutex<Option<String>>>,
+) {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let parsed = match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) => value,
+        Err(_) => {
+            let _ = emit_runtime_log_event(
+                app,
+                "INFO",
+                "sidecar",
+                trimmed.to_string(),
+                Some(fallback_task_id.to_string()),
+                None,
+            );
+            return;
+        }
+    };
+
+    if parsed.get("kind").and_then(Value::as_str) == Some("douban-photos-discover-result") {
+        if let Some(payload) = parsed.get("payload") {
+            if let Ok(mut guard) = result_holder.lock() {
+                *guard = Some(payload.clone());
+            }
+        }
+        return;
+    }
+
+    if parsed.get("kind").and_then(Value::as_str) == Some("douban-photos-discover-progress") {
+        if let Some(payload) = parsed.get("payload") {
+            let _ = app.emit("douban-photo-discovery-progress", payload.clone());
+        }
+        return;
+    }
+
+    let level = parsed
+        .get("level")
+        .and_then(Value::as_str)
+        .unwrap_or("INFO");
+    let scope = parsed
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("sidecar");
+    let message = parsed
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or(trimmed)
+        .to_string();
+    let task_id = Some(resolve_sidecar_event_task_id(
+        parsed.get("taskId").and_then(Value::as_str),
+        fallback_task_id,
+    ));
+    let timestamp = parsed.get("timestamp").map(|value| match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        _ => timestamp_now(),
+    });
+
+    if level.eq_ignore_ascii_case("ERROR") {
+        remember_sidecar_error_message(error_holder, &message);
+    }
+
+    let _ = emit_runtime_log_event(app, level, scope, message, task_id, timestamp);
+}
+
 fn escape_powershell_single_quote(input: &str) -> String {
     input.replace('\'', "''")
 }
@@ -1156,10 +1278,11 @@ fn remember_sidecar_error_message(error_holder: &Arc<Mutex<Option<String>>>, mes
 
 // sidecar 顶层错误会带固定前缀，返回给用户前去掉它，让错误文案更直接。
 fn normalize_sidecar_error_message(message: &str) -> String {
-    message
-        .trim()
+    let trimmed = message.trim();
+    trimmed
         .strip_prefix("sidecar failed to start: ")
-        .unwrap_or(message.trim())
+        .or_else(|| trimmed.strip_prefix("sidecar command failed: "))
+        .unwrap_or(trimmed)
         .to_string()
 }
 
@@ -1662,6 +1785,9 @@ fn run_download_task_blocking(
     app: AppHandle,
     payload: DownloadTaskPayload,
     control_file_path: PathBuf,
+    sidecar_command: Option<String>,
+    selected_images_file_path: Option<String>,
+    selected_title: Option<String>,
 ) -> Result<String, String> {
     let sidecar_root = resolve_sidecar_root(&app);
     let _sidecar_entry = resolve_sidecar_entry(&sidecar_root)?;
@@ -1720,6 +1846,16 @@ fn run_download_task_blocking(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if let Some(sidecar_command) = sidecar_command.as_ref() {
+        command.env("MCD_COMMAND", sidecar_command);
+    }
+    if let Some(selected_images_file_path) = selected_images_file_path.as_ref() {
+        command.env("MCD_SELECTED_IMAGES_FILE", selected_images_file_path);
+    }
+    if let Some(selected_title) = selected_title.as_ref() {
+        command.env("MCD_SELECTED_TITLE", selected_title);
+    }
 
     // Windows 发布包中隐藏 node.exe 控制台窗口，避免用户每次下载时看到空白命令行。
     #[cfg(windows)]
@@ -1844,16 +1980,217 @@ async fn run_download_task(
     registry.register_control_file(task_id.clone(), control_file_path.clone())?;
 
     let result =
-        run_blocking_job(move || run_download_task_blocking(app, payload, control_file_path)).await;
+        run_blocking_job(move || run_download_task_blocking(app, payload, control_file_path, None, None, None)).await;
     registry.unregister_task(&task_id);
     result
 }
 
-// 阻塞搜索命令复用打包好的 sidecar Node 运行时，只允许执行固定的豆瓣搜索模式。
+#[tauri::command]
+async fn run_selected_photo_download(
+    app: AppHandle,
+    payload: SelectedPhotoDownloadPayload,
+    registry: tauri::State<'_, TaskControlRegistry>,
+) -> Result<String, String> {
+    let task_id = validate_task_id(&payload.task.task_id)?.to_string();
+    let control_file_path = task_control_file_path(&app, &task_id)?;
+    let selected_images_file_path = selected_images_payload_file_path(&app, &task_id)?;
+    let selected_images_json = serde_json::to_string(&payload.selected_images)
+        .map_err(|error| format!("序列化选中图片失败: {error}"))?;
+    if let Some(parent) = selected_images_file_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建选中图片参数目录失败: {error}"))?;
+    }
+    fs::write(&selected_images_file_path, selected_images_json)
+        .map_err(|error| format!("写入选中图片参数失败: {error}"))?;
+    if let Err(error) = registry.register_control_file(task_id.clone(), control_file_path.clone()) {
+        let _ = fs::remove_file(&selected_images_file_path);
+        return Err(error);
+    }
+    let selected_title = payload.selected_photo_title.clone();
+    let task = payload.task;
+    let selected_images_file_path_for_child = selected_images_file_path.to_string_lossy().into_owned();
+
+    let result = run_blocking_job(move || {
+        run_download_task_blocking(
+            app,
+            task,
+            control_file_path,
+            Some("douban-selected-download".to_string()),
+            Some(selected_images_file_path_for_child),
+            selected_title,
+        )
+    })
+    .await;
+    registry.unregister_task(&task_id);
+    let _ = fs::remove_file(selected_images_file_path);
+    result
+}
+
+fn discover_douban_photos_blocking(
+    app: AppHandle,
+    payload: DiscoverDoubanPhotosPayload,
+    control_file_path: PathBuf,
+) -> Result<String, String> {
+    let detail_url = payload.detail_url.trim().to_string();
+    if detail_url.is_empty() {
+        return Err("请填写豆瓣影片链接".to_string());
+    }
+
+    let sidecar_root = resolve_sidecar_root(&app);
+    let _sidecar_entry = resolve_sidecar_entry(&sidecar_root)?;
+    let sidecar_entry_arg = resolve_sidecar_entry_arg();
+    let sidecar_node = resolve_sidecar_node(&sidecar_root);
+    let request_interval_ms = resolve_request_interval_ms(&DownloadTaskPayload {
+        task_id: payload.task_id.clone(),
+        detail_url: detail_url.clone(),
+        output_root_dir: payload.output_root_dir.clone(),
+        source_hint: payload.source_hint.clone(),
+        douban_asset_type: "still".to_string(),
+        image_count_mode: "unlimited".to_string(),
+        max_images: 100_000,
+        output_image_format: payload.output_image_format.clone(),
+        image_aspect_ratio: payload.image_aspect_ratio.clone(),
+        request_interval_seconds: payload.request_interval_seconds,
+        douban_cookie: payload.douban_cookie.clone(),
+    });
+
+    let mut command = Command::new(sidecar_node);
+    command
+        .arg(sidecar_entry_arg)
+        .current_dir(&sidecar_root)
+        .env("MCD_COMMAND", "douban-photos-discover")
+        .env("MCD_OUTPUT_DIR", &payload.output_root_dir)
+        .env("MCD_BOOTSTRAP_TASK_ID", &payload.task_id)
+        .env("MCD_BOOTSTRAP_TASK_URL", &detail_url)
+        .env("MCD_BOOTSTRAP_OUTPUT_DIR", &payload.output_root_dir)
+        .env("MCD_BOOTSTRAP_SOURCE_HINT", &payload.source_hint)
+        .env("MCD_DOUBAN_ASSET_TYPE", "still")
+        .env("MCD_IMAGE_COUNT_MODE", "unlimited")
+        .env("MCD_BOOTSTRAP_MAX_IMAGES", "100000")
+        .env("MCD_BOOTSTRAP_OUTPUT_FORMAT", &payload.output_image_format)
+        .env("MCD_IMAGE_ASPECT_RATIO", &payload.image_aspect_ratio)
+        .env(
+            "MCD_TASK_CONTROL_FILE",
+            control_file_path.to_string_lossy().into_owned(),
+        )
+        .env("MCD_REQUEST_INTERVAL_MS", request_interval_ms.to_string())
+        .env("MCD_BOOTSTRAP_REQUEST_INTERVAL_MS", request_interval_ms.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(cookie) = payload.douban_cookie.as_ref() {
+        command.env("MCD_DOUBAN_COOKIE", cookie);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(0x08000000);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("启动豆瓣图片解析失败: {error}"))?;
+
+    if let Some(parent) = control_file_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建任务控制目录失败: {error}"))?;
+    }
+    fs::write(
+        task_pid_file_path(&control_file_path),
+        child.id().to_string(),
+    )
+    .map_err(|error| format!("写入任务进程标记失败: {error}"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取豆瓣图片解析 stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法读取豆瓣图片解析 stderr".to_string())?;
+    let result_holder = Arc::new(Mutex::new(None));
+    let error_holder = Arc::new(Mutex::new(None));
+
+    let stdout_app = app.clone();
+    let stdout_task_id = payload.task_id.clone();
+    let stdout_result_holder = Arc::clone(&result_holder);
+    let stdout_error_holder = Arc::clone(&error_holder);
+    let stdout_thread = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            parse_douban_photos_discover_stdout_line(
+                &stdout_app,
+                &stdout_task_id,
+                &line,
+                &stdout_result_holder,
+                &stdout_error_holder,
+            );
+        }
+    });
+
+    let stderr_app = app.clone();
+    let stderr_task_id = payload.task_id.clone();
+    let stderr_error_holder = Arc::clone(&error_holder);
+    let stderr_thread = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            parse_sidecar_stderr_line(&stderr_app, &stderr_task_id, &line, &stderr_error_holder);
+        }
+    });
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("等待豆瓣图片解析结束失败: {error}"))?;
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+
+    if !status.success() {
+        let sidecar_message = error_holder
+            .lock()
+            .map_err(|_| "读取豆瓣图片解析错误失败".to_string())?
+            .clone();
+        return Err(format_sidecar_exit_error(
+            status.code(),
+            sidecar_message.as_deref(),
+        ));
+    }
+
+    let result = match result_holder
+        .lock()
+        .map_err(|_| "读取豆瓣图片解析结果失败".to_string())?
+        .clone()
+    {
+        Some(result) => result,
+        None => {
+            let sidecar_message = error_holder
+                .lock()
+                .map_err(|_| "读取豆瓣图片解析错误失败".to_string())?
+                .clone();
+            return Err(sidecar_message.unwrap_or_else(|| "sidecar 未返回豆瓣图片解析结果".to_string()));
+        }
+    };
+
+    return serde_json::to_string(&result).map_err(|error| format!("序列化豆瓣图片解析结果失败: {error}"));
+
+}
+
+#[tauri::command]
+async fn discover_douban_photos(
+    app: AppHandle,
+    payload: DiscoverDoubanPhotosPayload,
+    registry: tauri::State<'_, TaskControlRegistry>,
+) -> Result<String, String> {
+    let task_id = validate_task_id(&payload.task_id)?.to_string();
+    let control_file_path = task_control_file_path(&app, &task_id)?;
+    registry.register_control_file(task_id.clone(), control_file_path.clone())?;
+    let result = run_blocking_job(move || discover_douban_photos_blocking(app, payload, control_file_path)).await;
+    registry.unregister_task(&task_id);
+    result
+}
+
 fn search_douban_movies_blocking(
     app: AppHandle,
     query: String,
     page: u32,
+    douban_cookie: Option<String>,
 ) -> Result<String, String> {
     let query = query.trim().to_string();
     if query.is_empty() {
@@ -1877,6 +2214,10 @@ fn search_douban_movies_blocking(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if let Some(cookie) = douban_cookie.as_ref() {
+        command.env("MCD_DOUBAN_COOKIE", cookie);
+    }
 
     #[cfg(target_os = "windows")]
     {
@@ -1920,20 +2261,28 @@ fn search_douban_movies_blocking(
 
     if !output.status.success() {
         return Err(sidecar_error
+            .as_deref()
+            .map(normalize_sidecar_error_message)
             .or_else(|| (!stderr.is_empty()).then_some(stderr))
             .unwrap_or_else(|| "豆瓣搜索进程异常退出".to_string()));
     }
 
-    Err(sidecar_error.unwrap_or_else(|| "sidecar 未返回豆瓣搜索结果".to_string()))
+    Err(sidecar_error
+        .as_deref()
+        .map(normalize_sidecar_error_message)
+        .unwrap_or_else(|| "sidecar 未返回豆瓣搜索结果".to_string()))
 }
 
-// 前端搜索弹窗调用的命令：转到阻塞线程执行，避免网络请求卡住桌面主线程。
 #[tauri::command]
-async fn search_douban_movies(app: AppHandle, query: String, page: u32) -> Result<String, String> {
-    run_blocking_job(move || search_douban_movies_blocking(app, query, page)).await
+async fn search_douban_movies(
+    app: AppHandle,
+    query: String,
+    page: u32,
+    douban_cookie: Option<String>,
+) -> Result<String, String> {
+    run_blocking_job(move || search_douban_movies_blocking(app, query, page, douban_cookie)).await
 }
 
-// 阻塞片名解析命令复用 sidecar，只允许解析固定的豆瓣 subject 详情页。
 fn resolve_douban_movie_title_blocking(
     app: AppHandle,
     detail_url: String,
@@ -2010,13 +2359,11 @@ fn resolve_douban_movie_title_blocking(
     Err(sidecar_error.unwrap_or_else(|| "sidecar 未返回豆瓣片名".to_string()))
 }
 
-// 新增任务弹窗手动粘贴链接时调用：解析片名只影响显示，不影响任务提交的纯 URL。
 #[tauri::command]
 async fn resolve_douban_movie_title(app: AppHandle, detail_url: String) -> Result<String, String> {
     run_blocking_job(move || resolve_douban_movie_title_blocking(app, detail_url)).await
 }
 
-// 队列表格封面列使用的影片预览信息：返回片名和搜索结果同款封面缩略图。
 fn resolve_douban_movie_preview_blocking(
     app: AppHandle,
     detail_url: String,
@@ -2382,6 +2729,8 @@ pub fn run() {
             save_custom_cropped_image,
             save_processed_image,
             run_download_task,
+            discover_douban_photos,
+            run_selected_photo_download,
             search_douban_movies,
             resolve_douban_movie_title,
             resolve_douban_movie_preview,

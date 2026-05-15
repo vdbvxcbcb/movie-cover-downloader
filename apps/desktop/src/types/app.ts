@@ -49,6 +49,8 @@ export interface TaskTarget {
   requestIntervalSeconds: RequestIntervalSeconds;
   coverUrl?: string;
   coverDataUrl?: string;
+  selectedImages?: SelectedDoubanPhoto[];
+  selectedPhotoTitle?: string;
 }
 
 export interface SourceDetectionSnapshot {
@@ -66,6 +68,7 @@ export interface DiscoveredAsset {
   imageUrl: string;
   pageUrl?: string;
   category: AssetCategory;
+  doubanAssetType?: DoubanAssetType;
   orientation: AssetOrientation;
   width?: number;
   height?: number;
@@ -157,6 +160,8 @@ export interface TaskDraft {
   requestIntervalSeconds: RequestIntervalSeconds;
   coverUrl?: string;
   coverDataUrl?: string;
+  selectedImages?: SelectedDoubanPhoto[];
+  selectedPhotoTitle?: string;
 }
 
 export interface CookieDraft {
@@ -192,6 +197,33 @@ export interface DoubanMoviePreview {
   coverUrl?: string;
   coverDataUrl?: string;
 }
+
+export interface SelectedPhotoDownloadSeed {
+  detailUrl: string;
+  title?: string;
+  coverUrl?: string;
+  coverDataUrl?: string;
+  autoDiscover?: boolean;
+}
+
+export interface SelectedDoubanPhoto {
+  id: string;
+  source: SourceSite;
+  title: string;
+  imageUrl: string;
+  previewUrl?: string;
+  previewDataUrl?: string;
+  pageUrl?: string;
+  category: AssetCategory;
+  doubanAssetType: DoubanAssetType;
+  orientation: AssetOrientation;
+  width?: number;
+  height?: number;
+}
+
+export interface SelectableDoubanPhoto extends SelectedDoubanPhoto {
+  selected: boolean;
+}
 export interface AppSeedState {
   schemaVersion: number;
   tasks: TaskItem[];
@@ -207,8 +239,11 @@ export interface RuntimeDiscoveredAsset {
   source: SourceSite;
   title: string;
   imageUrl: string;
+  previewUrl?: string;
+  previewDataUrl?: string;
   pageUrl?: string;
   category: AssetCategory;
+  doubanAssetType?: DoubanAssetType;
   orientation: AssetOrientation;
   width?: number;
   height?: number;
@@ -235,6 +270,31 @@ export interface RuntimeDownloadTaskPayload {
   imageAspectRatio: ImageAspectRatio;
   requestIntervalSeconds: RequestIntervalSeconds;
   doubanCookie?: string;
+}
+
+export interface RuntimeDiscoverDoubanPhotosPayload {
+  taskId: string;
+  detailUrl: string;
+  outputRootDir: string;
+  sourceHint: SourceHint;
+  outputImageFormat: OutputImageFormat;
+  imageAspectRatio: ImageAspectRatio;
+  requestIntervalSeconds: RequestIntervalSeconds;
+  doubanCookie?: string;
+}
+
+export interface RuntimeDoubanPhotoDiscoveryProgressEvent {
+  taskId: string;
+  doubanAssetType: DoubanAssetType;
+  pageUrl: string;
+  normalizedTitle?: string;
+  images: RuntimeDiscoveredAsset[];
+  timestamp?: string | number;
+}
+
+export interface RuntimeSelectedPhotoDownloadPayload extends RuntimeDownloadTaskPayload {
+  selectedImages: SelectedDoubanPhoto[];
+  selectedPhotoTitle?: string;
 }
 
 export interface RuntimeDownloadTaskResult {

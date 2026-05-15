@@ -10,6 +10,9 @@ import type {
   LogEntry,
   RuntimeDownloadTaskPayload,
   RuntimeDownloadTaskResult,
+  RuntimeDoubanPhotoDiscoveryProgressEvent,
+  RuntimeDiscoverDoubanPhotosPayload,
+  RuntimeSelectedPhotoDownloadPayload,
   RuntimeTaskProgressEvent,
 } from "../types/app";
 
@@ -196,12 +199,12 @@ class RuntimeBridge {
   }
 
   // 通过 Tauri 命令调用 sidecar 的豆瓣搜索模式；浏览器预览不直接跨域访问豆瓣。
-  async searchDoubanMovies(query: string, page: number) {
+  async searchDoubanMovies(query: string, page: number, doubanCookie?: string) {
     if (!isTauriRuntime()) {
       throw new Error("豆瓣搜索仅在 Tauri 桌面环境可用");
     }
 
-    const serialized = await invoke<string>("search_douban_movies", { query, page });
+    const serialized = await invoke<string>("search_douban_movies", { query, page, doubanCookie });
     return JSON.parse(serialized) as DoubanSearchResultPage;
   }
 
@@ -234,6 +237,24 @@ class RuntimeBridge {
     return JSON.parse(serialized) as RuntimeDownloadTaskResult;
   }
 
+  async discoverDoubanPhotos(payload: RuntimeDiscoverDoubanPhotosPayload) {
+    if (!isTauriRuntime()) {
+      throw new Error("豆瓣选图解析仅在 Tauri 桌面环境可用");
+    }
+
+    const serialized = await invoke<string>("discover_douban_photos", { payload });
+    return JSON.parse(serialized) as RuntimeDownloadTaskResult["discovery"];
+  }
+
+  async runSelectedPhotoDownload(payload: RuntimeSelectedPhotoDownloadPayload) {
+    if (!isTauriRuntime()) {
+      throw new Error("选图下载仅在 Tauri 桌面环境可用");
+    }
+
+    const serialized = await invoke<string>("run_selected_photo_download", { payload });
+    return JSON.parse(serialized) as RuntimeDownloadTaskResult;
+  }
+
   // 向 Rust 发送暂停请求，Rust 会写控制文件让 sidecar 在安全点暂停。
   async pauseDownloadTask(taskId: string) {
     if (isTauriRuntime()) {
@@ -259,6 +280,10 @@ class RuntimeBridge {
     }
 
     return taskIds.length;
+  }
+
+  async cancelDoubanPhotoDiscovery(taskId: string) {
+    return this.clearDownloadTasks([taskId]);
   }
 
   // 请求 Rust 删除任务输出目录，Rust 会再次校验目录边界。
@@ -443,6 +468,21 @@ class RuntimeBridge {
       const unlisten = await listen<RuntimeTaskProgressPayload>("task-progress", (event) => {
         listener(normalizeTaskProgress(event.payload));
       });
+
+      return () => {
+        void unlisten();
+      };
+    }
+
+    return () => {};
+  }
+
+  async onDoubanPhotoDiscoveryProgress(listener: (event: RuntimeDoubanPhotoDiscoveryProgressEvent) => void) {
+    if (isTauriRuntime()) {
+      const unlisten = await listen<RuntimeDoubanPhotoDiscoveryProgressEvent>(
+        "douban-photo-discovery-progress",
+        (event) => listener(event.payload),
+      );
 
       return () => {
         void unlisten();

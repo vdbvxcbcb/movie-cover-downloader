@@ -22,6 +22,7 @@ const alertTone = ref<"success" | "error" | "warn">("warn");
 const alertRevision = ref(0);
 const searchAttempted = ref(false);
 const searchPage = ref<DoubanSearchResultPage | null>(null);
+const searchPageCache = new Map<string, DoubanSearchResultPage>();
 const addedDetailUrlSet = computed(() =>
   new Set(
     appStore.createTaskDetailUrls
@@ -62,6 +63,10 @@ function getCoverSource(item: DoubanSearchResultItem) {
   return item.coverDataUrl ?? item.coverUrl;
 }
 
+function buildSearchCacheKey(query: string, page: number) {
+  return `${query.trim().toLocaleLowerCase()}:${Math.max(1, page)}`;
+}
+
 // 封面图加载失败时隐藏图片，保留统一占位，避免破图影响列表观感。
 function handleCoverError(event: Event) {
   const image = event.target as HTMLImageElement;
@@ -70,6 +75,21 @@ function handleCoverError(event: Event) {
 
 function isLinkAdded(item: DoubanSearchResultItem) {
   return addedDetailUrlSet.value.has(normalizeComparableDetailUrl(item.detailUrl));
+}
+
+function getUsableDoubanCookie() {
+  const now = Date.now();
+  return appStore.cookies.find((cookie) => {
+    const coolingUntil = cookie.coolingUntil ? Date.parse(cookie.coolingUntil) : 0;
+    const expiresAt = cookie.expiresAt ? Date.parse(cookie.expiresAt) : Number.POSITIVE_INFINITY;
+    return (
+      cookie.source === "douban" &&
+      cookie.status !== "cooling" &&
+      (!Number.isFinite(coolingUntil) || coolingUntil <= now) &&
+      (!Number.isFinite(expiresAt) || expiresAt > now) &&
+      cookie.value
+    );
+  })?.value;
 }
 
 function addDetailUrl(item: DoubanSearchResultItem) {
@@ -86,6 +106,17 @@ function addDetailUrl(item: DoubanSearchResultItem) {
   if (added) {
     showAlert(`已添加到${item.title}链接到新增链接抓图任务。`, "success");
   }
+}
+
+function openSelectedPhotoDownload(item: DoubanSearchResultItem) {
+  appStore.openSelectedPhotoDownload({
+    detailUrl: item.detailUrl,
+    title: item.title,
+    coverUrl: item.coverUrl,
+    coverDataUrl: item.coverDataUrl,
+    autoDiscover: true,
+  });
+  emit("close");
 }
 
 function removeDetailUrl(item: DoubanSearchResultItem) {
@@ -105,10 +136,29 @@ async function search(page = 1) {
     return;
   }
 
+  const doubanCookie = getUsableDoubanCookie();
+  if (!doubanCookie) {
+    searchPage.value = null;
+    searchAttempted.value = true;
+    showAlert("请先导入可用的豆瓣 Cookie 后再搜索影片。", "error");
+    return;
+  }
+
+  const cacheKey = buildSearchCacheKey(query, page);
+  const cachedPage = searchPageCache.get(cacheKey);
+  if (cachedPage) {
+    searchPage.value = cachedPage;
+    searchAttempted.value = true;
+    currentPage.value = cachedPage.page;
+    clearAlert();
+    return;
+  }
+
   loading.value = true;
   clearAlert();
   try {
-    const result = await runtimeBridge.searchDoubanMovies(query, page);
+    const result = await runtimeBridge.searchDoubanMovies(query, page, doubanCookie);
+    searchPageCache.set(cacheKey, result);
     searchPage.value = result;
     searchAttempted.value = true;
     currentPage.value = result.page;
@@ -191,6 +241,7 @@ function resultKey(item: DoubanSearchResultItem) {
               <div class="search-result-row__head">
                 <strong>{{ item.title }}</strong>
                 <div class="search-result-row__actions">
+                  <ActionButton label="选图下载" size="sm" @click="openSelectedPhotoDownload(item)" />
                   <ActionButton :label="isLinkAdded(item) ? '完成添加' : '添加链接'" size="sm" :disabled="isLinkAdded(item)" @click="addDetailUrl(item)" />
                   <PopConfirmAction
                     label="删除链接"

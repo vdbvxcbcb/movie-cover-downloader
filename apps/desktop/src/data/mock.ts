@@ -35,7 +35,7 @@ function currentStamp() {
 export function createTaskFromDraft(id: string, draft: TaskDraft): TaskItem {
   return {
     id,
-    title: "待解析标题",
+    title: draft.selectedPhotoTitle ? `${draft.selectedPhotoTitle} 选图下载` : "待解析标题",
     target: {
       detailUrl: draft.detailUrl,
       outputRootDir: draft.outputRootDir,
@@ -46,13 +46,17 @@ export function createTaskFromDraft(id: string, draft: TaskDraft): TaskItem {
       outputImageFormat: draft.outputImageFormat,
       imageAspectRatio: draft.imageAspectRatio,
       requestIntervalSeconds: draft.requestIntervalSeconds,
+      selectedImages: draft.selectedImages,
+      selectedPhotoTitle: draft.selectedPhotoTitle,
     },
     lifecycle: {
       phase: "queued",
       attempts: 0,
       updatedAt: currentStamp(),
     },
-    summary: "新链接任务已入队，等待解析详情页与图片页",
+    summary: draft.selectedImages?.length
+      ? `选图下载任务已入队，等待下载 ${draft.selectedImages.length} 张图片`
+      : "新链接任务已入队，等待解析详情页与图片页",
     coverUrl: draft.coverUrl,
     coverDataUrl: draft.coverDataUrl,
   };

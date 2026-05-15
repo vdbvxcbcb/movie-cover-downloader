@@ -1,5 +1,5 @@
 // 站点适配器基础工具：封装请求头、HTML 抓取、标题解析和 URL 去重。
-import type { DiscoveryResult, SidecarTask } from "../shared/contracts.js";
+import type { DiscoveredImage, DiscoveryResult, DoubanAssetType, SidecarTask } from "../shared/contracts.js";
 import type { SidecarLogger } from "../shared/logger.js";
 import type { RuntimeConfig } from "../shared/runtime-config.js";
 import { waitFor } from "../utils/wait-for.js";
@@ -10,6 +10,11 @@ export interface AdapterContext {
   logger: SidecarLogger;
   cookieHeader?: string | null;
   minRequestIntervalMs?: number;
+  includePreviewDataUrl?: boolean;
+  onImagesDiscovered?: (
+    images: DiscoveredImage[],
+    meta: { taskId: string; doubanAssetType: DoubanAssetType; pageUrl: string; normalizedTitle: string },
+  ) => void;
 }
 
 // 站点适配器接口：每个站点只需要声明能否处理任务，以及如何发现图片。

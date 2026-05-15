@@ -383,6 +383,127 @@ test("discover 成功时会按豆瓣抓图类型追加输出子目录", async ()
   }
 });
 
+test("选图发现会保留大图下载地址并附带可预览 data URL", async () => {
+  const adapter = new DoubanAdapter();
+  const context = { ...createContext(), includePreviewDataUrl: true };
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const imageBytes = new Uint8Array([1, 2, 3]);
+  const photoHtml = '<html><img src="https://img1.doubanio.com/view/photo/m/public/p1.webp"></html>';
+  const requests: string[] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.endsWith("/subject/34780991/")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/",
+        html: '<html><span property="v:itemreviewed">示例电影</span></html>',
+      });
+    }
+    if (url.includes("/photos?type=W")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=W",
+        html: photoHtml,
+      });
+    }
+
+    return {
+      ok: true,
+      url,
+      headers: {
+        get(name: string) {
+          return name.toLowerCase() === "content-type" ? "image/webp" : null;
+        },
+      },
+      arrayBuffer: async () => imageBytes.buffer,
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const result = await adapter.discover(createTask({ doubanAssetType: "wallpaper" }), context);
+    assert.equal(result.images[0]?.imageUrl, "https://img1.doubanio.com/view/photo/l/public/p1.webp");
+    assert.equal(result.images[0]?.previewUrl, "https://img1.doubanio.com/view/photo/m/public/p1.webp");
+    assert.equal(result.images[0]?.previewDataUrl, "data:image/webp;base64,AQID");
+    assert.deepEqual(requests, [
+      "https://movie.douban.com/subject/34780991/",
+      "https://movie.douban.com/subject/34780991/photos?type=W",
+      "https://img1.doubanio.com/view/photo/m/public/p1.webp",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("预览图片 Content-Length 超限时不会读取图片 body", async () => {
+  const adapter = new DoubanAdapter();
+  const context = { ...createContext(), includePreviewDataUrl: true };
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const photoHtml = '<html><img src="https://img1.doubanio.com/view/photo/m/public/p1.webp"></html>';
+  let bodyRead = false;
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/subject/34780991/")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/",
+        html: '<html><span property="v:itemreviewed">示例电影</span></html>',
+      });
+    }
+    if (url.includes("/photos?type=W")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=W",
+        html: photoHtml,
+      });
+    }
+
+    return {
+      ok: true,
+      url,
+      headers: {
+        get(name: string) {
+          if (name.toLowerCase() === "content-type") return "image/webp";
+          if (name.toLowerCase() === "content-length") return "1200001";
+          return null;
+        },
+      },
+      arrayBuffer: async () => {
+        bodyRead = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const result = await adapter.discover(createTask({ doubanAssetType: "wallpaper" }), context);
+    assert.equal(result.images[0]?.previewDataUrl, undefined);
+    assert.equal(bodyRead, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test("数量受限时达到目标张数后会停止继续抓取后续分页", async () => {
   const adapter = new DoubanAdapter();
   const task = createTask({

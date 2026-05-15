@@ -60,8 +60,11 @@ export interface DiscoveredImage {
   source: SourceSite;
   title: string;
   imageUrl: string;
+  previewUrl?: string;
+  previewDataUrl?: string;
   pageUrl?: string;
   category: AssetCategory;
+  doubanAssetType?: DoubanAssetType;
   orientation: AssetOrientation;
   width?: number;
   height?: number;

@@ -1,4 +1,6 @@
 // sidecar 入口：读取环境变量创建一次性下载任务，并驱动调度器执行。
+import fs from "node:fs";
+import path from "node:path";
 import { CookiePoolService } from "./services/cookie-pool.js";
 import { DownloaderService } from "./services/downloader.js";
 import { MatcherService } from "./services/matcher.js";
@@ -6,9 +8,10 @@ import { SchedulerService } from "./services/scheduler.js";
 import { searchDoubanMovies } from "./services/douban-search.js";
 import { resolveDoubanMovieTitle } from "./services/douban-title.js";
 import { CancelRequestedError, FileTaskControl, PauseRequestedError } from "./services/task-control.js";
-import { createLogger } from "./shared/logger.js";
+import { createLogger, emitTaskProgress } from "./shared/logger.js";
 import { createRuntimeConfig, formatRuntimeConfig } from "./shared/runtime-config.js";
-import type { SidecarTask } from "./shared/contracts.js";
+import type { DiscoveredImage, DiscoveryResult, DoubanAssetType, SidecarTask } from "./shared/contracts.js";
+import { buildOutputDir, buildOutputFolderName, formatDirectoryImageAspectRatio } from "./utils/output-folder.js";
 
 // sidecar 参数全部来自环境变量，入口层先做白名单解析，避免非法值进入下载流程。
 // 解析输出图片格式环境变量；未传时使用 jpg，传入非法值时立即失败，避免下载阶段才暴露配置错误。
@@ -106,11 +109,152 @@ async function runDoubanSearchCommand(config: ReturnType<typeof createRuntimeCon
   process.stdout.write(`${JSON.stringify({ kind: "douban-search-result", payload: result })}\n`);
 }
 
+function createRequiredBootstrapTask(configOutputDir: string): SidecarTask {
+  const task = createBootstrapTask(configOutputDir);
+  if (!task) {
+    throw new Error("missing douban photo task url");
+  }
+
+  return task;
+}
+
+function buildSelectedOutputDir(rootDir: string, outputFolderName: string, imageAspectRatio: SidecarTask["imageAspectRatio"]) {
+  return path.join(
+    buildOutputDir(rootDir, outputFolderName),
+    "selected",
+    `selected-${formatDirectoryImageAspectRatio(imageAspectRatio)}`,
+  );
+}
+
+function normalizeDoubanSubjectUrl(value: string) {
+  const match = value.match(/(https:\/\/movie\.douban\.com\/subject\/\d+)/i);
+  return match ? `${match[1]}/` : value;
+}
+
+function stripPreviewDataUrls(images: DiscoveredImage[]): DiscoveredImage[] {
+  return images.map(({ previewDataUrl: _previewDataUrl, ...image }) => image);
+}
+
+async function discoverAllDoubanPhotos(matcher: MatcherService, task: SidecarTask): Promise<DiscoveryResult> {
+  const assetTypes: DoubanAssetType[] = ["still", "poster", "wallpaper"];
+  const discoveries: DiscoveryResult[] = [];
+
+  for (const doubanAssetType of assetTypes) {
+    try {
+      discoveries.push(
+        await matcher.discover({
+          ...task,
+          doubanAssetType,
+          imageCountMode: "unlimited",
+          maxImages: 100_000,
+        }, {
+          includePreviewDataUrl: true,
+          onImagesDiscovered(images, meta) {
+            process.stdout.write(`${JSON.stringify({
+              kind: "douban-photos-discover-progress",
+              payload: {
+                taskId: meta.taskId,
+                doubanAssetType: meta.doubanAssetType,
+                pageUrl: meta.pageUrl,
+                normalizedTitle: meta.normalizedTitle,
+                images,
+                timestamp: Date.now(),
+              },
+            })}\n`);
+          },
+        }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.startsWith("douban photo category is empty")) {
+        throw error;
+      }
+    }
+  }
+
+  const firstDiscovery = discoveries[0];
+  if (!firstDiscovery) {
+    throw new Error("no images discovered on douban photos page");
+  }
+
+  const images = discoveries.flatMap((discovery) => discovery.images);
+  const outputFolderName = firstDiscovery.outputFolderName || buildOutputFolderName(firstDiscovery.normalizedTitle);
+  return {
+    source: "douban",
+    detailUrl: firstDiscovery.detailUrl,
+    imagePageUrl: `${firstDiscovery.detailUrl.replace(/\/?$/, "/")}all_photos`,
+    normalizedTitle: firstDiscovery.normalizedTitle,
+    outputFolderName,
+    outputDir: buildSelectedOutputDir(task.outputRootDir, outputFolderName, task.imageAspectRatio),
+    images,
+  };
+}
+
+function parseSelectedImages(): DiscoveredImage[] {
+  const payloadFile = process.env.MCD_SELECTED_IMAGES_FILE;
+  const raw = payloadFile ? fs.readFileSync(payloadFile, "utf8") : process.env.MCD_SELECTED_IMAGES;
+  if (!raw) {
+    throw new Error("missing selected images payload");
+  }
+
+  const parsed = JSON.parse(raw) as DiscoveredImage[];
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("selected images payload is empty");
+  }
+
+  return parsed.map((image, index) => ({
+    ...image,
+    id: image.id || `selected-${index + 1}`,
+    source: "douban",
+  }));
+}
+
 // 片名解析模式只解析单个豆瓣详情页标题，供前端把纯链接展示成“片名：链接”。
 async function runDoubanTitleCommand(config: ReturnType<typeof createRuntimeConfig>) {
   const detailUrl = process.env.MCD_TITLE_DETAIL_URL ?? "";
   const result = await resolveDoubanMovieTitle(detailUrl, { config });
   process.stdout.write(`${JSON.stringify({ kind: "douban-title-result", payload: result })}\n`);
+}
+
+async function runDoubanPhotosDiscoverCommand(
+  config: ReturnType<typeof createRuntimeConfig>,
+  matcher: MatcherService,
+) {
+  const task = createRequiredBootstrapTask(config.outputDir);
+  const discovery = await discoverAllDoubanPhotos(matcher, task);
+  process.stdout.write(`${JSON.stringify({
+    kind: "douban-photos-discover-result",
+    payload: {
+      ...discovery,
+      images: stripPreviewDataUrls(discovery.images),
+    },
+  })}\n`);
+}
+
+async function runDoubanSelectedDownloadCommand(
+  config: ReturnType<typeof createRuntimeConfig>,
+  downloader: DownloaderService,
+  cookiePool: CookiePoolService,
+  taskControl: FileTaskControl,
+) {
+  const task = createRequiredBootstrapTask(config.outputDir);
+  const selectedImages = parseSelectedImages();
+  const selectedTitle = process.env.MCD_SELECTED_TITLE?.trim() || selectedImages[0]?.title || "Douban Selected Photos";
+  const outputFolderName = buildOutputFolderName(selectedTitle);
+  const detailUrl = normalizeDoubanSubjectUrl(task.detailUrl);
+  const discovery: DiscoveryResult = {
+    source: "douban",
+    detailUrl,
+    imagePageUrl: `${detailUrl}all_photos`,
+    normalizedTitle: selectedTitle,
+    outputFolderName,
+    outputDir: buildSelectedOutputDir(task.outputRootDir, outputFolderName, task.imageAspectRatio),
+    images: selectedImages,
+  };
+  const cookieHeader = cookiePool.getCookieHeader("douban");
+  emitTaskProgress(task.id, "downloading", discovery.images.length, 0);
+  const download = await downloader.download(task, discovery, cookieHeader, taskControl);
+  process.stdout.write(`${JSON.stringify({ kind: "task-result", payload: { discovery, download } })}\n`);
 }
 // 主流程组装 Cookie 池、匹配器、下载器和调度器，然后执行一次性任务并把结果写回 stdout。
 // sidecar 主入口：组装配置、Cookie 池、匹配器、下载器和调度器，并把最终结果输出给 Tauri。
@@ -131,6 +275,16 @@ async function main() {
   const matcher = new MatcherService(config, cookiePool, createLogger("discoverer"));
   const downloader = new DownloaderService(config, createLogger("downloader"));
   const taskControl = new FileTaskControl(process.env.MCD_TASK_CONTROL_FILE);
+  if (process.env.MCD_COMMAND === "douban-photos-discover") {
+    await runDoubanPhotosDiscoverCommand(config, matcher);
+    return;
+  }
+
+  if (process.env.MCD_COMMAND === "douban-selected-download") {
+    await runDoubanSelectedDownloadCommand(config, downloader, cookiePool, taskControl);
+    return;
+  }
+
   const scheduler = new SchedulerService(
     config,
     {
@@ -185,6 +339,6 @@ async function main() {
 
 void main().catch((error) => {
   const logger = createLogger("bootstrap");
-  logger.error(`sidecar failed to start: ${error instanceof Error ? error.message : String(error)}`);
+  logger.error(`sidecar command failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });
