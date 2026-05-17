@@ -1,6 +1,11 @@
 // 匹配服务：根据任务来源选择站点适配器，并产出可下载图片列表。
 import { DoubanAdapter } from "../adapters/douban.js";
-import type { DiscoveryResult, SidecarTask } from "../shared/contracts.js";
+import type {
+  DiscoveryResult,
+  DoubanPhotoDiscoveryBatchResult,
+  DoubanPhotoDiscoveryCursor,
+  SidecarTask,
+} from "../shared/contracts.js";
 import type { SidecarLogger } from "../shared/logger.js";
 import type { RuntimeConfig } from "../shared/runtime-config.js";
 import type { CookiePoolService } from "./cookie-pool.js";
@@ -45,5 +50,26 @@ constructor(
       task.id,
     );
     return result;
+  }
+
+  async discoverDoubanPhotoBatch(
+    task: SidecarTask,
+    cursor: DoubanPhotoDiscoveryCursor | null,
+    batchSize: number,
+    options: DiscoverOptions = {},
+  ): Promise<DoubanPhotoDiscoveryBatchResult> {
+    const adapter = this.adapters.find((item) => item.canHandle(task));
+    if (!adapter) {
+      throw new Error(`no adapter can handle url: ${task.detailUrl}`);
+    }
+
+    const cookieHeader = this.cookiePool.getCookieHeader(adapter.source);
+    return adapter.discoverBatch(task, {
+      config: this.config,
+      logger: this.logger,
+      cookieHeader,
+      includePreviewDataUrl: options.includePreviewDataUrl,
+      onImagesDiscovered: options.onImagesDiscovered,
+    }, cursor, batchSize);
   }
 }

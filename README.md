@@ -1,26 +1,18 @@
 # Movie Cover Downloader
 
-一个面向 Windows 的豆瓣影视图片下载器桌面应用，用于制作视频封面，当前只支持豆瓣电影。应用提供豆瓣影片搜索、搜索结果链接一键加入任务、任务队列、Cookie 管理、实时下载进度、本地输出目录管理、自定义裁剪能力。
+一个面向 Windows 的豆瓣影视图片下载器桌面应用，用于制作视频封面和整理影视图片素材。当前主要支持豆瓣电影，提供影片搜索、自动下载、选图下载、任务队列、Cookie 管理、实时进度、本地输出目录管理和图片处理能力。
 
 ## 快速入口
 
 - 使用说明：[docs/usage-guide.md](./docs/usage-guide.md)
 - sidecar 说明：[apps/sidecar/README.md](./apps/sidecar/README.md)
+- 安装包下载：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
 
 ## 视频演示
 
-
 https://github.com/user-attachments/assets/908c6e0d-6f0f-4608-9224-5a001f564801
 
-
-
 https://github.com/user-attachments/assets/e4e03bf4-594c-4769-b632-072f80325735
-
-
-
-## 下载安装
-
-- 请到发布页面下载安装包：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
 
 ## 当前定位
 
@@ -31,7 +23,66 @@ https://github.com/user-attachments/assets/e4e03bf4-594c-4769-b632-072f80325735
 - 本地状态存储：`SQLite`
 - 目标平台：`Windows`
 
-## 项目整体架构
+## 主要功能
+
+- 豆瓣影视搜索：按片名搜索豆瓣电影，展示封面、标题、简介、详情页链接和分页结果。
+- 搜索结果缓存：同一次搜索内切换分页会复用已请求过的结果，减少重复请求。
+- Cookie 管理：搜索影视、添加下载任务和图片处理等需要访问豆瓣资源的能力都依赖导入可用 Cookie。
+- 自动下载：在 `3、添加下载任务` 弹窗的 `自动下载` 模式中粘贴豆瓣 `subject` 链接，按配置批量下载剧照、海报、壁纸。
+- 选图下载：在 `选图下载` 模式中解析豆瓣全部图片，用户勾选需要的图片后只下载选中的内容。
+- 双路径选图：既支持知道链接时手动粘贴解析，也支持从 `2、搜索影视` 的搜索结果直接进入选图下载。
+- 图片预览：选图下载列表支持双击预览大图，并可在预览组中左右切换。
+- 图片处理：支持 1 到 9 张图片拼版、单张图片透明度、背景图透明度、背景重叠、方框/圆圈/箭头标注和导出。
+- 任务队列：下载任务进入队列后按添加顺序执行，并实时展示进度、日志和输出目录。
+
+## 使用流程
+
+### 1. 导入 Cookie
+
+点击控制中心的 Cookie 导入入口，导入可访问豆瓣电影页面的 Cookie。应用会把 Cookie 保存到本地 SQLite 状态库中，后续搜索、解析图片和下载时复用。
+
+### 2. 搜索影视
+
+1. 点击 `2、搜索影视`。
+2. 输入片名并搜索。
+3. 搜索结果右侧提供两个操作：
+   - `选图下载`：打开 `3、添加下载任务`，切到 `选图下载` 模式，自动填入链接、片名、封面并开始解析。
+   - `添加链接`：把影片详情页加入添加下载任务弹窗的链接草稿，继续走自动下载流程。
+
+### 3. 自动下载
+
+1. 点击 `3、添加下载任务`。
+2. 选择 `自动下载`。
+3. 粘贴一个或多个豆瓣 `subject` 链接。
+4. 设置输出目录、下载数量、图片尺寸、输出格式和请求间隔。
+5. 提交后任务进入队列，sidecar 自动发现并下载图片。
+
+### 4. 选图下载
+
+选图下载支持豆瓣 `subject`、`all_photos` 和 `photos?type=S/R/W` 链接。
+
+1. 点击 `3、添加下载任务`，切换到 `选图下载`。
+2. 粘贴豆瓣影片链接，点击 `解析全部图片`。
+3. 解析过程中会一边缓存一边显示已发现图片，不需要等待全部解析结束。
+4. 使用 `全部 / 剧照 / 海报 / 壁纸` 筛选图片类型。
+5. 勾选需要下载的图片，或使用 `全选`、`取消全选` 批量处理。
+6. 设置输出目录、图片尺寸、输出格式和请求间隔。
+7. 点击 `下载选中 N 张`，确认后只下载已选图片；如果解析仍在进行，会停止继续解析后续图片。
+
+选图下载列表采用分批展示和分类缓存：已经解析到的图片会保存在前端状态中，切换剧照、海报、壁纸时直接从缓存筛选，避免重新请求和明显卡顿。
+
+### 5. 图片处理
+
+图片处理弹窗用于本地拼版和标注：
+
+- 上传 1 到 9 张图片后生成拼版。
+- 点击某一张图片后，只调整当前图片透明度，并用完整实线框表示当前选择。
+- 背景区域支持上传背景图、设置背景图透明度。
+- 背景区域的 `重叠` 按钮可让背景图与拼版图片叠加，预览和导出保持一致。
+- 方框、圆圈、箭头标注在拖拽完成后隐藏拖拽点；再次点击原区域时显示拖拽点和设置项。
+- 箭头保持 2D 平面效果，拖拽头尾两个点位可调整长度。
+
+## 项目结构
 
 ```text
 movie-cover-downloader/
@@ -43,142 +94,18 @@ movie-cover-downloader/
 ├─ docs/                        # 用户使用说明和安装包说明
 ├─ scripts/                     # 构建安装包前的 sidecar 资源准备脚本
 ├─ package.json                 # 工作区级脚本入口
-└─ README.md                    # 当前文件
+└─ README.md
 ```
-
-### 架构图
-
-```mermaid
-flowchart TB
-  user[用户] --> desktop[Windows 桌面应用]
-
-  subgraph frontend[apps/desktop/src - Vue 前端层]
-    ui[页面与组件\n任务队列 / 搜索弹窗 / 日志中心 / Cookie / 自定义裁剪]
-    store[Pinia Store\n任务状态 / 进度 / Cookie / 日志 / 持久化调度]
-    bridge[runtime-bridge.ts\nTauri invoke / event 统一桥接]
-    draft[新增任务草稿\n详情链接文本 / 影片预览 / 输出目录]
-  end
-
-  subgraph tauri[apps/desktop/src-tauri - Tauri Rust 层]
-    commands[tauri commands\n下载任务 / 状态存储 / 文件操作]
-    sqlite[(SQLite 状态库\nruntime-state.sqlite)]
-    fs[本地文件系统\n输出目录 / 自定义裁剪 / 打开目录]
-    sidecarProcess[Node sidecar 子进程管理\nstdout/stderr / pid / 控制文件]
-  end
-
-  subgraph sidecar[apps/sidecar/src - Node 抓取执行层]
-    scheduler[SchedulerService\n编排任务生命周期]
-    matcher[MatcherService\n选择站点适配器]
-    douban[DoubanAdapter\n详情页 / 分类页 / 图片发现]
-    doubanSearch[DoubanSearch / DoubanTitle\n影片搜索 / 片名解析 / 封面预览]
-    downloader[DownloaderService\n断点续传 / sharp 裁剪 / 保存图片 / 进度上报]
-    control[FileTaskControl\npause / resume / cancel]
-  end
-
-  doubanSite[(豆瓣电影页面)]
-  output[(用户输出目录\nD:/cover/...)]
-
-  user --> ui
-  ui --> store
-  store --> bridge
-  bridge --> commands
-  commands <--> sqlite
-  commands <--> fs
-  commands --> sidecarProcess
-  sidecarProcess --> scheduler
-  scheduler --> matcher
-  matcher --> douban
-  douban --> doubanSite
-  scheduler --> downloader
-  downloader --> output
-  downloader --> control
-  control -.读取控制文件.-> sidecarProcess
-  sidecarProcess -.runtime-log / task-progress / task-result.-> commands
-  commands -.Tauri event.-> bridge
-  bridge -.更新状态.-> store
-  store -.渲染.-> ui
-```
-
-### 项目执行流程图
-
-```mermaid
-sequenceDiagram
-  actor U as 用户
-  participant UI as Vue UI\nCreateTaskModal / TaskTable
-  participant S as Pinia Store\nstores/app.ts
-  participant B as runtime-bridge.ts
-  participant R as Tauri Rust\nlib.rs
-  participant N as Node sidecar\napps/sidecar/src
-  participant D as 豆瓣页面
-  participant O as 本地输出目录
-  participant DB as SQLite 状态库
-
-  opt 搜索影片并加入链接草稿
-    U->>UI: 输入片名并点击搜索影视
-    UI->>B: searchDoubanMovies(query, page)
-    B->>R: invoke("search_douban_movies")
-    R->>N: 以 MCD_COMMAND=douban-search 启动 sidecar
-    N->>D: 请求豆瓣搜索页
-    D-->>N: 返回搜索结果 HTML / 数据
-    N-->>R: stdout douban-search-result
-    R-->>B: 返回搜索结果 JSON
-    B-->>UI: 渲染缩略图、片名、介绍和分页
-    U->>UI: 点击添加链接
-    UI->>S: addCreateTaskDetailUrl(detailUrl, title, preview)
-    S->>S: 更新共享链接草稿和影片封面预览
-  end
-
-  U->>UI: 输入豆瓣详情页链接、输出目录、数量、图片尺寸
-  UI->>UI: 校验链接与数量
-  UI->>S: createTasks(drafts)
-  S->>S: 创建 TaskItem，进入 queued
-  S->>DB: 通过 Tauri 保存状态快照
-  S->>S: drainQueue() 按添加时间 FIFO 取任务
-  S->>B: runDownloadTask(payload)
-  B->>R: invoke("run_download_task")
-  R->>R: 创建任务控制文件和 pid 文件
-  R->>N: 启动 sidecar 子进程并注入环境变量
-  N->>N: createBootstrapTask()
-  N->>N: SchedulerService.runTask()
-  N->>D: 抓取详情页和图片分类页
-  D-->>N: 返回 HTML
-  N->>N: DoubanAdapter 解析片名与图片列表
-  N-->>R: stdout task-progress targetCount=总数 savedCount=0
-  R-->>B: emit task-progress
-  B-->>S: applyTaskProgressUpdate()
-  S-->>UI: 显示 0/总数 或开始下载状态
-
-  loop 每保存一张图片
-    N->>D: 请求图片资源
-    D-->>N: 返回图片字节
-    N->>N: 断点续传 / sharp 裁剪或转格式 / 生成文件名
-    N->>O: 写入图片文件
-    N-->>R: stdout task-progress savedCount + 1
-    N-->>R: stdout runtime log "saved image"
-    R-->>B: emit task-progress / runtime-log
-    B-->>S: 更新 saved/target、日志和任务摘要
-    S-->>UI: 进度数字和进度条实时变化
-    S->>DB: 防抖保存状态快照
-  end
-
-  N-->>R: stdout task-result
-  R-->>B: 返回 RuntimeDownloadTaskResult
-  B-->>S: buildCompletedTask()
-  S->>DB: 保存 completed 状态
-  S-->>UI: 任务显示完成，可打开输出目录
-```
-
-项目采用“三层协作”的结构：
-
-1. `apps/desktop/src` 是用户界面层，负责表单、任务列表、日志中心、Cookie 管理、自定义裁剪和本地状态展示。
-2. `apps/desktop/src-tauri/src/lib.rs` 是桌面能力层，负责 SQLite 持久化、打开/删除本地目录、读取本地图片、启动 Node sidecar、转发日志和进度事件。
-3. `apps/sidecar/src` 是真实抓取执行层，负责解析豆瓣页面、发现图片、断点续传、图片裁剪/转格式、保存文件，并把结果通过 stdout 返回给 Tauri。
 
 ## 运行时数据流
 
-### 搜索与新增链接任务联动
+项目采用三层协作结构：
 
-搜索影视能力不是单独的下载流程，而是新增链接任务的辅助入口：
+1. `apps/desktop/src` 是用户界面层，负责搜索弹窗、添加下载任务弹窗、图片处理弹窗、任务队列、日志中心、Cookie 管理和本地状态展示。
+2. `apps/desktop/src-tauri/src/lib.rs` 是桌面能力层，负责 SQLite 持久化、文件系统操作、启动 Node sidecar、转发日志和进度事件。
+3. `apps/sidecar/src` 是真实抓取执行层，负责解析豆瓣页面、发现图片、下载图片、裁剪/转格式，并通过 stdout 返回结构化事件给 Tauri。
+
+### 搜索与添加下载任务联动
 
 ```text
 用户点击“2、搜索影视”
@@ -187,35 +114,23 @@ SearchMovieModal 调用 searchDoubanMovies(query, page)
   ↓
 runtime-bridge 调用 Tauri 命令 search_douban_movies
   ↓
-Rust 以 MCD_COMMAND=douban-search 启动同一个 sidecar bundle
+Rust 以 MCD_COMMAND=douban-search 启动 sidecar
   ↓
-sidecar 请求豆瓣搜索页并解析影片缩略图、片名、简介、详情页链接
+sidecar 请求豆瓣搜索页并解析影片封面、片名、简介和详情页链接
   ↓
 搜索弹窗展示结果列表和分页器
   ↓
-用户点击“添加链接”
+用户点击“添加链接”或“选图下载”
   ↓
-Pinia store 将“片名：详情页链接”写入新增任务共享草稿
-  ↓
-CreateTaskModal 打开时直接显示这些链接，提交时仍只提取纯豆瓣 subject 链接
+添加链接写入共享草稿；选图下载打开 CreateTaskModal 并自动进入选图模式
 ```
 
-这个联动由 `stores/app.ts` 中的共享草稿维护，核心状态包括：
-
-- `createTaskDetailUrls`：新增链接任务弹窗里的详情页链接文本。
-- `createTaskMoviePreviews`：按详情页链接缓存搜索结果中的片名、封面缩略图和简介。
-- `addCreateTaskDetailUrl()`：搜索结果行点击“添加链接”时写入草稿。
-- `removeCreateTaskDetailUrl()`：搜索结果行点击“删除链接”时从草稿移除对应链接。
-- `hasCreateTaskDetailUrl()`：判断搜索结果是否已经加入草稿，用于把“添加链接”变成“完成添加”。
-
-用户也可以跳过搜索，直接在新增链接任务弹窗里手动粘贴豆瓣 subject 链接。前端会按行校验链接格式；需要展示片名时，会通过 `resolve_douban_movie_title` / `resolve_douban_movie_preview` 解析片名和封面，但最终创建任务仍只使用纯链接，避免“片名：链接”的展示格式影响下载流程。
-
-### 新增链接下载任务
+### 自动下载任务
 
 ```text
-用户在前端填写豆瓣链接
+用户在自动下载模式填写豆瓣 subject 链接和下载配置
   ↓
-CreateTaskModal 校验链接、数量、输出目录、图片尺寸
+CreateTaskModal 校验链接、数量、输出目录、图片尺寸、输出格式
   ↓
 Pinia store 创建 TaskItem，并启动队列 drainQueue
   ↓
@@ -223,95 +138,84 @@ runtime-bridge 调用 Tauri 命令 run_download_task
   ↓
 Rust 创建任务控制文件，启动 Node sidecar 子进程
   ↓
-sidecar 读取环境变量，构造 SidecarTask
+sidecar 发现图片并逐张下载、裁剪或转格式
   ↓
-SchedulerService 调用 MatcherService / DoubanAdapter 发现图片
+sidecar 输出 task-progress / runtime-log / task-result
   ↓
-DownloaderService 逐张下载、断点续传、裁剪或转格式、保存图片
-  ↓
-sidecar 输出 task-progress / runtime log / task-result
-  ↓
-Rust 解析 stdout，emit runtime-log 和 task-progress 给前端
-  ↓
-Pinia store 实时更新任务进度、状态、日志和本地持久化快照
+前端实时更新任务进度、状态、日志和本地持久化快照
 ```
 
-### 实时进度机制
+### 选图下载任务
 
-下载进度不是等任务结束后一次性计算，而是由 sidecar 在每张图片保存成功后输出 `task-progress` 事件。Rust 收到后发给前端，前端 store 更新 `download.savedCount` / `download.targetCount`，任务表格的进度文字和进度条随之变化。
+```text
+用户进入选图下载模式并解析豆瓣图片页
+  ↓
+runtime-bridge 调用 discover_douban_photos
+  ↓
+Rust 以 MCD_COMMAND=douban-photos-discover 启动 sidecar
+  ↓
+sidecar 流式发现图片，持续输出 douban-photos-discover-progress
+  ↓
+前端边解析边缓存、分批显示图片
+  ↓
+用户选择图片并确认下载
+  ↓
+runtime-bridge 调用 run_selected_photo_download
+  ↓
+Rust 以 MCD_COMMAND=douban-selected-download 启动 sidecar
+  ↓
+sidecar 只下载用户选中的图片列表，并沿用现有进度事件进入任务队列体验
+```
 
-为了提高可靠性，进度还有一条兜底路径：Rust 会把 `task-progress` 同步写成隐藏日志，前端如果收到日志批次，也能从日志中恢复进度状态。
-
-### 队列稳定性与安全保护
-
-队列稳定性围绕两个目标设计：后台按添加时间 FIFO 执行，界面按当前产品需求展示；危险操作不能和正在写入文件的下载任务抢同一批目录。
-
-- 后台执行：`drainQueue()` 从任务列表里按添加时间正序选择下一个可执行任务，旧任务先跑完再处理新任务。
-- 实时刷新：`task-progress`、结构化日志和表格刷新节拍共同推动任务列表更新，避免进度等到任务结束才从 `-` 瞬间变成满格。
-- 下载中保护：队列运行时禁用单条删除、清空队列等危险操作；store 方法入口也会二次拦截，防止绕过界面调用。
-- 输出目录保护：删除单条任务时只删除任务生成的输出子目录；清空队列时清理相关输出根目录里的内容但保留根目录本身。Rust 会二次校验目录边界，防止误删输出根目录之外的路径。
-- Cookie 顺序保护：SQLite 保存和读取 Cookie 都按前端数组顺序处理，避免应用重启后 Cookie 优先级反转。
-- 测试保护：根目录 `pnpm test` 会统一运行 desktop 和 sidecar 的 TypeScript 测试，Tauri 层通过 `cargo test` 覆盖 SQLite 顺序、目录删除边界和任务控制。
-
-### 暂停、继续、删除和清空队列
-
-Tauri 和 sidecar 之间使用任务控制文件通信：
-
-- 暂停任务：Rust 写入 `pause`，sidecar 在下载循环安全点抛出暂停错误。
-- 继续任务：Rust 写入 `resume`，前端把任务重新放回队列。
-- 删除/清空任务：Rust 写入 `cancel`，并尝试根据 pid 文件结束仍在运行的 sidecar 进程。
-
-删除任务时，Rust 会校验输出目录必须位于用户选择的输出根目录之内；清空队列时，Rust 只允许清理明确传入的输出根目录内容，并保留根目录本身。
-
-## 主要模块分析
+## 主要模块
 
 ### 前端层：`apps/desktop/src`
 
-- `main.ts`：Vue 应用入口，挂载 Pinia 和路由。
-- `App.vue`：应用根组件，启动本地状态恢复。
-- `layouts/AppShell.vue`：主布局，组合侧边栏、顶栏、弹窗和页面内容。
-- `views/ControlCenterView.vue`：控制中心，展示任务队列和 Cookie 列表。
-- `views/LogCenterView.vue`：日志中心，展示运行日志和错误过滤。
-- `stores/app.ts`：核心状态仓库，管理任务队列、Cookie、日志、持久化、下载调度、暂停/继续/删除/清空等动作。
-- `lib/runtime-bridge.ts`：前端与 Tauri 的统一桥接层；在浏览器预览模式下提供 localStorage 和 DOM 事件降级实现。
-- `components/queue/CreateTaskModal.vue`：新增链接任务弹窗，负责链接、数量、输出目录、格式和图片比例配置。
-- `components/queue/TaskTable.vue`：任务队列表格，负责分页、操作按钮、打开目录和删除确认。
-- `components/queue/CustomCropModal.vue`：自定义裁剪弹窗，支持本地图片上传、拖拽、比例裁剪、缩放和保存。
+- `layouts/AppShell.vue`：应用主布局，挂载任务、搜索、Cookie、图片处理等弹窗。
+- `views/ControlCenterView.vue`：控制中心，展示任务队列、Cookie 列表和主要操作按钮。
+- `stores/app.ts`：核心状态仓库，管理任务队列、Cookie、日志、持久化、下载调度、选图 seed 和图片处理状态。
+- `lib/runtime-bridge.ts`：前端与 Tauri 的统一桥接层，封装搜索、自动下载、选图发现、选图下载和本地文件操作。
+- `components/queue/SearchMovieModal.vue`：豆瓣影视搜索弹窗，负责分页缓存、搜索结果展示、添加链接和选图下载入口。
+- `components/queue/CreateTaskModal.vue`：添加下载任务弹窗，包含 `自动下载 / 选图下载` 两种模式。
+- `components/queue/ImageProcessModal.vue`：图片处理弹窗，负责拼版、透明度、背景重叠和标注导出。
+- `components/queue/TaskTable.vue`：任务队列表格，负责分页、进度展示、打开目录和删除确认。
 - `components/logs/LogConsole.vue`：日志列表组件。
 - `components/cookies/ImportCookieModal.vue`：Cookie 导入弹窗。
 
 ### Tauri 层：`apps/desktop/src-tauri`
 
 - `main.rs`：Tauri 应用入口。
-- `lib.rs`：桌面能力核心。它注册前端可调用命令，负责：
+- `lib.rs`：桌面能力核心，注册前端可调用命令，负责：
   - 读取/保存 SQLite 状态库；
   - 从旧 JSON 状态迁移到 SQLite；
   - 检测和恢复损坏状态库；
   - 启动 sidecar 子进程；
   - 解析 sidecar stdout/stderr；
-  - 向前端转发日志和实时进度；
+  - 转发日志、任务进度和选图发现进度；
   - 打开目录、定位文件、删除输出目录；
-  - 读取本地图片和保存自定义裁剪结果；
+  - 读取本地图片和保存图片处理结果；
   - 管理任务控制文件和 pid 文件。
+
+新增的选图下载相关命令包括：
+
+- `discover_douban_photos`：只解析豆瓣图片，不保存文件，并流式返回已发现图片。
+- `run_selected_photo_download`：接收用户选择的图片列表，只下载选中的图片。
 
 ### sidecar 层：`apps/sidecar/src`
 
-sidecar 是独立 Node 进程。它不直接操作前端状态，也不直接调用 Tauri API，只通过 stdout 输出结构化 JSON 给 Rust 解析。
+sidecar 是独立 Node 进程，不直接操作前端状态，也不直接调用 Tauri API，只通过 stdout 输出结构化 JSON 给 Rust 解析。
 
 核心职责包括：
 
-- 从环境变量读取单次下载任务参数；
-- 解析豆瓣详情页和图片分类页；
-- 根据用户选择的剧照/海报/壁纸发现图片；
-- 按限制数量或无限制模式返回图片列表；
-- 下载图片并支持断点续传；
-- 按用户选择保存原图、9:16 或 3:4；
-- 为搜索弹窗返回影片缩略图、片名、简介和详情页链接；
-- 使用 `sharp` 做裁剪和格式转换；
-- 保存图片后立即上报实时进度；
-- 识别暂停/取消控制文件并中止任务。
-
-更细的 sidecar 目录说明见 [apps/sidecar/README.md](./apps/sidecar/README.md)。
+- 通过 `MCD_COMMAND=douban-search` 执行豆瓣影视搜索。
+- 通过 `MCD_COMMAND=douban-photos-discover` 执行选图下载的图片发现模式。
+- 通过 `MCD_COMMAND=douban-selected-download` 下载用户选中的图片列表。
+- 解析豆瓣详情页、`all_photos` 页面和 `photos?type=S/R/W` 分类页。
+- 为搜索弹窗返回影片缩略图、片名、简介和详情页链接。
+- 为选图下载返回图片标题、图片地址、页面地址、分类、方向和尺寸信息。
+- 下载图片并支持断点续传、请求间隔、暂停/取消控制。
+- 使用 `sharp` 做裁剪和格式转换。
+- 保存图片后立即上报实时进度。
 
 ## 本地持久化设计
 
@@ -322,7 +226,7 @@ sidecar 是独立 Node 进程。它不直接操作前端状态，也不直接调
 - 日志列表；
 - 队列配置。
 
-前端仍以一个完整快照保存状态，Rust 层把快照拆分写入 SQLite 表。这样可以保持前端状态结构简单，同时减少单个 JSON 文件越来越大或损坏后难恢复的问题。
+前端仍以完整快照保存状态，Rust 层把快照拆分写入 SQLite 表。这样可以保持前端状态结构简单，同时减少单个 JSON 文件变大或损坏后的恢复风险。
 
 如果 SQLite 状态库损坏，Rust 会把主库和 WAL/SHM 文件备份成 `runtime-state.corrupt-*`，再创建干净状态库继续运行。
 
@@ -342,7 +246,7 @@ D:/cover/让子弹飞/poster
 D:/cover/让子弹飞/wallpaper
 ```
 
-自定义裁剪图片固定保存到：
+图片处理结果固定保存到：
 
 ```text
 D:/cover/custom-crop-photo
@@ -350,7 +254,7 @@ D:/cover/custom-crop-photo
 
 删除任务时只会删除任务生成的输出子目录。清空队列时会清理相关输出根目录里的内容并保留根目录本身；代码会拒绝删除或清理输出根目录之外的路径。
 
-## 构建与开发脚本
+## 开发与构建脚本
 
 根目录常用脚本：
 
@@ -359,7 +263,9 @@ pnpm dev:web              # 启动前端网页预览
 pnpm dev:desktop          # 启动 Tauri 桌面开发模式
 pnpm build:web            # 构建前端，同时准备 sidecar bundle
 pnpm build:desktop        # 构建 Windows 桌面安装包
+pnpm dev:sidecar          # 启动 sidecar 开发模式
 pnpm build:sidecar        # 单独构建 sidecar
+pnpm test                 # 运行 desktop 和 sidecar 测试
 pnpm typecheck            # 前端类型检查
 pnpm typecheck:sidecar    # sidecar 类型检查
 pnpm prepare:sidecar-bundle
@@ -367,7 +273,7 @@ pnpm prepare:sidecar-bundle
 
 `build:web` 和 `build:desktop` 会先构建 sidecar，并通过 `scripts/prepare-sidecar-bundle.ps1` 把 sidecar 运行所需的 `dist`、依赖和打包资源准备到 Tauri resources 中。
 
-## 安装包打包分析
+## 安装包打包说明
 
 Windows 安装包不能只打包 Tauri 前端壳，否则用户机器上没有 Node、sidecar、sharp 等运行资源时会下载失败。因此发布安装包时需要保证：
 
@@ -378,11 +284,17 @@ Windows 安装包不能只打包 Tauri 前端壳，否则用户机器上没有 N
 - 打包内包含运行 sidecar 所需的 Node 可执行文件；
 - 不包含开发机已有的用户数据、下载图片、SQLite 状态库或本地输出目录。
 
+构建完成后的 NSIS 安装包通常位于：
+
+```text
+apps/desktop/src-tauri/target/release/bundle/nsis/Movie Cover Downloader_0.1.0_x64-setup.exe
+```
+
 ## 设计边界
 
-- 当前站点支持豆瓣电影，搜索、片名解析和下载任务都围绕豆瓣 subject 链接设计。
+- 当前站点支持豆瓣电影，搜索、片名解析、自动下载和选图下载都围绕豆瓣 `subject` 链接设计。
+- 选图下载 v1 一次处理一个影片链接；多链接批量下载继续走自动下载模式。
 - 前端界面可以在浏览器预览，但真实下载只在 Tauri 桌面环境中执行。
-- sidecar 通过环境变量接收任务参数，通过 stdout 返回事件，不直接依赖前端。
-- 所有本地文件删除都应经过 Rust 层边界校验。
+- sidecar 通过环境变量和临时 JSON 文件接收任务参数，通过 stdout 返回事件，不直接依赖前端。
 - Cookie 只用于当前请求链路，不应出现在命令行参数中。
-
+- 所有本地文件删除都应经过 Rust 层边界校验。

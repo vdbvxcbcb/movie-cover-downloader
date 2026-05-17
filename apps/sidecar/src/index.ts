@@ -10,7 +10,12 @@ import { resolveDoubanMovieTitle } from "./services/douban-title.js";
 import { CancelRequestedError, FileTaskControl, PauseRequestedError } from "./services/task-control.js";
 import { createLogger, emitTaskProgress } from "./shared/logger.js";
 import { createRuntimeConfig, formatRuntimeConfig } from "./shared/runtime-config.js";
-import type { DiscoveredImage, DiscoveryResult, DoubanAssetType, SidecarTask } from "./shared/contracts.js";
+import type {
+  DiscoveredImage,
+  DiscoveryResult,
+  DoubanPhotoDiscoveryCursor,
+  SidecarTask,
+} from "./shared/contracts.js";
 import { buildOutputDir, buildOutputFolderName, formatDirectoryImageAspectRatio } from "./utils/output-folder.js";
 
 // sidecar 参数全部来自环境变量，入口层先做白名单解析，避免非法值进入下载流程。
@@ -131,62 +136,19 @@ function normalizeDoubanSubjectUrl(value: string) {
   return match ? `${match[1]}/` : value;
 }
 
-function stripPreviewDataUrls(images: DiscoveredImage[]): DiscoveredImage[] {
-  return images.map(({ previewDataUrl: _previewDataUrl, ...image }) => image);
-}
-
-async function discoverAllDoubanPhotos(matcher: MatcherService, task: SidecarTask): Promise<DiscoveryResult> {
-  const assetTypes: DoubanAssetType[] = ["still", "poster", "wallpaper"];
-  const discoveries: DiscoveryResult[] = [];
-
-  for (const doubanAssetType of assetTypes) {
-    try {
-      discoveries.push(
-        await matcher.discover({
-          ...task,
-          doubanAssetType,
-          imageCountMode: "unlimited",
-          maxImages: 100_000,
-        }, {
-          includePreviewDataUrl: true,
-          onImagesDiscovered(images, meta) {
-            process.stdout.write(`${JSON.stringify({
-              kind: "douban-photos-discover-progress",
-              payload: {
-                taskId: meta.taskId,
-                doubanAssetType: meta.doubanAssetType,
-                pageUrl: meta.pageUrl,
-                normalizedTitle: meta.normalizedTitle,
-                images,
-                timestamp: Date.now(),
-              },
-            })}\n`);
-          },
-        }),
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.startsWith("douban photo category is empty")) {
-        throw error;
-      }
-    }
+function parseDiscoveryCursor(): DoubanPhotoDiscoveryCursor | null {
+  const raw = process.env.MCD_DISCOVERY_CURSOR;
+  if (!raw) return null;
+  const parsed = JSON.parse(raw) as DoubanPhotoDiscoveryCursor;
+  if (!Number.isFinite(parsed.assetIndex) || !Number.isFinite(parsed.pageIndex)) {
+    return null;
   }
-
-  const firstDiscovery = discoveries[0];
-  if (!firstDiscovery) {
-    throw new Error("no images discovered on douban photos page");
-  }
-
-  const images = discoveries.flatMap((discovery) => discovery.images);
-  const outputFolderName = firstDiscovery.outputFolderName || buildOutputFolderName(firstDiscovery.normalizedTitle);
   return {
-    source: "douban",
-    detailUrl: firstDiscovery.detailUrl,
-    imagePageUrl: `${firstDiscovery.detailUrl.replace(/\/?$/, "/")}all_photos`,
-    normalizedTitle: firstDiscovery.normalizedTitle,
-    outputFolderName,
-    outputDir: buildSelectedOutputDir(task.outputRootDir, outputFolderName, task.imageAspectRatio),
-    images,
+    assetIndex: Math.max(0, Number(parsed.assetIndex)),
+    pageIndex: Math.max(0, Number(parsed.pageIndex)),
+    withinPageOffset: Math.max(0, Number(parsed.withinPageOffset ?? 0)),
+    normalizedTitle: parsed.normalizedTitle,
+    outputFolderName: parsed.outputFolderName,
   };
 }
 
@@ -221,13 +183,15 @@ async function runDoubanPhotosDiscoverCommand(
   matcher: MatcherService,
 ) {
   const task = createRequiredBootstrapTask(config.outputDir);
-  const discovery = await discoverAllDoubanPhotos(matcher, task);
+  const discovery = await matcher.discoverDoubanPhotoBatch(
+    task,
+    parseDiscoveryCursor(),
+    Number(process.env.MCD_DISCOVERY_BATCH_SIZE ?? 28),
+    { includePreviewDataUrl: true },
+  );
   process.stdout.write(`${JSON.stringify({
     kind: "douban-photos-discover-result",
-    payload: {
-      ...discovery,
-      images: stripPreviewDataUrls(discovery.images),
-    },
+    payload: discovery,
   })}\n`);
 }
 

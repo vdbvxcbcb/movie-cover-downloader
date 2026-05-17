@@ -81,6 +81,19 @@ export interface DiscoveryResult {
   images: DiscoveredImage[];
 }
 
+export interface DoubanPhotoDiscoveryCursor {
+  assetIndex: number;
+  pageIndex: number;
+  withinPageOffset: number;
+  normalizedTitle?: string;
+  outputFolderName?: string;
+}
+
+export interface DoubanPhotoDiscoveryBatchResult extends DiscoveryResult {
+  nextCursor: DoubanPhotoDiscoveryCursor | null;
+  done: boolean;
+}
+
 // 单张图片保存后的结果，记录源 URL、输出路径、分类、方向和最终尺寸。
 export interface DownloadedImage {
   sourceUrl: string;

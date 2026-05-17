@@ -281,6 +281,16 @@ export interface RuntimeDiscoverDoubanPhotosPayload {
   imageAspectRatio: ImageAspectRatio;
   requestIntervalSeconds: RequestIntervalSeconds;
   doubanCookie?: string;
+  cursor?: RuntimeDoubanPhotoDiscoveryCursor | null;
+  batchSize?: number;
+}
+
+export interface RuntimeDoubanPhotoDiscoveryCursor {
+  assetIndex: number;
+  pageIndex: number;
+  withinPageOffset: number;
+  normalizedTitle?: string;
+  outputFolderName?: string;
 }
 
 export interface RuntimeDoubanPhotoDiscoveryProgressEvent {
@@ -312,6 +322,18 @@ export interface RuntimeDownloadTaskResult {
     saved: RuntimeDownloadedAsset[];
     source: SourceSite;
   };
+}
+
+export interface RuntimeDoubanPhotoDiscoveryBatchResult {
+  source: SourceSite;
+  detailUrl: string;
+  imagePageUrl: string;
+  normalizedTitle: string;
+  outputFolderName: string;
+  outputDir: string;
+  images: RuntimeDiscoveredAsset[];
+  nextCursor: RuntimeDoubanPhotoDiscoveryCursor | null;
+  done: boolean;
 }
 
 export interface RuntimeTaskProgressEvent {

@@ -3,7 +3,13 @@ import path from "node:path";
 import type { FetchedHtmlPage, SourceAdapter } from "./base.js";
 import { buildHeaders, dedupeUrls, extractTitleFromHtml, fetchText, normalizeWhitespace } from "./base.js";
 import type { AdapterContext } from "./base.js";
-import type { DiscoveredImage, DiscoveryResult, SidecarTask } from "../shared/contracts.js";
+import type {
+  DiscoveredImage,
+  DiscoveryResult,
+  DoubanPhotoDiscoveryBatchResult,
+  DoubanPhotoDiscoveryCursor,
+  SidecarTask,
+} from "../shared/contracts.js";
 import { buildOutputDir, buildOutputFolderName, formatDirectoryImageAspectRatio } from "../utils/output-folder.js";
 import { createResolvedSkeleton } from "../utils/source-detector.js";
 
@@ -15,6 +21,7 @@ const doubanTypeMap = {
 const doubanCategoryPageSize = 30;
 const maxDoubanCategoryPages = 1000;
 const maxPreviewImageBytes = 1_200_000;
+const doubanAssetTypeSequence: SidecarTask["doubanAssetType"][] = ["still", "poster", "wallpaper"];
 
 type DoubanPhotoType = keyof typeof doubanTypeMap;
 type DoubanPhotoPageKind = "ok" | "empty" | "auth" | "risk" | "unexpected";
@@ -271,6 +278,133 @@ export class DoubanAdapter implements SourceAdapter {
   // 判断任务是否属于豆瓣；当前站点已简化为只支持 movie.douban.com。
   canHandle(task: SidecarTask) {
     return task.detailUrl.includes("movie.douban.com/subject/");
+  }
+
+  async discoverBatch(
+    task: SidecarTask,
+    context: AdapterContext,
+    cursor: DoubanPhotoDiscoveryCursor | null,
+    batchSize: number,
+  ): Promise<DoubanPhotoDiscoveryBatchResult> {
+    const protectedContext: AdapterContext = { ...context, minRequestIntervalMs: 3000 };
+    const safeBatchSize = Math.max(1, batchSize);
+    const detailSkeleton = createResolvedSkeleton(task);
+    let title = cursor?.normalizedTitle;
+
+    if (!title) {
+      context.logger.info(`fetching douban detail page: ${detailSkeleton.detailUrl}`, task.id);
+      const detailPage = await fetchText(detailSkeleton.detailUrl, protectedContext);
+      const detailPageAccess = classifyDoubanAccessPage(detailPage);
+      if (detailPageAccess === "risk") throw new Error("douban risk page detected");
+      if (detailPageAccess === "auth") throw new Error("douban login required");
+      title = extractDoubanPrimaryTitle(detailPage.html);
+      context.logger.info(`ç‰‡åå·²è§£æž: ${title}`, task.id);
+    }
+
+    const images: DiscoveredImage[] = [];
+    let assetIndex = Math.max(0, cursor?.assetIndex ?? 0);
+    let pageIndex = Math.max(0, cursor?.pageIndex ?? 0);
+    let withinPageOffset = Math.max(0, cursor?.withinPageOffset ?? 0);
+    let lastImagePageUrl = detailSkeleton.imagePageUrl;
+
+    while (assetIndex < doubanAssetTypeSequence.length && images.length < safeBatchSize) {
+      const doubanAssetType = doubanAssetTypeSequence[assetIndex]!;
+      const resolved = createResolvedSkeleton({ ...task, doubanAssetType });
+      lastImagePageUrl = resolved.imagePageUrl;
+      context.logger.info(`fetching douban image page: ${resolved.imagePageUrl}`, task.id);
+      const firstPhotoPage = await fetchText(resolved.imagePageUrl, protectedContext);
+      const pageType = new URL(resolved.imagePageUrl).searchParams.get("type") as DoubanPhotoType | null;
+      if (!pageType || !(pageType in doubanTypeMap)) {
+        throw new Error(`unsupported douban photo type page: ${resolved.imagePageUrl}`);
+      }
+
+      const firstPageClassification = classifyDoubanPhotoPage(firstPhotoPage);
+      if (firstPageClassification.kind === "empty") {
+        assetIndex += 1;
+        pageIndex = 0;
+        withinPageOffset = 0;
+        continue;
+      }
+      if (firstPageClassification.kind !== "ok") {
+        throwForClassification(firstPageClassification);
+      }
+
+      const pageCount = resolveDoubanCategoryPageCount(firstPhotoPage.html);
+      while (pageIndex < pageCount && images.length < safeBatchSize) {
+        const pageUrl =
+          pageIndex === 0 && pageCount === 1
+            ? resolved.imagePageUrl
+            : buildDoubanCategoryPageUrl(resolved.imagePageUrl, pageIndex);
+        if (pageIndex > 0) {
+          context.logger.info(`fetching douban category page: ${pageUrl}`, task.id);
+        }
+
+        const pageHtml = pageIndex === 0 ? firstPhotoPage : await fetchText(pageUrl, protectedContext);
+        const pageClassification = classifyDoubanPhotoPage(pageHtml);
+        if (pageClassification.kind === "risk" || pageClassification.kind === "auth") {
+          throwForClassification(pageClassification);
+        }
+        if (pageClassification.kind === "unexpected") {
+          throwForClassification(pageClassification);
+        }
+        if (pageClassification.kind === "empty") {
+          pageIndex += 1;
+          withinPageOffset = 0;
+          continue;
+        }
+
+        const pageImages = extractDoubanImages(
+          pageHtml.html,
+          pageUrl,
+          title,
+          pageType,
+          pageIndex * doubanCategoryPageSize,
+        );
+        const remaining = safeBatchSize - images.length;
+        const pickedWithoutPreview = pageImages.slice(withinPageOffset, withinPageOffset + remaining);
+        const picked = await attachPreviewDataUrls(pickedWithoutPreview, pageUrl, protectedContext);
+        images.push(...picked);
+        withinPageOffset += pickedWithoutPreview.length;
+
+        if (withinPageOffset < pageImages.length && images.length >= safeBatchSize) {
+          break;
+        }
+
+        pageIndex += 1;
+        withinPageOffset = 0;
+      }
+
+      if (images.length >= safeBatchSize) break;
+      assetIndex += 1;
+      pageIndex = 0;
+      withinPageOffset = 0;
+    }
+
+    const done = assetIndex >= doubanAssetTypeSequence.length;
+    const outputFolderName = cursor?.outputFolderName || buildOutputFolderName(title);
+    return {
+      source: "douban",
+      detailUrl: detailSkeleton.detailUrl,
+      imagePageUrl: lastImagePageUrl,
+      normalizedTitle: title,
+      outputFolderName,
+      outputDir: path.join(
+        buildOutputDir(task.outputRootDir, outputFolderName),
+        "selected",
+        `selected-${formatDirectoryImageAspectRatio(task.imageAspectRatio)}`,
+      ),
+      images,
+      nextCursor: done
+        ? null
+        : {
+            assetIndex,
+            pageIndex,
+            withinPageOffset,
+            normalizedTitle: title,
+            outputFolderName,
+          },
+      done,
+    };
   }
 
   // 执行完整发现流程：抓详情页、解析标题、抓分类分页、限制数量并生成输出目录。

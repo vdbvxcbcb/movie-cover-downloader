@@ -67,6 +67,64 @@ test("输出目录片名会拒绝路径特殊片段和 Windows 保留名", () =>
   assert.equal(sanitizeNameSegment("///"), "Untitled");
 });
 
+test("selected photo batch discovery stops before fetching the next page", async () => {
+  const adapter = new DoubanAdapter();
+  const task = createTask();
+  const context = createContext();
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+
+  const detailHtml = `<html><span property="v:itemreviewed">Batch Movie</span></html>`;
+  const firstPageHtml = `
+    <html>
+      <title>å›¾ç‰‡</title>
+      <div class="article"></div>
+      <span>å…±60å¼ </span>
+      <img src="https://img1.doubanio.com/view/photo/m/public/p1.jpg">
+      <img src="https://img1.doubanio.com/view/photo/m/public/p2.jpg">
+    </html>
+  `;
+  const calls: string[] = [];
+
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const requestUrl = String(url);
+    calls.push(requestUrl);
+    if (requestUrl.includes("/subject/34780991/photos?type=S")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=S",
+        html: firstPageHtml,
+      });
+    }
+
+    return createFetchResponse({
+      finalUrl: "https://movie.douban.com/subject/34780991/",
+      html: detailHtml,
+    });
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const result = await adapter.discoverBatch(task, context, null, 1);
+    assert.equal(result.images.length, 1);
+    assert.equal(result.done, false);
+    assert.equal(result.nextCursor?.assetIndex, 0);
+    assert.equal(result.nextCursor?.pageIndex, 0);
+    assert.equal(result.nextCursor?.withinPageOffset, 1);
+    assert.equal(calls.some((url) => url.includes("start=30")), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 // 构造 fetch mock 返回值，模拟豆瓣 HTML、最终 URL 和 Content-Type。
 function createFetchResponse(
   overrides: Partial<{

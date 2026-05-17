@@ -133,6 +133,8 @@ struct DiscoverDoubanPhotosPayload {
     image_aspect_ratio: String,
     request_interval_seconds: Option<u32>,
     douban_cookie: Option<String>,
+    cursor: Option<Value>,
+    batch_size: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1332,6 +1334,7 @@ fn terminate_task_process(control_file_path: &Path) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     let output = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|error| format!("结束后台抓取进程失败: {error}"))?;
 
@@ -2069,6 +2072,10 @@ fn discover_douban_photos_blocking(
         .env("MCD_BOOTSTRAP_OUTPUT_FORMAT", &payload.output_image_format)
         .env("MCD_IMAGE_ASPECT_RATIO", &payload.image_aspect_ratio)
         .env(
+            "MCD_DISCOVERY_BATCH_SIZE",
+            payload.batch_size.unwrap_or(28).clamp(1, 60).to_string(),
+        )
+        .env(
             "MCD_TASK_CONTROL_FILE",
             control_file_path.to_string_lossy().into_owned(),
         )
@@ -2080,6 +2087,9 @@ fn discover_douban_photos_blocking(
 
     if let Some(cookie) = payload.douban_cookie.as_ref() {
         command.env("MCD_DOUBAN_COOKIE", cookie);
+    }
+    if let Some(cursor) = payload.cursor.as_ref() {
+        command.env("MCD_DISCOVERY_CURSOR", cursor.to_string());
     }
 
     #[cfg(target_os = "windows")]

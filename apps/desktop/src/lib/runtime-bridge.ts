@@ -10,6 +10,7 @@ import type {
   LogEntry,
   RuntimeDownloadTaskPayload,
   RuntimeDownloadTaskResult,
+  RuntimeDoubanPhotoDiscoveryBatchResult,
   RuntimeDoubanPhotoDiscoveryProgressEvent,
   RuntimeDiscoverDoubanPhotosPayload,
   RuntimeSelectedPhotoDownloadPayload,
@@ -243,7 +244,7 @@ class RuntimeBridge {
     }
 
     const serialized = await invoke<string>("discover_douban_photos", { payload });
-    return JSON.parse(serialized) as RuntimeDownloadTaskResult["discovery"];
+    return JSON.parse(serialized) as RuntimeDoubanPhotoDiscoveryBatchResult;
   }
 
   async runSelectedPhotoDownload(payload: RuntimeSelectedPhotoDownloadPayload) {

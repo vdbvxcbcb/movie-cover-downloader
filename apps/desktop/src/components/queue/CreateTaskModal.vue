@@ -10,6 +10,7 @@ import type {
   ImageAspectRatio,
   OutputImageFormat,
   RequestIntervalSeconds,
+  RuntimeDoubanPhotoDiscoveryCursor,
   RuntimeDiscoveredAsset,
   SelectableDoubanPhoto,
   SelectedDoubanPhoto,
@@ -74,13 +75,16 @@ const selectedPhotoDiscoveryStartedKey = ref("");
 const selectedPhotoLoadedUrls = ref(new Set<string>());
 const selectedPhotoFailedUrls = ref(new Set<string>());
 const selectedPhotoDiscoveryStopRequested = ref(false);
+const selectedPhotoDiscoveryCursor = ref<RuntimeDoubanPhotoDiscoveryCursor | null>(null);
+const selectedPhotoDiscoveryDone = ref(false);
 const selectedPhotoPreviewIndex = ref<number | null>(null);
 const selectedPhotoLargeFailedIds = ref(new Set<string>());
 const selectedPhotoRenderBatchSize = 28;
+const selectedPhotoVisibleLimit = ref(selectedPhotoRenderBatchSize);
+const selectedPhotoGridLoadingRequested = ref(false);
 const titlePreviewResolveConcurrency = 3;
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
-let stopDoubanPhotoDiscoveryProgress: (() => void) | null = null;
 let selectedPhotoClickTimer: number | null = null;
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, run: (item: T) => Promise<R>) {
@@ -204,7 +208,6 @@ onBeforeUnmount(() => {
     window.clearTimeout(selectedPhotoClickTimer);
   }
   void stopSelectedPhotoDiscovery();
-  stopDoubanPhotoDiscoveryProgress?.();
   document.removeEventListener("keydown", handleSelectedPhotoPreviewKeydown);
 });
 
@@ -296,26 +299,67 @@ const filteredSelectedPhotos = computed(() =>
 );
 const visibleSelectedPhotos = computed(() => {
   const filtered = filteredSelectedPhotos.value;
-  if (!discoveringSelectedPhotos.value) {
-    return filtered;
-  }
-  if (filtered.length <= selectedPhotoRenderBatchSize) {
-    return filtered;
-  }
-
-  const fullBatchCount = Math.floor(filtered.length / selectedPhotoRenderBatchSize) * selectedPhotoRenderBatchSize;
-  return filtered.slice(0, fullBatchCount);
+  return filtered.slice(0, selectedPhotoVisibleLimit.value);
 });
 const selectedPhotoCount = computed(() => selectedPhotos.value.filter((photo) => photo.selected).length);
 const selectedPhotoDownloadLabel = computed(() =>
   selectedPhotoCount.value > 0 ? `下载选中 ${selectedPhotoCount.value} 张` : "请选择图片",
 );
-const showSelectedPhotoGridLoading = computed(() => discoveringSelectedPhotos.value && filteredSelectedPhotos.value.length > 0);
+const showSelectedPhotoGridLoading = computed(
+  () =>
+    discoveringSelectedPhotos.value &&
+    selectedPhotoGridLoadingRequested.value &&
+    !selectedPhotoDiscoveryDone.value &&
+    filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value,
+);
 const selectedPhotoPreviewItems = computed(() => selectedPhotos.value);
 const activeSelectedPhotoPreview = computed(() => {
   const index = selectedPhotoPreviewIndex.value;
   return index === null ? null : selectedPhotoPreviewItems.value[index] ?? null;
 });
+
+function resetSelectedPhotoGridPaging() {
+  selectedPhotoVisibleLimit.value = selectedPhotoRenderBatchSize;
+  selectedPhotoGridLoadingRequested.value = false;
+}
+
+function revealNextSelectedPhotoBatch() {
+  if (filteredSelectedPhotos.value.length > selectedPhotoVisibleLimit.value) {
+    selectedPhotoVisibleLimit.value += selectedPhotoRenderBatchSize;
+    selectedPhotoGridLoadingRequested.value = false;
+  }
+}
+
+function handleSelectedPhotoGridScroll(event: Event) {
+  const element = event.currentTarget as HTMLElement | null;
+  if (!element) return;
+  const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+  if (distanceToBottom > 24) return;
+
+  selectedPhotoGridLoadingRequested.value = true;
+  revealNextSelectedPhotoBatch();
+  if (
+    filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value &&
+    !selectedPhotoDiscoveryDone.value &&
+    !discoveringSelectedPhotos.value
+  ) {
+    void loadNextSelectedPhotoBatch();
+  }
+}
+
+function setSelectedPhotoFilter(filter: "all" | DoubanAssetType) {
+  selectedPhotoFilter.value = filter;
+  resetSelectedPhotoGridPaging();
+}
+
+watch(
+  () => filteredSelectedPhotos.value.length,
+  () => {
+    if (selectedPhotoGridLoadingRequested.value) {
+      revealNextSelectedPhotoBatch();
+    }
+  },
+);
 
 function formatSelectedPhotoCategory(photo: SelectableDoubanPhoto) {
   if (photo.doubanAssetType === "poster") return "海报";
@@ -486,7 +530,10 @@ function syncSelectedPhotoSeed(seed: SelectedPhotoDownloadSeed | null) {
   selectedPhotoLargeFailedIds.value = new Set();
   selectedPhotoPreviewIndex.value = null;
   selectedDiscoveryTaskId.value = "";
+  selectedPhotoDiscoveryCursor.value = null;
+  selectedPhotoDiscoveryDone.value = false;
   selectedPhotoFilter.value = "all";
+  resetSelectedPhotoGridPaging();
   clearAlert();
 
   const seedKey = `${seed.detailUrl}:${seed.title ?? ""}`;
@@ -513,6 +560,29 @@ function stepMaxImages(delta: -1 | 1) {
 async function discoverSelectedPhotos() {
   if (discoveringSelectedPhotos.value) return;
 
+  try {
+    normalizeSelectedPhotoUrl(selectedPhotoLink.value);
+  } catch (error) {
+    showAlert(error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  selectedPhotos.value = [];
+  selectedPhotoLoadedUrls.value = new Set();
+  selectedPhotoFailedUrls.value = new Set();
+  selectedPhotoLargeFailedIds.value = new Set();
+  selectedPhotoPreviewIndex.value = null;
+  selectedPhotoDiscoveryStopRequested.value = false;
+  selectedPhotoDiscoveryCursor.value = null;
+  selectedPhotoDiscoveryDone.value = false;
+  resetSelectedPhotoGridPaging();
+  clearAlert();
+  await loadNextSelectedPhotoBatch();
+}
+
+async function loadNextSelectedPhotoBatch() {
+  if (discoveringSelectedPhotos.value || selectedPhotoDiscoveryDone.value) return;
+
   let detailUrl = "";
   try {
     detailUrl = normalizeSelectedPhotoUrl(selectedPhotoLink.value);
@@ -523,11 +593,6 @@ async function discoverSelectedPhotos() {
 
   const taskId = `selected-discovery-${Date.now()}`;
   selectedDiscoveryTaskId.value = taskId;
-  selectedPhotos.value = [];
-  selectedPhotoLoadedUrls.value = new Set();
-  selectedPhotoFailedUrls.value = new Set();
-  selectedPhotoLargeFailedIds.value = new Set();
-  selectedPhotoPreviewIndex.value = null;
   selectedPhotoDiscoveryStopRequested.value = false;
   discoveringSelectedPhotos.value = true;
   clearAlert();
@@ -541,9 +606,13 @@ async function discoverSelectedPhotos() {
       imageAspectRatio: form.imageAspectRatio,
       requestIntervalSeconds: Number(form.requestIntervalSeconds) as RequestIntervalSeconds,
       doubanCookie: getUsableDoubanCookie(),
+      cursor: selectedPhotoDiscoveryCursor.value,
+      batchSize: selectedPhotoRenderBatchSize,
     });
     selectedPhotoTitle.value = selectedPhotoTitle.value || discovery.normalizedTitle;
     mergeSelectedDiscoveredPhotos(discovery.images);
+    selectedPhotoDiscoveryCursor.value = discovery.nextCursor;
+    selectedPhotoDiscoveryDone.value = discovery.done;
     if (selectedPhotos.value.length === 0) {
       showAlert("没有解析到可下载图片。");
     }
@@ -559,20 +628,6 @@ async function discoverSelectedPhotos() {
     }
   }
 }
-
-void runtimeBridge.onDoubanPhotoDiscoveryProgress((event) => {
-  if (!selectedDiscoveryTaskId.value || event.taskId !== selectedDiscoveryTaskId.value) {
-    return;
-  }
-
-  if (event.normalizedTitle && !selectedPhotoTitle.value) {
-    selectedPhotoTitle.value = event.normalizedTitle;
-  }
-
-  mergeSelectedDiscoveredPhotos(event.images);
-}).then((unlisten) => {
-  stopDoubanPhotoDiscoveryProgress = unlisten;
-});
 
 function toggleSelectedPhoto(photoId: string) {
   selectedPhotos.value = selectedPhotos.value.map((photo) =>
@@ -604,6 +659,7 @@ async function stopSelectedPhotoDiscovery() {
 
   selectedPhotoDiscoveryStopRequested.value = true;
   discoveringSelectedPhotos.value = false;
+  selectedPhotoDiscoveryDone.value = true;
   try {
     await runtimeBridge.cancelDoubanPhotoDiscovery(taskId);
   } catch {
@@ -612,7 +668,7 @@ async function stopSelectedPhotoDiscovery() {
 }
 
 async function confirmSelectedPhotoDownload() {
-  await stopSelectedPhotoDiscovery();
+  void stopSelectedPhotoDiscovery();
   submitSelectedPhotoDownload();
 }
 
@@ -1066,28 +1122,28 @@ function cancelReplacementSubmit() {
             <button
               type="button"
               :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'all' }"
-              @click="selectedPhotoFilter = 'all'"
+              @click="setSelectedPhotoFilter('all')"
             >
               全部 {{ selectedPhotoCounts.all }}
             </button>
             <button
               type="button"
               :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'still' }"
-              @click="selectedPhotoFilter = 'still'"
+              @click="setSelectedPhotoFilter('still')"
             >
               剧照 {{ selectedPhotoCounts.still }}
             </button>
             <button
               type="button"
               :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'poster' }"
-              @click="selectedPhotoFilter = 'poster'"
+              @click="setSelectedPhotoFilter('poster')"
             >
               海报 {{ selectedPhotoCounts.poster }}
             </button>
             <button
               type="button"
               :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'wallpaper' }"
-              @click="selectedPhotoFilter = 'wallpaper'"
+              @click="setSelectedPhotoFilter('wallpaper')"
             >
               壁纸 {{ selectedPhotoCounts.wallpaper }}
             </button>
@@ -1097,6 +1153,7 @@ function cancelReplacementSubmit() {
           <div
             v-else-if="filteredSelectedPhotos.length"
             class="selected-photo-grid"
+            @scroll="handleSelectedPhotoGridScroll"
           >
             <button
               v-for="photo in visibleSelectedPhotos"
