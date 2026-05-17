@@ -85,6 +85,7 @@ export interface DoubanPhotoDiscoveryCursor {
   assetIndex: number;
   pageIndex: number;
   withinPageOffset: number;
+  pageCount?: number;
   normalizedTitle?: string;
   outputFolderName?: string;
 }

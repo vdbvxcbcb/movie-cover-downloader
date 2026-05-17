@@ -69,7 +69,7 @@ test("输出目录片名会拒绝路径特殊片段和 Windows 保留名", () =>
 
 test("selected photo batch discovery stops before fetching the next page", async () => {
   const adapter = new DoubanAdapter();
-  const task = createTask();
+  const task = createTask({ doubanAssetType: "still" });
   const context = createContext();
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
@@ -118,6 +118,124 @@ test("selected photo batch discovery stops before fetching the next page", async
     assert.equal(result.nextCursor?.pageIndex, 0);
     assert.equal(result.nextCursor?.withinPageOffset, 1);
     assert.equal(calls.some((url) => url.includes("start=30")), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("selected photo batch discovery resumes later pages without refetching first page", async () => {
+  const adapter = new DoubanAdapter();
+  const task = createTask({ doubanAssetType: "still" });
+  const context = createContext();
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+
+  const detailHtml = `<html><span property="v:itemreviewed">Batch Movie</span></html>`;
+  const firstPageHtml = `
+    <html>
+      <title>图片</title>
+      <div class="article"></div>
+      <span>共60张</span>
+      <img src="https://img1.doubanio.com/view/photo/m/public/p1.jpg">
+      <img src="https://img1.doubanio.com/view/photo/m/public/p2.jpg">
+    </html>
+  `;
+  const secondPageHtml = `
+    <html>
+      <title>图片</title>
+      <div class="article"></div>
+      <img src="https://img1.doubanio.com/view/photo/m/public/p31.jpg">
+    </html>
+  `;
+  const calls: string[] = [];
+
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const requestUrl = String(url);
+    calls.push(requestUrl);
+    if (requestUrl.includes("start=30")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=S&start=30",
+        html: secondPageHtml,
+      });
+    }
+    if (requestUrl.includes("/subject/34780991/photos?type=S")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=S",
+        html: firstPageHtml,
+      });
+    }
+
+    return createFetchResponse({
+      finalUrl: "https://movie.douban.com/subject/34780991/",
+      html: detailHtml,
+    });
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const firstResult = await adapter.discoverBatch(task, context, null, 2);
+    assert.equal(firstResult.nextCursor?.pageIndex, 1);
+    assert.equal(firstResult.nextCursor?.pageCount, 2);
+
+    calls.length = 0;
+    const secondResult = await adapter.discoverBatch(task, context, firstResult.nextCursor, 1);
+    assert.equal(secondResult.images.length, 1);
+    assert.equal(secondResult.images[0]?.id, "douban-S-31");
+    assert.equal(calls.some((url) => url.includes("/photos?type=S") && !url.includes("start=30")), false);
+    assert.equal(calls.some((url) => url.includes("start=30")), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("selected photo batch discovery starts from requested asset type", async () => {
+  const adapter = new DoubanAdapter();
+  const task = createTask({ doubanAssetType: "poster" });
+  const context = createContext();
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const calls: string[] = [];
+
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const requestUrl = String(url);
+    calls.push(requestUrl);
+    if (requestUrl.includes("/photos?type=R")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=R",
+        html: '<html><title>图片</title><div class="article"></div><img src="https://img1.doubanio.com/view/photo/m/public/p1.jpg"></html>',
+      });
+    }
+
+    return createFetchResponse({
+      finalUrl: "https://movie.douban.com/subject/34780991/",
+      html: '<html><span property="v:itemreviewed">Poster Movie</span></html>',
+    });
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const result = await adapter.discoverBatch(task, context, null, 1);
+    assert.equal(result.images[0]?.doubanAssetType, "poster");
+    assert.equal(calls.some((url) => url.includes("/photos?type=S")), false);
+    assert.equal(calls.some((url) => url.includes("/photos?type=R")), true);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;

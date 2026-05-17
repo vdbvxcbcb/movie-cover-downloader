@@ -302,34 +302,43 @@ export class DoubanAdapter implements SourceAdapter {
     }
 
     const images: DiscoveredImage[] = [];
-    let assetIndex = Math.max(0, cursor?.assetIndex ?? 0);
-    let pageIndex = Math.max(0, cursor?.pageIndex ?? 0);
-    let withinPageOffset = Math.max(0, cursor?.withinPageOffset ?? 0);
+    const requestedAssetIndex = Math.max(0, doubanAssetTypeSequence.indexOf(task.doubanAssetType));
+    const maxAssetIndex = requestedAssetIndex + 1;
+    const canUseCursor = cursor?.assetIndex === requestedAssetIndex;
+    let assetIndex = canUseCursor ? cursor.assetIndex : requestedAssetIndex;
+    let pageIndex = canUseCursor ? Math.max(0, cursor.pageIndex) : 0;
+    let withinPageOffset = canUseCursor ? Math.max(0, cursor.withinPageOffset ?? 0) : 0;
+    let currentPageCount: number | undefined;
     let lastImagePageUrl = detailSkeleton.imagePageUrl;
 
-    while (assetIndex < doubanAssetTypeSequence.length && images.length < safeBatchSize) {
+    while (assetIndex < maxAssetIndex && images.length < safeBatchSize) {
       const doubanAssetType = doubanAssetTypeSequence[assetIndex]!;
       const resolved = createResolvedSkeleton({ ...task, doubanAssetType });
       lastImagePageUrl = resolved.imagePageUrl;
-      context.logger.info(`fetching douban image page: ${resolved.imagePageUrl}`, task.id);
-      const firstPhotoPage = await fetchText(resolved.imagePageUrl, protectedContext);
       const pageType = new URL(resolved.imagePageUrl).searchParams.get("type") as DoubanPhotoType | null;
       if (!pageType || !(pageType in doubanTypeMap)) {
         throw new Error(`unsupported douban photo type page: ${resolved.imagePageUrl}`);
       }
 
-      const firstPageClassification = classifyDoubanPhotoPage(firstPhotoPage);
-      if (firstPageClassification.kind === "empty") {
-        assetIndex += 1;
-        pageIndex = 0;
-        withinPageOffset = 0;
-        continue;
+      let firstPhotoPage: FetchedHtmlPage | null = null;
+      let pageCount = canUseCursor && cursor?.assetIndex === assetIndex ? cursor.pageCount : undefined;
+      if (!pageCount || pageIndex === 0) {
+        context.logger.info(`fetching douban image page: ${resolved.imagePageUrl}`, task.id);
+        firstPhotoPage = await fetchText(resolved.imagePageUrl, protectedContext);
+        const firstPageClassification = classifyDoubanPhotoPage(firstPhotoPage);
+        if (firstPageClassification.kind === "empty") {
+          assetIndex += 1;
+          pageIndex = 0;
+          withinPageOffset = 0;
+          continue;
+        }
+        if (firstPageClassification.kind !== "ok") {
+          throwForClassification(firstPageClassification);
+        }
+        pageCount = resolveDoubanCategoryPageCount(firstPhotoPage.html);
       }
-      if (firstPageClassification.kind !== "ok") {
-        throwForClassification(firstPageClassification);
-      }
+      currentPageCount = pageCount;
 
-      const pageCount = resolveDoubanCategoryPageCount(firstPhotoPage.html);
       while (pageIndex < pageCount && images.length < safeBatchSize) {
         const pageUrl =
           pageIndex === 0 && pageCount === 1
@@ -339,7 +348,7 @@ export class DoubanAdapter implements SourceAdapter {
           context.logger.info(`fetching douban category page: ${pageUrl}`, task.id);
         }
 
-        const pageHtml = pageIndex === 0 ? firstPhotoPage : await fetchText(pageUrl, protectedContext);
+        const pageHtml = pageIndex === 0 && firstPhotoPage ? firstPhotoPage : await fetchText(pageUrl, protectedContext);
         const pageClassification = classifyDoubanPhotoPage(pageHtml);
         if (pageClassification.kind === "risk" || pageClassification.kind === "auth") {
           throwForClassification(pageClassification);
@@ -380,7 +389,7 @@ export class DoubanAdapter implements SourceAdapter {
       withinPageOffset = 0;
     }
 
-    const done = assetIndex >= doubanAssetTypeSequence.length;
+    const done = assetIndex >= maxAssetIndex;
     const outputFolderName = cursor?.outputFolderName || buildOutputFolderName(title);
     return {
       source: "douban",
@@ -400,6 +409,7 @@ export class DoubanAdapter implements SourceAdapter {
             assetIndex,
             pageIndex,
             withinPageOffset,
+            pageCount: currentPageCount,
             normalizedTitle: title,
             outputFolderName,
           },

@@ -129,6 +129,7 @@ struct DiscoverDoubanPhotosPayload {
     detail_url: String,
     output_root_dir: String,
     source_hint: String,
+    douban_asset_type: String,
     output_image_format: String,
     image_aspect_ratio: String,
     request_interval_seconds: Option<u32>,
@@ -2037,6 +2038,10 @@ fn discover_douban_photos_blocking(
     if detail_url.is_empty() {
         return Err("请填写豆瓣影片链接".to_string());
     }
+    let douban_asset_type = match payload.douban_asset_type.as_str() {
+        "still" | "poster" | "wallpaper" => payload.douban_asset_type.clone(),
+        _ => "still".to_string(),
+    };
 
     let sidecar_root = resolve_sidecar_root(&app);
     let _sidecar_entry = resolve_sidecar_entry(&sidecar_root)?;
@@ -2047,7 +2052,7 @@ fn discover_douban_photos_blocking(
         detail_url: detail_url.clone(),
         output_root_dir: payload.output_root_dir.clone(),
         source_hint: payload.source_hint.clone(),
-        douban_asset_type: "still".to_string(),
+        douban_asset_type: douban_asset_type.clone(),
         image_count_mode: "unlimited".to_string(),
         max_images: 100_000,
         output_image_format: payload.output_image_format.clone(),
@@ -2066,7 +2071,7 @@ fn discover_douban_photos_blocking(
         .env("MCD_BOOTSTRAP_TASK_URL", &detail_url)
         .env("MCD_BOOTSTRAP_OUTPUT_DIR", &payload.output_root_dir)
         .env("MCD_BOOTSTRAP_SOURCE_HINT", &payload.source_hint)
-        .env("MCD_DOUBAN_ASSET_TYPE", "still")
+        .env("MCD_DOUBAN_ASSET_TYPE", &douban_asset_type)
         .env("MCD_IMAGE_COUNT_MODE", "unlimited")
         .env("MCD_BOOTSTRAP_MAX_IMAGES", "100000")
         .env("MCD_BOOTSTRAP_OUTPUT_FORMAT", &payload.output_image_format)

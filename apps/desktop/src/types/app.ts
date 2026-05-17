@@ -277,6 +277,7 @@ export interface RuntimeDiscoverDoubanPhotosPayload {
   detailUrl: string;
   outputRootDir: string;
   sourceHint: SourceHint;
+  doubanAssetType: DoubanAssetType;
   outputImageFormat: OutputImageFormat;
   imageAspectRatio: ImageAspectRatio;
   requestIntervalSeconds: RequestIntervalSeconds;
@@ -289,6 +290,7 @@ export interface RuntimeDoubanPhotoDiscoveryCursor {
   assetIndex: number;
   pageIndex: number;
   withinPageOffset: number;
+  pageCount?: number;
   normalizedTitle?: string;
   outputFolderName?: string;
 }

@@ -67,16 +67,17 @@ const activeMode = ref<"auto" | "selected">("auto");
 const selectedPhotoLink = ref("");
 const selectedPhotoTitle = ref("");
 const selectedPhotoCover = ref("");
+const selectedPhotoPreviewSubjectUrl = ref("");
 const selectedPhotos = ref<SelectableDoubanPhoto[]>([]);
-const selectedPhotoFilter = ref<"all" | DoubanAssetType>("all");
+const selectedPhotoFilter = ref<DoubanAssetType>("still");
 const discoveringSelectedPhotos = ref(false);
+const switchingSelectedPhotoFilter = ref(false);
 const selectedDiscoveryTaskId = ref("");
 const selectedPhotoDiscoveryStartedKey = ref("");
 const selectedPhotoLoadedUrls = ref(new Set<string>());
 const selectedPhotoFailedUrls = ref(new Set<string>());
-const selectedPhotoDiscoveryStopRequested = ref(false);
-const selectedPhotoDiscoveryCursor = ref<RuntimeDoubanPhotoDiscoveryCursor | null>(null);
-const selectedPhotoDiscoveryDone = ref(false);
+const selectedPhotoAssetTypes: DoubanAssetType[] = ["still", "poster", "wallpaper"];
+const selectedPhotoDiscoveryByAsset = ref(createSelectedPhotoDiscoveryState());
 const selectedPhotoPreviewIndex = ref<number | null>(null);
 const selectedPhotoLargeFailedIds = ref(new Set<string>());
 const selectedPhotoRenderBatchSize = 28;
@@ -86,6 +87,35 @@ const titlePreviewResolveConcurrency = 3;
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
 let selectedPhotoClickTimer: number | null = null;
+const stoppedSelectedDiscoveryTaskIds = new Set<string>();
+
+function createSelectedPhotoDiscoveryState() {
+  return selectedPhotoAssetTypes.reduce(
+    (state, assetType) => {
+      state[assetType] = { cursor: null, done: false };
+      return state;
+    },
+    {} as Record<DoubanAssetType, { cursor: RuntimeDoubanPhotoDiscoveryCursor | null; done: boolean }>,
+  );
+}
+
+function resetSelectedPhotoDiscoveryState() {
+  selectedPhotoDiscoveryByAsset.value = createSelectedPhotoDiscoveryState();
+}
+
+function resolveNextSelectedPhotoAsset() {
+  return selectedPhotoDiscoveryByAsset.value[selectedPhotoFilter.value].done ? null : selectedPhotoFilter.value;
+}
+
+function markAllSelectedPhotoDiscoveryDone() {
+  selectedPhotoDiscoveryByAsset.value = selectedPhotoAssetTypes.reduce(
+    (state, assetType) => {
+      state[assetType] = { ...selectedPhotoDiscoveryByAsset.value[assetType], done: true };
+      return state;
+    },
+    {} as Record<DoubanAssetType, { cursor: RuntimeDoubanPhotoDiscoveryCursor | null; done: boolean }>,
+  );
+}
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, run: (item: T) => Promise<R>) {
   const results = new Array<R>(items.length);
@@ -287,29 +317,32 @@ const canDecreaseMaxImages = computed(() => currentMaxImagesValue.value > 1);
 const canIncreaseMaxImages = computed(() => currentMaxImagesValue.value < 100);
 
 const selectedPhotoCounts = computed(() => ({
-  all: selectedPhotos.value.length,
   still: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "still").length,
   poster: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "poster").length,
   wallpaper: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "wallpaper").length,
 }));
 const filteredSelectedPhotos = computed(() =>
-  selectedPhotoFilter.value === "all"
-    ? selectedPhotos.value
-    : selectedPhotos.value.filter((photo) => photo.doubanAssetType === selectedPhotoFilter.value),
+  selectedPhotos.value.filter((photo) => photo.doubanAssetType === selectedPhotoFilter.value),
 );
 const visibleSelectedPhotos = computed(() => {
   const filtered = filteredSelectedPhotos.value;
   return filtered.slice(0, selectedPhotoVisibleLimit.value);
 });
 const selectedPhotoCount = computed(() => selectedPhotos.value.filter((photo) => photo.selected).length);
+const currentSelectedPhotoCount = computed(() => filteredSelectedPhotos.value.filter((photo) => photo.selected).length);
 const selectedPhotoDownloadLabel = computed(() =>
   selectedPhotoCount.value > 0 ? `下载选中 ${selectedPhotoCount.value} 张` : "请选择图片",
 );
+const selectedPhotoDiscoveryDone = computed(() =>
+  selectedPhotoAssetTypes.every((assetType) => selectedPhotoDiscoveryByAsset.value[assetType].done),
+);
+const selectedPhotoDiscoveryBusy = computed(() => discoveringSelectedPhotos.value || switchingSelectedPhotoFilter.value);
+const selectedPhotoCurrentFilterDone = computed(() => selectedPhotoDiscoveryByAsset.value[selectedPhotoFilter.value].done);
 const showSelectedPhotoGridLoading = computed(
   () =>
     discoveringSelectedPhotos.value &&
     selectedPhotoGridLoadingRequested.value &&
-    !selectedPhotoDiscoveryDone.value &&
+    !selectedPhotoCurrentFilterDone.value &&
     filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value,
 );
 const selectedPhotoPreviewItems = computed(() => selectedPhotos.value);
@@ -338,18 +371,35 @@ function handleSelectedPhotoGridScroll(event: Event) {
 
   selectedPhotoGridLoadingRequested.value = true;
   revealNextSelectedPhotoBatch();
+  requestNextSelectedPhotoBatch();
+}
+
+function requestNextSelectedPhotoBatch() {
   if (
     filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value &&
-    !selectedPhotoDiscoveryDone.value &&
+    !selectedPhotoCurrentFilterDone.value &&
     !discoveringSelectedPhotos.value
   ) {
     void loadNextSelectedPhotoBatch();
   }
 }
 
-function setSelectedPhotoFilter(filter: "all" | DoubanAssetType) {
+async function setSelectedPhotoFilter(filter: DoubanAssetType) {
+  if (filter === selectedPhotoFilter.value) return;
   selectedPhotoFilter.value = filter;
   resetSelectedPhotoGridPaging();
+  switchingSelectedPhotoFilter.value = true;
+  try {
+    if (discoveringSelectedPhotos.value) {
+      await stopSelectedPhotoDiscovery();
+    }
+    if (filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value && !selectedPhotoCurrentFilterDone.value) {
+      selectedPhotoGridLoadingRequested.value = true;
+      requestNextSelectedPhotoBatch();
+    }
+  } finally {
+    switchingSelectedPhotoFilter.value = false;
+  }
 }
 
 watch(
@@ -451,7 +501,7 @@ const selectedDiscoveryStatusLabel = computed(() => {
   if (discoveringSelectedPhotos.value) {
     return selectedPhotos.value.length > 0
       ? `正在解析，已缓存 ${selectedPhotos.value.length} 张`
-      : "正在解析全部图片...";
+      : "正在解析当前分类...";
   }
 
   return selectedPhotos.value.length > 0 ? `已缓存 ${selectedPhotos.value.length} 张图片` : "";
@@ -477,6 +527,12 @@ function normalizeSelectedPhotoUrl(value: string) {
   }
 
   return detailUrl;
+}
+
+function getSelectedPhotoSubjectUrl(detailUrl: string) {
+  const parsed = new URL(detailUrl);
+  const subjectId = parsed.pathname.match(/^\/subject\/(\d+)/i)?.[1];
+  return subjectId ? `https://movie.douban.com/subject/${subjectId}/` : detailUrl;
 }
 
 function toSelectablePhoto(photo: SelectedDoubanPhoto): SelectableDoubanPhoto {
@@ -518,21 +574,51 @@ function mergeSelectedDiscoveredPhotos(images: RuntimeDiscoveredAsset[]) {
   selectedPhotos.value = nextPhotos;
 }
 
+function handleSelectedPhotoLinkInput() {
+  clearAlert();
+  selectedPhotoTitle.value = "";
+  selectedPhotoCover.value = "";
+  selectedPhotoPreviewSubjectUrl.value = "";
+}
+
+async function resolveSelectedPhotoPreview(detailUrl: string) {
+  const subjectUrl = getSelectedPhotoSubjectUrl(detailUrl);
+  const cachedPreview = appStore.getCreateTaskMoviePreview(subjectUrl);
+  if (cachedPreview) {
+    selectedPhotoPreviewSubjectUrl.value = subjectUrl;
+    selectedPhotoTitle.value = selectedPhotoTitle.value || cachedPreview.title || "";
+    selectedPhotoCover.value = selectedPhotoCover.value || cachedPreview.coverDataUrl || cachedPreview.coverUrl || "";
+    if (selectedPhotoCover.value) return;
+  }
+
+  try {
+    const preview = await runtimeBridge.resolveDoubanMoviePreview(subjectUrl);
+    if (!preview) return;
+    appStore.upsertCreateTaskMoviePreview(subjectUrl, preview);
+    if (getSelectedPhotoSubjectUrl(normalizeSelectedPhotoUrl(selectedPhotoLink.value)) !== subjectUrl) return;
+    selectedPhotoPreviewSubjectUrl.value = subjectUrl;
+    selectedPhotoTitle.value = selectedPhotoTitle.value || preview.title || "";
+    selectedPhotoCover.value = selectedPhotoCover.value || preview.coverDataUrl || preview.coverUrl || "";
+  } catch {
+    // 预览信息只影响顶部展示，解析图片本身继续走原流程。
+  }
+}
+
 function syncSelectedPhotoSeed(seed: SelectedPhotoDownloadSeed | null) {
   if (!seed) return;
   activeMode.value = "selected";
   selectedPhotoLink.value = seed.detailUrl;
   selectedPhotoTitle.value = seed.title ?? "";
   selectedPhotoCover.value = seed.coverDataUrl ?? seed.coverUrl ?? "";
+  selectedPhotoPreviewSubjectUrl.value = getSelectedPhotoSubjectUrl(seed.detailUrl);
   selectedPhotos.value = [];
   selectedPhotoLoadedUrls.value = new Set();
   selectedPhotoFailedUrls.value = new Set();
   selectedPhotoLargeFailedIds.value = new Set();
   selectedPhotoPreviewIndex.value = null;
   selectedDiscoveryTaskId.value = "";
-  selectedPhotoDiscoveryCursor.value = null;
-  selectedPhotoDiscoveryDone.value = false;
-  selectedPhotoFilter.value = "all";
+  resetSelectedPhotoDiscoveryState();
+  selectedPhotoFilter.value = "still";
   resetSelectedPhotoGridPaging();
   clearAlert();
 
@@ -558,13 +644,21 @@ function stepMaxImages(delta: -1 | 1) {
 }
 
 async function discoverSelectedPhotos() {
+  let detailUrl = "";
   if (discoveringSelectedPhotos.value) return;
 
   try {
-    normalizeSelectedPhotoUrl(selectedPhotoLink.value);
+    detailUrl = normalizeSelectedPhotoUrl(selectedPhotoLink.value);
   } catch (error) {
     showAlert(error instanceof Error ? error.message : String(error));
     return;
+  }
+
+  const subjectUrl = getSelectedPhotoSubjectUrl(detailUrl);
+  if (selectedPhotoPreviewSubjectUrl.value !== subjectUrl) {
+    selectedPhotoTitle.value = "";
+    selectedPhotoCover.value = "";
+    selectedPhotoPreviewSubjectUrl.value = subjectUrl;
   }
 
   selectedPhotos.value = [];
@@ -572,16 +666,17 @@ async function discoverSelectedPhotos() {
   selectedPhotoFailedUrls.value = new Set();
   selectedPhotoLargeFailedIds.value = new Set();
   selectedPhotoPreviewIndex.value = null;
-  selectedPhotoDiscoveryStopRequested.value = false;
-  selectedPhotoDiscoveryCursor.value = null;
-  selectedPhotoDiscoveryDone.value = false;
+  resetSelectedPhotoDiscoveryState();
   resetSelectedPhotoGridPaging();
   clearAlert();
+  void resolveSelectedPhotoPreview(detailUrl);
   await loadNextSelectedPhotoBatch();
 }
 
 async function loadNextSelectedPhotoBatch() {
   if (discoveringSelectedPhotos.value || selectedPhotoDiscoveryDone.value) return;
+  const doubanAssetType = resolveNextSelectedPhotoAsset();
+  if (!doubanAssetType) return;
 
   let detailUrl = "";
   try {
@@ -593,7 +688,7 @@ async function loadNextSelectedPhotoBatch() {
 
   const taskId = `selected-discovery-${Date.now()}`;
   selectedDiscoveryTaskId.value = taskId;
-  selectedPhotoDiscoveryStopRequested.value = false;
+  stoppedSelectedDiscoveryTaskIds.delete(taskId);
   discoveringSelectedPhotos.value = true;
   clearAlert();
   try {
@@ -602,30 +697,43 @@ async function loadNextSelectedPhotoBatch() {
       detailUrl,
       outputRootDir: form.outputRootDir.trim() || "D:/cover",
       sourceHint: "auto",
+      doubanAssetType,
       outputImageFormat: form.outputImageFormat,
       imageAspectRatio: form.imageAspectRatio,
       requestIntervalSeconds: Number(form.requestIntervalSeconds) as RequestIntervalSeconds,
       doubanCookie: getUsableDoubanCookie(),
-      cursor: selectedPhotoDiscoveryCursor.value,
+      cursor: selectedPhotoDiscoveryByAsset.value[doubanAssetType].cursor,
       batchSize: selectedPhotoRenderBatchSize,
     });
     selectedPhotoTitle.value = selectedPhotoTitle.value || discovery.normalizedTitle;
     mergeSelectedDiscoveredPhotos(discovery.images);
-    selectedPhotoDiscoveryCursor.value = discovery.nextCursor;
-    selectedPhotoDiscoveryDone.value = discovery.done;
+    selectedPhotoDiscoveryByAsset.value = {
+      ...selectedPhotoDiscoveryByAsset.value,
+      [doubanAssetType]: {
+        cursor: discovery.nextCursor,
+        done: discovery.done,
+      },
+    };
     if (selectedPhotos.value.length === 0) {
       showAlert("没有解析到可下载图片。");
     }
   } catch (error) {
-    if (!selectedPhotoDiscoveryStopRequested.value) {
+    if (!stoppedSelectedDiscoveryTaskIds.has(taskId)) {
       showAlert(`解析图片失败：${error instanceof Error ? error.message : String(error)}`);
     }
   } finally {
     if (selectedDiscoveryTaskId.value === taskId) {
       discoveringSelectedPhotos.value = false;
-      selectedPhotoDiscoveryStopRequested.value = false;
       selectedDiscoveryTaskId.value = "";
+      if (
+        selectedPhotoGridLoadingRequested.value &&
+        filteredSelectedPhotos.value.length === 0 &&
+        !selectedPhotoCurrentFilterDone.value
+      ) {
+        window.setTimeout(() => requestNextSelectedPhotoBatch(), 0);
+      }
     }
+    stoppedSelectedDiscoveryTaskIds.delete(taskId);
   }
 }
 
@@ -646,20 +754,26 @@ function handleSelectedPhotoClick(photoId: string) {
 }
 
 function selectAllPhotos() {
-  selectedPhotos.value = selectedPhotos.value.map((photo) => ({ ...photo, selected: true }));
+  selectedPhotos.value = selectedPhotos.value.map((photo) =>
+    photo.doubanAssetType === selectedPhotoFilter.value ? { ...photo, selected: true } : photo,
+  );
 }
 
 function clearSelectedPhotos() {
-  selectedPhotos.value = selectedPhotos.value.map((photo) => ({ ...photo, selected: false }));
+  selectedPhotos.value = selectedPhotos.value.map((photo) =>
+    photo.doubanAssetType === selectedPhotoFilter.value ? { ...photo, selected: false } : photo,
+  );
 }
 
-async function stopSelectedPhotoDiscovery() {
+async function stopSelectedPhotoDiscovery(markDone = false) {
   const taskId = selectedDiscoveryTaskId.value;
   if (!discoveringSelectedPhotos.value || !taskId) return;
 
-  selectedPhotoDiscoveryStopRequested.value = true;
+  stoppedSelectedDiscoveryTaskIds.add(taskId);
   discoveringSelectedPhotos.value = false;
-  selectedPhotoDiscoveryDone.value = true;
+  if (markDone) {
+    markAllSelectedPhotoDiscoveryDone();
+  }
   try {
     await runtimeBridge.cancelDoubanPhotoDiscovery(taskId);
   } catch {
@@ -668,7 +782,7 @@ async function stopSelectedPhotoDiscovery() {
 }
 
 async function confirmSelectedPhotoDownload() {
-  void stopSelectedPhotoDiscovery();
+  void stopSelectedPhotoDiscovery(true);
   submitSelectedPhotoDownload();
 }
 
@@ -1072,8 +1186,9 @@ function cancelReplacementSubmit() {
 
       <div v-else class="selected-download">
         <section class="selected-download__hero">
-          <div v-if="selectedPhotoCover" class="selected-download__cover">
-            <img :src="selectedPhotoCover" :alt="selectedPhotoTitle || '影片封面'" />
+          <div class="selected-download__cover">
+            <img v-if="selectedPhotoCover" :src="selectedPhotoCover" :alt="selectedPhotoTitle || '影片封面'" />
+            <span v-else class="selected-download__cover-placeholder">封面</span>
           </div>
           <div class="selected-download__link">
             <label class="field">
@@ -1081,13 +1196,13 @@ function cancelReplacementSubmit() {
               <div class="field-inline">
                 <input
                   v-model="selectedPhotoLink"
-                  :disabled="discoveringSelectedPhotos"
+                  :disabled="selectedPhotoDiscoveryBusy"
                   placeholder="支持 subject / all_photos / photos?type= 链接"
-                  @input="clearAlert"
+                  @input="handleSelectedPhotoLinkInput"
                 />
                 <ActionButton
-                  label="解析全部图片"
-                  :disabled="discoveringSelectedPhotos"
+                  label="解析当前分类"
+                  :disabled="selectedPhotoDiscoveryBusy"
                   @click="void discoverSelectedPhotos()"
                 />
               </div>
@@ -1099,12 +1214,12 @@ function cancelReplacementSubmit() {
         <section class="selected-download__library">
           <div class="selected-download__summary">
             <div>
-              <span>全部图片</span>
-              <strong>共 {{ selectedPhotoCounts.all }} 张 / 已选 {{ selectedPhotoCount }} 张</strong>
+              <span>当前分类</span>
+              <strong>共 {{ filteredSelectedPhotos.length }} 张 / 当前已选 {{ currentSelectedPhotoCount }} 张</strong>
             </div>
             <div class="selected-download__bulk">
-              <ActionButton label="全选" size="sm" :disabled="selectedPhotos.length === 0" @click="selectAllPhotos" />
-              <ActionButton label="取消全选" size="sm" :disabled="selectedPhotoCount === 0" @click="clearSelectedPhotos" />
+              <ActionButton label="全选" size="sm" :disabled="filteredSelectedPhotos.length === 0" @click="selectAllPhotos" />
+              <ActionButton label="取消全选" size="sm" :disabled="currentSelectedPhotoCount === 0" @click="clearSelectedPhotos" />
             </div>
           </div>
 
@@ -1121,35 +1236,28 @@ function cancelReplacementSubmit() {
           <div class="selected-download__filters">
             <button
               type="button"
-              :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'all' }"
-              @click="setSelectedPhotoFilter('all')"
-            >
-              全部 {{ selectedPhotoCounts.all }}
-            </button>
-            <button
-              type="button"
               :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'still' }"
-              @click="setSelectedPhotoFilter('still')"
+              @click="void setSelectedPhotoFilter('still')"
             >
               剧照 {{ selectedPhotoCounts.still }}
             </button>
             <button
               type="button"
               :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'poster' }"
-              @click="setSelectedPhotoFilter('poster')"
+              @click="void setSelectedPhotoFilter('poster')"
             >
               海报 {{ selectedPhotoCounts.poster }}
             </button>
             <button
               type="button"
               :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'wallpaper' }"
-              @click="setSelectedPhotoFilter('wallpaper')"
+              @click="void setSelectedPhotoFilter('wallpaper')"
             >
               壁纸 {{ selectedPhotoCounts.wallpaper }}
             </button>
           </div>
 
-          <div v-if="discoveringSelectedPhotos && selectedPhotos.length === 0" class="selected-download__empty">正在解析全部图片，发现后会立即显示...</div>
+          <div v-if="discoveringSelectedPhotos && filteredSelectedPhotos.length === 0" class="selected-download__empty">正在解析当前分类，发现后会立即显示...</div>
           <div
             v-else-if="filteredSelectedPhotos.length"
             class="selected-photo-grid"
@@ -1199,7 +1307,7 @@ function cancelReplacementSubmit() {
             </div>
           </div>
           <div v-else class="selected-download__empty">
-            {{ discoveringSelectedPhotos ? "当前分类还没有图片，继续解析中..." : "输入链接后解析全部图片" }}
+            {{ discoveringSelectedPhotos ? "当前分类还没有图片，继续解析中..." : "输入链接后解析当前分类图片" }}
           </div>
         </section>
 
@@ -1297,20 +1405,25 @@ function cancelReplacementSubmit() {
 </template>
 
 <style scoped>
+.modal-backdrop {
+  overflow: hidden;
+}
+
 .create-task-modal {
-  width: min(1180px, 100%);
-  max-height: calc(100vh - 48px);
+  width: min(1180px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .create-task-modal--auto {
-  overflow: visible;
+  overflow: auto;
 }
 
 .create-task-modal--selected {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  height: calc(100vh - 48px);
+  height: calc(100dvh - 48px);
   overflow: hidden;
 }
 
@@ -1361,11 +1474,26 @@ function cancelReplacementSubmit() {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.selected-download__cover img {
+.selected-download__cover img,
+.selected-download__cover-placeholder {
   width: 100%;
   height: 100%;
-  object-fit: cover;
   display: block;
+}
+
+.selected-download__cover img {
+  object-fit: cover;
+}
+
+.selected-download__cover-placeholder {
+  display: grid;
+  place-items: center;
+  color: rgba(179, 219, 214, 0.66);
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  background:
+    linear-gradient(135deg, rgba(100, 221, 203, 0.12), rgba(255, 255, 255, 0.035)),
+    rgba(8, 28, 31, 0.72);
 }
 
 .selected-download__link {
@@ -1840,7 +1968,7 @@ function cancelReplacementSubmit() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px 16px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .create-task-modal__field-label {
@@ -2015,11 +2143,110 @@ function cancelReplacementSubmit() {
 
 @media (max-width: 1480px) {
   .create-task-modal__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .strategy-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .create-task-modal__grid {
     grid-template-columns: 1fr;
   }
 
   .strategy-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-height: 900px) {
+  .create-task-modal {
+    padding: 16px;
+    border-radius: 22px;
+  }
+
+  .create-task-modal .modal-card__head {
+    margin-bottom: 10px;
+  }
+
+  .create-task-modal h3 {
+    font-size: 1.16rem;
+  }
+
+  .mode-switch {
+    margin-bottom: 8px;
+  }
+
+  .selected-download {
+    gap: 10px;
+  }
+
+  .selected-download__hero {
+    gap: 10px;
+  }
+
+  .selected-download__cover {
+    width: 58px;
+    height: 76px;
+    border-radius: 10px;
+  }
+
+  .selected-download__link {
+    gap: 4px;
+  }
+
+  .selected-download__library {
+    gap: 8px;
+    padding: 10px;
+    border-radius: 16px;
+  }
+
+  .selected-photo-grid {
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    gap: 10px;
+  }
+
+  .selected-photo-card {
+    height: 154px;
+    grid-template-rows: minmax(0, 1fr) 28px;
+    border-radius: 10px;
+  }
+
+  .selected-photo-card__meta {
+    min-height: 28px;
+    padding: 0 9px;
+    font-size: 0.74rem;
+  }
+
+  .selected-download__bar {
+    gap: 10px;
+    padding-top: 8px;
+  }
+
+  .selected-download__settings {
+    gap: 8px;
+  }
+
+  .selected-download__settings .field {
+    min-width: 104px;
+  }
+
+  .create-task-modal textarea {
+    height: 88px;
+    min-height: 88px;
+  }
+
+  .strategy-card,
+  .strategy-panel {
+    padding: 8px;
+  }
+
+  .segmented-control__item {
+    height: 38px;
+    min-width: 78px;
+    padding: 0 12px;
   }
 }
 </style>
