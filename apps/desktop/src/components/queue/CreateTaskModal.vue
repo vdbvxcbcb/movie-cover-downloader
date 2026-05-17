@@ -67,6 +67,8 @@ const activeMode = ref<"auto" | "selected">("auto");
 const selectedPhotoLink = ref("");
 const selectedPhotoTitle = ref("");
 const selectedPhotoCover = ref("");
+const selectedPhotoCoverUrl = ref("");
+const selectedPhotoCoverDataUrl = ref("");
 const selectedPhotoPreviewSubjectUrl = ref("");
 const selectedPhotos = ref<SelectableDoubanPhoto[]>([]);
 const selectedPhotoFilter = ref<DoubanAssetType>("still");
@@ -87,6 +89,7 @@ const titlePreviewResolveConcurrency = 3;
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
 let selectedPhotoClickTimer: number | null = null;
+let selectedPhotoAutoDiscoverTimer: number | null = null;
 const stoppedSelectedDiscoveryTaskIds = new Set<string>();
 
 function createSelectedPhotoDiscoveryState() {
@@ -225,6 +228,22 @@ function scheduleMissingDetailUrlTitleResolution(delay = 500) {
   }, delay);
 }
 
+function clearSelectedPhotoAutoDiscoverTimer() {
+  if (selectedPhotoAutoDiscoverTimer === null) return;
+  window.clearTimeout(selectedPhotoAutoDiscoverTimer);
+  selectedPhotoAutoDiscoverTimer = null;
+}
+
+function scheduleSelectedPhotoAutoDiscover(delay = 400) {
+  clearSelectedPhotoAutoDiscoverTimer();
+  selectedPhotoAutoDiscoverTimer = window.setTimeout(() => {
+    selectedPhotoAutoDiscoverTimer = null;
+    if (selectedPhotoDiscoveryBusy.value) return;
+    selectedPhotoFilter.value = "still";
+    void discoverSelectedPhotos();
+  }, delay);
+}
+
 watch(
   () => form.outputRootDir,
   (value) => appStore.syncCreateTaskOutputRootDir(value),
@@ -237,6 +256,7 @@ onBeforeUnmount(() => {
   if (selectedPhotoClickTimer !== null) {
     window.clearTimeout(selectedPhotoClickTimer);
   }
+  clearSelectedPhotoAutoDiscoverTimer();
   void stopSelectedPhotoDiscovery();
   document.removeEventListener("keydown", handleSelectedPhotoPreviewKeydown);
 });
@@ -576,18 +596,42 @@ function mergeSelectedDiscoveredPhotos(images: RuntimeDiscoveredAsset[]) {
 
 function handleSelectedPhotoLinkInput() {
   clearAlert();
+  clearSelectedPhotoAutoDiscoverTimer();
   selectedPhotoTitle.value = "";
   selectedPhotoCover.value = "";
+  selectedPhotoCoverUrl.value = "";
+  selectedPhotoCoverDataUrl.value = "";
   selectedPhotoPreviewSubjectUrl.value = "";
+
+  try {
+    void resolveSelectedPhotoPreview(normalizeSelectedPhotoUrl(selectedPhotoLink.value));
+    scheduleSelectedPhotoAutoDiscover();
+  } catch {
+    // 输入过程中链接可能还不完整，等用户补全后再解析预览。
+  }
+}
+
+function isCurrentSelectedPhotoSubject(subjectUrl: string) {
+  try {
+    return getSelectedPhotoSubjectUrl(normalizeSelectedPhotoUrl(selectedPhotoLink.value)) === subjectUrl;
+  } catch {
+    return false;
+  }
+}
+
+function applySelectedPhotoPreview(preview: { title?: string; coverUrl?: string; coverDataUrl?: string }) {
+  selectedPhotoTitle.value = selectedPhotoTitle.value || preview.title || "";
+  selectedPhotoCoverUrl.value = selectedPhotoCoverUrl.value || preview.coverUrl || "";
+  selectedPhotoCoverDataUrl.value = selectedPhotoCoverDataUrl.value || preview.coverDataUrl || "";
+  selectedPhotoCover.value = selectedPhotoCover.value || selectedPhotoCoverDataUrl.value || selectedPhotoCoverUrl.value || "";
 }
 
 async function resolveSelectedPhotoPreview(detailUrl: string) {
   const subjectUrl = getSelectedPhotoSubjectUrl(detailUrl);
   const cachedPreview = appStore.getCreateTaskMoviePreview(subjectUrl);
-  if (cachedPreview) {
+  if (cachedPreview && isCurrentSelectedPhotoSubject(subjectUrl)) {
     selectedPhotoPreviewSubjectUrl.value = subjectUrl;
-    selectedPhotoTitle.value = selectedPhotoTitle.value || cachedPreview.title || "";
-    selectedPhotoCover.value = selectedPhotoCover.value || cachedPreview.coverDataUrl || cachedPreview.coverUrl || "";
+    applySelectedPhotoPreview(cachedPreview);
     if (selectedPhotoCover.value) return;
   }
 
@@ -597,8 +641,7 @@ async function resolveSelectedPhotoPreview(detailUrl: string) {
     appStore.upsertCreateTaskMoviePreview(subjectUrl, preview);
     if (getSelectedPhotoSubjectUrl(normalizeSelectedPhotoUrl(selectedPhotoLink.value)) !== subjectUrl) return;
     selectedPhotoPreviewSubjectUrl.value = subjectUrl;
-    selectedPhotoTitle.value = selectedPhotoTitle.value || preview.title || "";
-    selectedPhotoCover.value = selectedPhotoCover.value || preview.coverDataUrl || preview.coverUrl || "";
+    applySelectedPhotoPreview(preview);
   } catch {
     // 预览信息只影响顶部展示，解析图片本身继续走原流程。
   }
@@ -606,10 +649,13 @@ async function resolveSelectedPhotoPreview(detailUrl: string) {
 
 function syncSelectedPhotoSeed(seed: SelectedPhotoDownloadSeed | null) {
   if (!seed) return;
+  clearSelectedPhotoAutoDiscoverTimer();
   activeMode.value = "selected";
   selectedPhotoLink.value = seed.detailUrl;
   selectedPhotoTitle.value = seed.title ?? "";
-  selectedPhotoCover.value = seed.coverDataUrl ?? seed.coverUrl ?? "";
+  selectedPhotoCoverUrl.value = seed.coverUrl ?? "";
+  selectedPhotoCoverDataUrl.value = seed.coverDataUrl ?? "";
+  selectedPhotoCover.value = selectedPhotoCoverDataUrl.value || selectedPhotoCoverUrl.value;
   selectedPhotoPreviewSubjectUrl.value = getSelectedPhotoSubjectUrl(seed.detailUrl);
   selectedPhotos.value = [];
   selectedPhotoLoadedUrls.value = new Set();
@@ -658,6 +704,8 @@ async function discoverSelectedPhotos() {
   if (selectedPhotoPreviewSubjectUrl.value !== subjectUrl) {
     selectedPhotoTitle.value = "";
     selectedPhotoCover.value = "";
+    selectedPhotoCoverUrl.value = "";
+    selectedPhotoCoverDataUrl.value = "";
     selectedPhotoPreviewSubjectUrl.value = subjectUrl;
   }
 
@@ -818,8 +866,8 @@ function submitSelectedPhotoDownload() {
     outputImageFormat: form.outputImageFormat,
     imageAspectRatio: form.imageAspectRatio,
     requestIntervalSeconds: Number(form.requestIntervalSeconds) as RequestIntervalSeconds,
-    coverUrl: props.selectedPhotoSeed?.coverUrl,
-    coverDataUrl: props.selectedPhotoSeed?.coverDataUrl,
+    coverUrl: (props.selectedPhotoSeed?.coverUrl ?? selectedPhotoCoverUrl.value) || undefined,
+    coverDataUrl: (props.selectedPhotoSeed?.coverDataUrl ?? selectedPhotoCoverDataUrl.value) || undefined,
     selectedImages,
     selectedPhotoTitle: selectedPhotoTitle.value || undefined,
   };
@@ -1200,11 +1248,6 @@ function cancelReplacementSubmit() {
                   placeholder="支持 subject / all_photos / photos?type= 链接"
                   @input="handleSelectedPhotoLinkInput"
                 />
-                <ActionButton
-                  label="解析当前分类"
-                  :disabled="selectedPhotoDiscoveryBusy"
-                  @click="void discoverSelectedPhotos()"
-                />
               </div>
             </label>
             <p class="selected-download__title">{{ selectedPhotoTitle || "等待解析影片图片" }}</p>
@@ -1410,7 +1453,8 @@ function cancelReplacementSubmit() {
 }
 
 .create-task-modal {
-  width: min(1180px, calc(100vw - 48px));
+  width: min(1180px, calc(100dvw - 48px));
+  min-width: 0;
   max-height: calc(100dvh - 48px);
   overflow: auto;
   overscroll-behavior: contain;
@@ -1422,13 +1466,18 @@ function cancelReplacementSubmit() {
 
 .create-task-modal--selected {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  align-content: start;
   height: calc(100dvh - 48px);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .mode-switch {
   display: inline-flex;
+  justify-self: start;
+  width: max-content;
+  max-width: 100%;
   gap: 8px;
   padding: 5px;
   margin-bottom: 12px;
@@ -1453,9 +1502,11 @@ function cancelReplacementSubmit() {
 
 .selected-download {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(360px, 1fr) auto;
   gap: 14px;
-  min-height: 0;
+  min-height: 780px;
+  min-width: 0;
+  overflow: visible;
 }
 
 .selected-download__hero {
@@ -1463,6 +1514,7 @@ function cancelReplacementSubmit() {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
+  min-width: 0;
 }
 
 .selected-download__cover {
@@ -1511,6 +1563,8 @@ function cancelReplacementSubmit() {
   grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 20px;
@@ -1522,6 +1576,8 @@ function cancelReplacementSubmit() {
   justify-content: space-between;
   gap: 14px;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .selected-download__summary div:first-child {
@@ -1623,13 +1679,19 @@ function cancelReplacementSubmit() {
 }
 
 .selected-photo-grid {
+  grid-row: 4;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(clamp(118px, 10vw, 138px), 1fr));
   align-content: start;
   gap: 14px;
+  height: 100%;
   min-height: 0;
+  min-width: 0;
+  max-height: 100%;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 2px 4px 8px 2px;
+  scrollbar-gutter: stable;
 }
 
 .selected-photo-grid__loading {
@@ -1849,10 +1911,15 @@ function cancelReplacementSubmit() {
 }
 
 .selected-download__empty {
-  min-height: 220px;
+  grid-row: 4;
+  min-height: 0;
+  height: 100%;
+  padding: 24px 12px;
   display: grid;
+  align-self: stretch;
   place-items: center;
   color: var(--muted);
+  text-align: center;
 }
 
 .selected-photo-preview {
@@ -1942,13 +2009,17 @@ function cancelReplacementSubmit() {
 }
 
 .selected-download__bar {
+  position: relative;
+  z-index: 1;
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 14px;
   align-items: end;
+  min-width: 0;
   padding-top: 12px;
   border-top: 1px solid var(--line);
   background: var(--panel);
+  box-shadow: 0 -10px 22px rgba(2, 9, 12, 0.28);
 }
 
 .selected-download__output {
@@ -1961,7 +2032,19 @@ function cancelReplacementSubmit() {
 
 .selected-download__actions {
   justify-content: flex-end;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+}
+
+.selected-download .field-inline {
+  min-width: 0;
+}
+
+.selected-download__link .field-inline {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.selected-download .field-inline .action-btn {
+  white-space: nowrap;
 }
 
 .create-task-modal__grid {
@@ -2151,12 +2234,54 @@ function cancelReplacementSubmit() {
   }
 }
 
+@media (max-width: 1280px) {
+  .selected-download__bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "output output"
+      "settings actions";
+  }
+
+  .selected-download__output {
+    grid-area: output;
+  }
+
+  .selected-download__settings {
+    grid-area: settings;
+  }
+
+  .selected-download__actions {
+    grid-area: actions;
+  }
+
+  .selected-download__settings,
+  .selected-download__actions {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 980px) {
   .create-task-modal__grid {
     grid-template-columns: 1fr;
   }
 
   .strategy-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .selected-download .field-inline {
+    grid-template-columns: 1fr;
+  }
+
+  .selected-download__bar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "output"
+      "settings"
+      "actions";
+  }
+
+  .selected-download__hero {
     grid-template-columns: 1fr;
   }
 }

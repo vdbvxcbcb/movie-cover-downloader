@@ -36,11 +36,19 @@ html,
 body,
 #app {
   margin: 0;
+  width: 100%;
   min-height: 100%;
+  overflow-x: hidden;
 }
 
 body {
   min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02), transparent 45%),
+    radial-gradient(circle at top left, rgba(24, 197, 190, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(255, 159, 67, 0.12), transparent 24%),
+    linear-gradient(135deg, #071419 0%, #0b1f25 48%, #14282b 100%);
 }
 
 a {
@@ -69,9 +77,11 @@ p {
 }
 
 .shell {
+  width: 100%;
   min-height: 100vh;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
+  overflow-x: clip;
 }
 
 .rail {
@@ -176,6 +186,7 @@ p {
   gap: 18px;
   align-content: start;
   min-width: 0;
+  overflow-x: clip;
 }
 
 .view-stage,
@@ -256,6 +267,7 @@ p {
 .panel {
   border-radius: 24px;
   padding: 18px;
+  min-width: 0;
 }
 
 .panel__head {
@@ -263,7 +275,12 @@ p {
   justify-content: space-between;
   gap: 16px;
   align-items: start;
+  flex-wrap: wrap;
   margin-bottom: 16px;
+}
+
+.panel__head > * {
+  min-width: 0;
 }
 
 .cookie-compact-list {
@@ -358,7 +375,8 @@ p {
 }
 
 .table-shell {
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-radius: 18px;
   border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.12);
@@ -367,7 +385,8 @@ p {
 .task-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1080px;
+  min-width: 0;
+  table-layout: fixed;
 }
 
 .task-table th,
@@ -399,28 +418,24 @@ p {
 }
 
 .task-table__title {
-  min-width: 132px;
-  width: 13%;
+  width: 20%;
 }
 
 .task-table__output {
-  min-width: 300px;
+  width: 25%;
 }
 
 .task-table__progress {
-  min-width: 96px;
   width: 10%;
   white-space: nowrap;
 }
 
 .task-table__result {
-  min-width: 180px;
-  width: 18%;
+  width: 16%;
 }
 
 .task-table__actions {
-  min-width: 150px;
-  width: 12%;
+  width: 13%;
 }
 
 .row-actions,

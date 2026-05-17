@@ -306,6 +306,7 @@ function resultKey(item: DoubanSearchResultItem) {
 
 .search-movie-modal__body {
   min-height: 360px;
+  height: min(58vh, 620px);
   max-height: min(58vh, 620px);
   overflow: auto;
   border: 1px solid var(--line);
@@ -382,7 +383,7 @@ function resultKey(item: DoubanSearchResultItem) {
 }
 
 .search-movie-modal__empty {
-  min-height: 360px;
+  min-height: 100%;
   display: grid;
   place-items: center;
   color: var(--muted);
@@ -436,5 +437,19 @@ function resultKey(item: DoubanSearchResultItem) {
     justify-content: flex-start;
   }
 }
-</style>
 
+@media (max-height: 900px) {
+  .search-movie-modal__pager {
+    gap: 6px;
+    padding-top: 10px;
+  }
+
+  .search-movie-modal__pager button {
+    min-width: 34px;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: 10px;
+    font-size: 0.92rem;
+  }
+}
+</style>

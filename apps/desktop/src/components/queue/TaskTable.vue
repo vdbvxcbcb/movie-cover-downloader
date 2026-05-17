@@ -240,6 +240,15 @@ async function copyTaskDetailUrl(task: TaskItem) {
 <template>
   <div class="table-shell">
     <table class="task-table">
+      <colgroup>
+        <col class="task-table__col-title" />
+        <col class="task-table__col-cover" />
+        <col class="task-table__col-status" />
+        <col class="task-table__col-progress" />
+        <col class="task-table__col-output" />
+        <col class="task-table__col-result" />
+        <col class="task-table__col-actions" />
+      </colgroup>
       <thead>
         <tr>
           <th>任务</th>
@@ -407,6 +416,35 @@ async function copyTaskDetailUrl(task: TaskItem) {
   width: 96px;
   min-width: 96px;
 }
+
+.task-table__col-title {
+  width: 20%;
+}
+
+.task-table__col-cover {
+  width: 86px;
+}
+
+.task-table__col-status {
+  width: 9%;
+}
+
+.task-table__col-progress {
+  width: 10%;
+}
+
+.task-table__col-output {
+  width: 24%;
+}
+
+.task-table__col-result {
+  width: 16%;
+}
+
+.task-table__col-actions {
+  width: 13%;
+}
+
 .table-text {
   display: block;
   word-break: break-all;

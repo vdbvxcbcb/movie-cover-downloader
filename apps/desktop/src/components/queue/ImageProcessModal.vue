@@ -2445,7 +2445,7 @@ onBeforeUnmount(() => {
 
 .image-process-layout {
   display: grid;
-  grid-template-columns: 250px minmax(420px, 1fr) 320px;
+  grid-template-columns: 320px minmax(360px, 1fr) 320px;
   gap: 14px;
   height: calc(100% - 58px);
   min-height: 0;
@@ -2453,15 +2453,15 @@ onBeforeUnmount(() => {
 }
 
 .image-process-layout--left-collapsed {
-  grid-template-columns: 44px minmax(420px, 1fr) 320px;
+  grid-template-columns: 44px minmax(360px, 1fr) 320px;
 }
 
 .image-process-layout--right-collapsed {
-  grid-template-columns: 250px minmax(420px, 1fr) 44px;
+  grid-template-columns: 320px minmax(360px, 1fr) 44px;
 }
 
 .image-process-layout--left-collapsed.image-process-layout--right-collapsed {
-  grid-template-columns: 44px minmax(420px, 1fr) 44px;
+  grid-template-columns: 44px minmax(360px, 1fr) 44px;
 }
 
 .layout-sidebar,
@@ -3304,24 +3304,56 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1280px) {
   .image-process-modal {
-    overflow: auto;
+    overflow: hidden;
   }
 
   .image-process-layout {
-    grid-template-columns: 220px minmax(420px, 1fr);
+    grid-template-columns: clamp(260px, 23vw, 300px) minmax(360px, 1fr) clamp(240px, 22vw, 280px);
+    height: calc(100% - 58px);
+  }
+
+  .image-process-layout--left-collapsed {
+    grid-template-columns: 44px minmax(360px, 1fr) clamp(240px, 22vw, 280px);
+  }
+
+  .image-process-layout--right-collapsed {
+    grid-template-columns: clamp(260px, 23vw, 300px) minmax(360px, 1fr) 44px;
+  }
+
+  .image-process-layout--left-collapsed.image-process-layout--right-collapsed {
+    grid-template-columns: 44px minmax(360px, 1fr) 44px;
+  }
+
+  .canvas-panel {
+    min-height: min(720px, calc(100dvh - 150px));
+  }
+
+  .settings-sidebar {
+    grid-column: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 960px) {
+  .image-process-modal {
+    overflow: auto;
+  }
+
+  .image-process-layout,
+  .settings-sidebar {
+    grid-template-columns: 1fr;
+  }
+
+  .image-process-layout,
+  .image-process-layout--left-collapsed,
+  .image-process-layout--right-collapsed,
+  .image-process-layout--left-collapsed.image-process-layout--right-collapsed {
+    grid-template-columns: 1fr;
     height: auto;
   }
 
   .settings-sidebar {
-    grid-column: 1 / -1;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 900px) {
-  .image-process-layout,
-  .settings-sidebar {
-    grid-template-columns: 1fr;
+    grid-column: 1;
   }
 
   .canvas-panel {

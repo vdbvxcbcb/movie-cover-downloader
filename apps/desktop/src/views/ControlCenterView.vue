@@ -114,7 +114,20 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
 
 <style scoped>
 .control-center-actions {
+  flex: 1 1 560px;
+  min-width: 0;
+  max-width: 100%;
   justify-content: flex-end;
+}
+
+.control-center-actions :deep(.action-btn) {
+  flex: 0 1 auto;
+}
+
+@media (max-width: 1380px) {
+  .control-center-actions {
+    justify-content: flex-start;
+  }
 }
 </style>
 
