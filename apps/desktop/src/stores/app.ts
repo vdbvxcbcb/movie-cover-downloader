@@ -237,6 +237,17 @@ function isSameTaskTarget(task: TaskItem, draft: TaskDraft) {
   );
 }
 
+function isSameSelectedPhotoTaskTarget(task: TaskItem, draft: TaskDraft) {
+  if (!task.target.selectedImages?.length || !draft.selectedImages?.length) {
+    return false;
+  }
+
+  return (
+    normalizeComparableDetailUrl(task.target.detailUrl) === normalizeComparableDetailUrl(draft.detailUrl) &&
+    task.target.doubanAssetType === draft.doubanAssetType
+  );
+}
+
 // 找出任务真正生成的子输出目录；如果只是输出根目录则拒绝作为删除目标。
 function getTaskGeneratedOutputDirectory(task: TaskItem) {
   const directoryPath = task.outputDirectory ?? task.download?.directory;
@@ -913,6 +924,24 @@ export const useAppStore = defineStore("app", () => {
   }
 
   // 删除/清空队列只需要避开仍在真实执行的任务；已进入 paused 的任务允许取消并清理。
+  function findSelectedPhotoReplacementTasks(drafts: TaskDraft[]) {
+    const replacementTaskIds = new Set<string>();
+    const replacementTasks: TaskItem[] = [];
+
+    for (const draft of drafts) {
+      if (!draft.selectedImages?.length) continue;
+
+      for (const task of tasks.value) {
+        if (!isSameSelectedPhotoTaskTarget(task, draft) || replacementTaskIds.has(task.id)) continue;
+
+        replacementTaskIds.add(task.id);
+        replacementTasks.push(task);
+      }
+    }
+
+    return replacementTasks;
+  }
+
   const queueHasActiveDownloads = computed(() =>
     activeTaskIds.value.some((taskId) => {
       const task = getTaskById(taskId);
@@ -1390,6 +1419,9 @@ export const useAppStore = defineStore("app", () => {
     await withPending("queue.create-task", async () => {
       syncCreateTaskOutputRootDir(drafts[0]?.outputRootDir ?? createTaskOutputRootDir.value);
       const replacementTaskIds = new Set(options.replacementTaskIds ?? []);
+      for (const task of findSelectedPhotoReplacementTasks(drafts)) {
+        replacementTaskIds.add(task.id);
+      }
       const replacementTasks = tasks.value.filter((task) => replacementTaskIds.has(task.id));
       const replacementOutputDirectories = replacementTasks.flatMap((task) => {
         const outputDirectory = getTaskGeneratedOutputDirectory(task);

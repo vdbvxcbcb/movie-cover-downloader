@@ -546,6 +546,59 @@ test("豆瓣任务在保护模式下串行执行", async () => {
   assert.equal(started.length, 2);
 });
 
+test("selected photo tasks replace older task with same douban subject and category", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  const clearedTaskIds: string[][] = [];
+  const selectedImage = {
+    id: "selected-1",
+    source: "douban" as const,
+    title: "selected still",
+    imageUrl: "https://img.example.com/selected-1.jpg",
+    category: "still" as const,
+    doubanAssetType: "still" as const,
+    orientation: "horizontal" as const,
+  };
+  const oldDraft = createDraft({
+    doubanAssetType: "still",
+    selectedImages: [selectedImage],
+    selectedPhotoTitle: "Short Title",
+  });
+  const newDraft = createDraft({
+    doubanAssetType: "still",
+    selectedImages: [selectedImage],
+    selectedPhotoTitle: "Short Title Full (2026)",
+  });
+
+  runtimeBridge.clearDownloadTasks = async (taskIds: string[]) => {
+    clearedTaskIds.push(taskIds);
+    return taskIds.length;
+  };
+  runtimeBridge.runSelectedPhotoDownload = async (payload) => {
+    const result = createSuccessResult(payload.selectedImages.length);
+    return {
+      ...result,
+      discovery: {
+        ...result.discovery,
+        detailUrl: payload.detailUrl,
+        imagePageUrl: `${payload.detailUrl}all_photos`,
+        normalizedTitle: payload.selectedPhotoTitle ?? result.discovery.normalizedTitle,
+        images: payload.selectedImages,
+      },
+    };
+  };
+
+  await appStore.createTasks([oldDraft]);
+  await waitFor(() => appStore.tasks[0]?.lifecycle.phase === "completed");
+  const oldTaskId = appStore.tasks[0]!.id;
+
+  await appStore.createTasks([newDraft]);
+
+  assert.deepEqual(clearedTaskIds.at(-1), [oldTaskId]);
+  assert.equal(appStore.tasks.length, 1);
+  assert.notEqual(appStore.tasks[0]?.id, oldTaskId);
+  assert.equal(appStore.tasks[0]?.target.selectedPhotoTitle, "Short Title Full (2026)");
+});
+
 test("scheduler and task list keep FIFO order", async () => {
   const { appStore, runtimeBridge } = await setupStore();
   const oldFirstUrl = "https://movie.douban.com/subject/34780991/";

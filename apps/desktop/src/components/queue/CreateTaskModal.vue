@@ -92,6 +92,29 @@ let titleResolveRevision = 0;
 let selectedPhotoClickTimer: number | null = null;
 let selectedPhotoAutoDiscoverTimer: number | null = null;
 const stoppedSelectedDiscoveryTaskIds = new Set<string>();
+const selectedPhotoGridRef = ref<HTMLElement | null>(null);
+const selectedPhotoDragThreshold = 6;
+const selectedPhotoDragState = ref<{
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  initialSelectedIds: Set<string>;
+  selecting: boolean;
+} | null>(null);
+const selectedPhotoDragBox = ref<{ left: number; top: number; width: number; height: number } | null>(null);
+const suppressNextSelectedPhotoClick = ref(false);
+
+function pickMoreCompleteTitle(currentTitle: string, nextTitle?: string | null) {
+  const normalizedNextTitle = nextTitle?.trim();
+  if (!normalizedNextTitle) return currentTitle;
+
+  const normalizedCurrentTitle = currentTitle.trim();
+  if (!normalizedCurrentTitle || normalizedNextTitle.includes(normalizedCurrentTitle)) {
+    return normalizedNextTitle;
+  }
+
+  return normalizedNextTitle.length > normalizedCurrentTitle.length ? normalizedNextTitle : currentTitle;
+}
 
 function createSelectedPhotoDiscoveryState() {
   return selectedPhotoAssetTypes.reduce(
@@ -254,9 +277,8 @@ onBeforeUnmount(() => {
   if (titleResolveTimer !== null) {
     window.clearTimeout(titleResolveTimer);
   }
-  if (selectedPhotoClickTimer !== null) {
-    window.clearTimeout(selectedPhotoClickTimer);
-  }
+  clearSelectedPhotoClickTimer();
+  cancelSelectedPhotoDrag();
   clearSelectedPhotoAutoDiscoverTimer();
   void stopSelectedPhotoDiscovery();
   document.removeEventListener("keydown", handleSelectedPhotoPreviewKeydown);
@@ -367,6 +389,17 @@ const showSelectedPhotoGridLoading = computed(
     filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value,
 );
 const selectedPhotoPreviewItems = computed(() => selectedPhotos.value);
+const isSelectedPhotoDragSelecting = computed(() => Boolean(selectedPhotoDragState.value?.selecting));
+const selectedPhotoDragBoxStyle = computed(() => {
+  const box = selectedPhotoDragBox.value;
+  if (!box) return {};
+  return {
+    left: `${box.left}px`,
+    top: `${box.top}px`,
+    width: `${box.width}px`,
+    height: `${box.height}px`,
+  };
+});
 const activeSelectedPhotoPreview = computed(() => {
   const index = selectedPhotoPreviewIndex.value;
   return index === null ? null : selectedPhotoPreviewItems.value[index] ?? null;
@@ -465,10 +498,7 @@ function closeSelectedPhotoPreview() {
 }
 
 function openSelectedPhotoPreview(photoId: string) {
-  if (selectedPhotoClickTimer !== null) {
-    window.clearTimeout(selectedPhotoClickTimer);
-    selectedPhotoClickTimer = null;
-  }
+  clearSelectedPhotoClickTimer();
 
   const index = selectedPhotoPreviewItems.value.findIndex((photo) => photo.id === photoId);
   if (index >= 0) {
@@ -621,7 +651,7 @@ function isCurrentSelectedPhotoSubject(subjectUrl: string) {
 }
 
 function applySelectedPhotoPreview(preview: { title?: string; coverUrl?: string; coverDataUrl?: string }) {
-  selectedPhotoTitle.value = selectedPhotoTitle.value || preview.title || "";
+  selectedPhotoTitle.value = pickMoreCompleteTitle(selectedPhotoTitle.value, preview.title);
   selectedPhotoCoverUrl.value = selectedPhotoCoverUrl.value || preview.coverUrl || "";
   selectedPhotoCoverDataUrl.value = selectedPhotoCoverDataUrl.value || preview.coverDataUrl || "";
   selectedPhotoCover.value = selectedPhotoCover.value || selectedPhotoCoverDataUrl.value || selectedPhotoCoverUrl.value || "";
@@ -734,6 +764,7 @@ async function loadNextSelectedPhotoBatch() {
     showAlert(error instanceof Error ? error.message : String(error));
     return;
   }
+  const subjectUrl = getSelectedPhotoSubjectUrl(detailUrl);
 
   const taskId = `selected-discovery-${Date.now()}`;
   selectedDiscoveryTaskId.value = taskId;
@@ -754,7 +785,8 @@ async function loadNextSelectedPhotoBatch() {
       cursor: selectedPhotoDiscoveryByAsset.value[doubanAssetType].cursor,
       batchSize: selectedPhotoRenderBatchSize,
     });
-    selectedPhotoTitle.value = selectedPhotoTitle.value || discovery.normalizedTitle;
+    selectedPhotoTitle.value = pickMoreCompleteTitle(selectedPhotoTitle.value, discovery.normalizedTitle);
+    appStore.upsertCreateTaskMoviePreview(subjectUrl, { title: selectedPhotoTitle.value });
     mergeSelectedDiscoveredPhotos(discovery.images);
     selectedPhotoDiscoveryByAsset.value = {
       ...selectedPhotoDiscoveryByAsset.value,
@@ -804,7 +836,121 @@ function toggleSelectedPhoto(photoId: string) {
   );
 }
 
+function clearSelectedPhotoClickTimer() {
+  if (selectedPhotoClickTimer === null) return;
+  window.clearTimeout(selectedPhotoClickTimer);
+  selectedPhotoClickTimer = null;
+}
+
+function getSelectedPhotoDragBox(event: PointerEvent, grid: HTMLElement) {
+  const gridRect = grid.getBoundingClientRect();
+  const left = Math.min(selectedPhotoDragState.value!.startClientX, event.clientX);
+  const top = Math.min(selectedPhotoDragState.value!.startClientY, event.clientY);
+  const right = Math.max(selectedPhotoDragState.value!.startClientX, event.clientX);
+  const bottom = Math.max(selectedPhotoDragState.value!.startClientY, event.clientY);
+
+  selectedPhotoDragBox.value = {
+    left: left - gridRect.left + grid.scrollLeft,
+    top: top - gridRect.top + grid.scrollTop,
+    width: right - left,
+    height: bottom - top,
+  };
+
+  return { left, top, right, bottom };
+}
+
+function rectsIntersect(a: { left: number; top: number; right: number; bottom: number }, b: DOMRect) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function updateSelectedPhotoDrag(event: PointerEvent) {
+  const dragState = selectedPhotoDragState.value;
+  const grid = selectedPhotoGridRef.value;
+  if (!dragState || !grid) return;
+
+  const box = getSelectedPhotoDragBox(event, grid);
+  const hitIds = new Set<string>();
+  grid.querySelectorAll<HTMLElement>(".selected-photo-card[data-selected-photo-id]").forEach((card) => {
+    const photoId = card.dataset.selectedPhotoId;
+    if (photoId && rectsIntersect(box, card.getBoundingClientRect())) {
+      hitIds.add(photoId);
+    }
+  });
+
+  selectedPhotos.value = selectedPhotos.value.map((photo) => {
+    const selected = dragState.initialSelectedIds.has(photo.id) || hitIds.has(photo.id);
+    return photo.selected === selected ? photo : { ...photo, selected };
+  });
+}
+
+function handleSelectedPhotoGridPointerDown(event: PointerEvent) {
+  if (event.button !== 0 || !event.isPrimary) return;
+  const grid = selectedPhotoGridRef.value;
+  if (!grid) return;
+
+  selectedPhotoDragState.value = {
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    initialSelectedIds: new Set(selectedPhotos.value.filter((photo) => photo.selected).map((photo) => photo.id)),
+    selecting: false,
+  };
+  selectedPhotoDragBox.value = null;
+  grid.setPointerCapture(event.pointerId);
+}
+
+function handleSelectedPhotoGridPointerMove(event: PointerEvent) {
+  const dragState = selectedPhotoDragState.value;
+  if (!dragState || dragState.pointerId !== event.pointerId) return;
+
+  const distance = Math.hypot(event.clientX - dragState.startClientX, event.clientY - dragState.startClientY);
+  if (!dragState.selecting && distance < selectedPhotoDragThreshold) return;
+  if (!dragState.selecting) {
+    clearSelectedPhotoClickTimer();
+    dragState.selecting = true;
+  }
+
+  event.preventDefault();
+  updateSelectedPhotoDrag(event);
+}
+
+function finishSelectedPhotoDrag(event: PointerEvent) {
+  const dragState = selectedPhotoDragState.value;
+  const grid = selectedPhotoGridRef.value;
+  if (!dragState || dragState.pointerId !== event.pointerId) return;
+
+  if (dragState.selecting) {
+    event.preventDefault();
+    suppressNextSelectedPhotoClick.value = true;
+    window.setTimeout(() => {
+      suppressNextSelectedPhotoClick.value = false;
+    }, 0);
+    updateSelectedPhotoDrag(event);
+  }
+
+  if (grid?.hasPointerCapture(event.pointerId)) {
+    grid.releasePointerCapture(event.pointerId);
+  }
+  selectedPhotoDragState.value = null;
+  selectedPhotoDragBox.value = null;
+}
+
+function cancelSelectedPhotoDrag(event?: PointerEvent) {
+  const dragState = selectedPhotoDragState.value;
+  const grid = selectedPhotoGridRef.value;
+  if (event && dragState && dragState.pointerId !== event.pointerId) return;
+  if (event && grid?.hasPointerCapture(event.pointerId)) {
+    grid.releasePointerCapture(event.pointerId);
+  }
+  selectedPhotoDragState.value = null;
+  selectedPhotoDragBox.value = null;
+}
+
 function handleSelectedPhotoClick(photoId: string) {
+  if (suppressNextSelectedPhotoClick.value) {
+    suppressNextSelectedPhotoClick.value = false;
+    return;
+  }
   if (selectedPhotoClickTimer !== null) {
     window.clearTimeout(selectedPhotoClickTimer);
   }
@@ -859,6 +1005,7 @@ function submitSelectedPhotoDownload() {
   const selectedImages = selectedPhotos.value
     .filter((photo) => photo.selected)
     .map(({ selected: _selected, previewDataUrl: _previewDataUrl, ...photo }) => photo);
+  const selectedPhotoAssetType = selectedImages[0]?.doubanAssetType ?? selectedPhotoFilter.value;
   if (selectedImages.length === 0) {
     showAlert("请先勾选需要下载的图片。");
     return;
@@ -873,7 +1020,7 @@ function submitSelectedPhotoDownload() {
     detailUrl,
     outputRootDir: form.outputRootDir.trim(),
     sourceHint: "auto",
-    doubanAssetType: "still",
+    doubanAssetType: selectedPhotoAssetType,
     imageCountMode: "limited",
     maxImages: selectedImages.length,
     outputImageFormat: form.outputImageFormat,
@@ -1316,8 +1463,15 @@ function cancelReplacementSubmit() {
           <div v-if="discoveringSelectedPhotos && filteredSelectedPhotos.length === 0" class="selected-download__empty">正在解析当前分类，发现后会立即显示...</div>
           <div
             v-else-if="filteredSelectedPhotos.length"
+            ref="selectedPhotoGridRef"
             class="selected-photo-grid"
+            :class="{ 'selected-photo-grid--selecting': isSelectedPhotoDragSelecting }"
             @scroll="handleSelectedPhotoGridScroll"
+            @pointerdown="handleSelectedPhotoGridPointerDown"
+            @pointermove="handleSelectedPhotoGridPointerMove"
+            @pointerup="finishSelectedPhotoDrag"
+            @pointercancel="cancelSelectedPhotoDrag"
+            @lostpointercapture="cancelSelectedPhotoDrag"
           >
             <button
               v-for="photo in visibleSelectedPhotos"
@@ -1325,8 +1479,10 @@ function cancelReplacementSubmit() {
               type="button"
               class="selected-photo-card"
               :class="{ 'selected-photo-card--selected': photo.selected }"
+              :data-selected-photo-id="photo.id"
               @click="handleSelectedPhotoClick(photo.id)"
               @dblclick.stop="openSelectedPhotoPreview(photo.id)"
+              @dragstart.prevent
             >
               <span class="selected-photo-card__checkbox" :class="{ 'selected-photo-card__checkbox--checked': photo.selected }" aria-hidden="true"></span>
               <span class="selected-photo-card__tag">{{ formatSelectedPhotoCategory(photo) }}</span>
@@ -1361,6 +1517,12 @@ function cancelReplacementSubmit() {
               </span>
               <span>继续解析中...</span>
             </div>
+            <span
+              v-if="selectedPhotoDragBox"
+              class="selected-photo-grid__selection"
+              :style="selectedPhotoDragBoxStyle"
+              aria-hidden="true"
+            ></span>
           </div>
           <div v-else class="selected-download__empty">
             {{ selectedPhotoCurrentFilterDone ? "该分类暂无可下载图片" : "输入链接后解析当前分类图片" }}
@@ -1692,6 +1854,7 @@ function cancelReplacementSubmit() {
 }
 
 .selected-photo-grid {
+  position: relative;
   grid-row: 4;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(clamp(118px, 10vw, 138px), 1fr));
@@ -1705,6 +1868,21 @@ function cancelReplacementSubmit() {
   overscroll-behavior: contain;
   padding: 2px 4px 8px 2px;
   scrollbar-gutter: stable;
+  user-select: none;
+}
+
+.selected-photo-grid--selecting {
+  cursor: crosshair;
+}
+
+.selected-photo-grid__selection {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  border: 1px solid rgba(77, 212, 198, 0.88);
+  border-radius: 8px;
+  background: rgba(77, 212, 198, 0.16);
+  box-shadow: 0 0 0 1px rgba(3, 17, 19, 0.28);
 }
 
 .selected-photo-grid__loading {
@@ -1734,6 +1912,7 @@ function cancelReplacementSubmit() {
   border: 1px solid rgba(255, 255, 255, 0.07);
   background: rgba(7, 23, 27, 0.92);
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background 160ms ease;
+  user-select: none;
 }
 
 .selected-photo-card:hover {
@@ -2342,7 +2521,7 @@ function cancelReplacementSubmit() {
   }
 
   .selected-photo-grid {
-    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
     gap: 10px;
   }
 

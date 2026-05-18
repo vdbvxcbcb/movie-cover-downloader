@@ -26,8 +26,7 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
 <template>
   <div class="view-stack">
     <PanelSection eyebrow="Control Center" title="控制中心">
-      <template #aside>
-        <div class="topbar__actions control-center-actions">
+      <div class="topbar__actions control-center-actions">
           <ActionButton
             class="control-center-actions__import"
             label="1、导入Cookie"
@@ -52,8 +51,7 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
             :disabled="disableClearQueue"
             @confirm="void appStore.clearQueueTasks()"
           />
-        </div>
-      </template>
+      </div>
 
       <div class="control-toolbar">
         <div class="control-pill">
@@ -114,20 +112,22 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
 
 <style scoped>
 .control-center-actions {
-  flex: 1 1 560px;
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
-  justify-content: flex-end;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  margin-bottom: 18px;
+  overflow-x: auto;
 }
 
 .control-center-actions :deep(.action-btn) {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  font-size: 16px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
-@media (max-width: 1380px) {
-  .control-center-actions {
-    justify-content: flex-start;
-  }
-}
 </style>
 
