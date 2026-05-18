@@ -225,7 +225,9 @@ function normalizeComparablePath(path: string) {
 }
 
 function isSameTaskTarget(task: TaskItem, draft: TaskDraft) {
-  if (task.target.selectedImages?.length || draft.selectedImages?.length) {
+  const taskIsSelectedPhoto = Boolean(task.target.selectedImages?.length);
+  const draftIsSelectedPhoto = Boolean(draft.selectedImages?.length);
+  if (taskIsSelectedPhoto !== draftIsSelectedPhoto) {
     return false;
   }
 
@@ -234,17 +236,6 @@ function isSameTaskTarget(task: TaskItem, draft: TaskDraft) {
     normalizeComparablePath(task.target.outputRootDir) === normalizeComparablePath(draft.outputRootDir) &&
     task.target.doubanAssetType === draft.doubanAssetType &&
     task.target.imageAspectRatio === draft.imageAspectRatio
-  );
-}
-
-function isSameSelectedPhotoTaskTarget(task: TaskItem, draft: TaskDraft) {
-  if (!task.target.selectedImages?.length || !draft.selectedImages?.length) {
-    return false;
-  }
-
-  return (
-    normalizeComparableDetailUrl(task.target.detailUrl) === normalizeComparableDetailUrl(draft.detailUrl) &&
-    task.target.doubanAssetType === draft.doubanAssetType
   );
 }
 
@@ -913,33 +904,15 @@ export const useAppStore = defineStore("app", () => {
     const duplicateTasks: TaskItem[] = [];
 
     for (const draft of drafts) {
-      const duplicateTask = tasks.value.find((task) => isSameTaskTarget(task, draft));
-      if (!duplicateTask || duplicateTaskIds.has(duplicateTask.id)) continue;
-
-      duplicateTaskIds.add(duplicateTask.id);
-      duplicateTasks.push(duplicateTask);
-    }
-
-    return duplicateTasks;
-  }
-
-  // 删除/清空队列只需要避开仍在真实执行的任务；已进入 paused 的任务允许取消并清理。
-  function findSelectedPhotoReplacementTasks(drafts: TaskDraft[]) {
-    const replacementTaskIds = new Set<string>();
-    const replacementTasks: TaskItem[] = [];
-
-    for (const draft of drafts) {
-      if (!draft.selectedImages?.length) continue;
-
       for (const task of tasks.value) {
-        if (!isSameSelectedPhotoTaskTarget(task, draft) || replacementTaskIds.has(task.id)) continue;
+        if (!isSameTaskTarget(task, draft) || duplicateTaskIds.has(task.id)) continue;
 
-        replacementTaskIds.add(task.id);
-        replacementTasks.push(task);
+        duplicateTaskIds.add(task.id);
+        duplicateTasks.push(task);
       }
     }
 
-    return replacementTasks;
+    return duplicateTasks;
   }
 
   const queueHasActiveDownloads = computed(() =>
@@ -1419,9 +1392,6 @@ export const useAppStore = defineStore("app", () => {
     await withPending("queue.create-task", async () => {
       syncCreateTaskOutputRootDir(drafts[0]?.outputRootDir ?? createTaskOutputRootDir.value);
       const replacementTaskIds = new Set(options.replacementTaskIds ?? []);
-      for (const task of findSelectedPhotoReplacementTasks(drafts)) {
-        replacementTaskIds.add(task.id);
-      }
       const replacementTasks = tasks.value.filter((task) => replacementTaskIds.has(task.id));
       const replacementOutputDirectories = replacementTasks.flatMap((task) => {
         const outputDirectory = getTaskGeneratedOutputDirectory(task);

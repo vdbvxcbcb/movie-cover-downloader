@@ -546,7 +546,7 @@ test("豆瓣任务在保护模式下串行执行", async () => {
   assert.equal(started.length, 2);
 });
 
-test("selected photo tasks replace older task with same douban subject and category", async () => {
+test("selected photo tasks can replace older task with same link output category and ratio", async () => {
   const { appStore, runtimeBridge } = await setupStore();
   const clearedTaskIds: string[][] = [];
   const selectedImage = {
@@ -590,13 +590,111 @@ test("selected photo tasks replace older task with same douban subject and categ
   await appStore.createTasks([oldDraft]);
   await waitFor(() => appStore.tasks[0]?.lifecycle.phase === "completed");
   const oldTaskId = appStore.tasks[0]!.id;
+  await appStore.createTasks([oldDraft]);
+  await waitFor(() => appStore.tasks.length === 2 && appStore.tasks.every((task) => task.lifecycle.phase === "completed"));
+  const secondOldTaskId = appStore.tasks.find((task) => task.id !== oldTaskId)!.id;
+  const duplicateTasks = appStore.findDuplicateTasksForDrafts([newDraft]);
 
-  await appStore.createTasks([newDraft]);
+  assert.deepEqual(
+    appStore.findDuplicateTasksForDrafts([
+      createDraft({
+        doubanAssetType: "still",
+        outputRootDir: "D:/other-cover",
+        selectedImages: [selectedImage],
+        selectedPhotoTitle: "Short Title Full (2026)",
+      }),
+    ]),
+    [],
+  );
+  assert.deepEqual(
+    appStore.findDuplicateTasksForDrafts([
+      createDraft({
+        doubanAssetType: "still",
+        imageAspectRatio: "3:4",
+        selectedImages: [selectedImage],
+        selectedPhotoTitle: "Short Title Full (2026)",
+      }),
+    ]),
+    [],
+  );
+  assert.deepEqual(duplicateTasks.map((task) => task.id), [oldTaskId, secondOldTaskId]);
 
-  assert.deepEqual(clearedTaskIds.at(-1), [oldTaskId]);
+  await appStore.createTasks([newDraft], { replacementTaskIds: duplicateTasks.map((task) => task.id) });
+
+  assert.deepEqual(clearedTaskIds.at(-1), [oldTaskId, secondOldTaskId]);
   assert.equal(appStore.tasks.length, 1);
   assert.notEqual(appStore.tasks[0]?.id, oldTaskId);
+  assert.notEqual(appStore.tasks[0]?.id, secondOldTaskId);
   assert.equal(appStore.tasks[0]?.target.selectedPhotoTitle, "Short Title Full (2026)");
+});
+
+test("selected photo tasks replace active older task after replacement confirmation", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  const clearedTaskIds: string[][] = [];
+  const selectedImage = {
+    id: "selected-1",
+    source: "douban" as const,
+    title: "selected still",
+    imageUrl: "https://img.example.com/selected-1.jpg",
+    category: "still" as const,
+    doubanAssetType: "still" as const,
+    orientation: "horizontal" as const,
+  };
+  const oldDraft = createDraft({
+    doubanAssetType: "still",
+    selectedImages: [selectedImage],
+    selectedPhotoTitle: "Short Title",
+  });
+  const newDraft = createDraft({
+    doubanAssetType: "still",
+    selectedImages: [selectedImage],
+    selectedPhotoTitle: "Short Title Full (2026)",
+  });
+  const startedTaskIds: string[] = [];
+  let releaseFirstTask: (() => void) | null = null;
+
+  runtimeBridge.clearDownloadTasks = async (taskIds: string[]) => {
+    clearedTaskIds.push(taskIds);
+    return taskIds.length;
+  };
+  runtimeBridge.runSelectedPhotoDownload = async (payload) => {
+    startedTaskIds.push(payload.taskId);
+    if (startedTaskIds.length === 1) {
+      await new Promise<void>((resolve) => {
+        releaseFirstTask = resolve;
+      });
+    }
+
+    const result = createSuccessResult(payload.selectedImages.length);
+    return {
+      ...result,
+      discovery: {
+        ...result.discovery,
+        detailUrl: payload.detailUrl,
+        imagePageUrl: `${payload.detailUrl}all_photos`,
+        normalizedTitle: payload.selectedPhotoTitle ?? result.discovery.normalizedTitle,
+        images: payload.selectedImages,
+      },
+    };
+  };
+
+  await appStore.createTasks([oldDraft]);
+  await waitFor(() => startedTaskIds.length === 1);
+  const oldTaskId = appStore.tasks[0]!.id;
+
+  const duplicateTasks = appStore.findDuplicateTasksForDrafts([newDraft]);
+  assert.deepEqual(duplicateTasks.map((task) => task.id), [oldTaskId]);
+
+  await appStore.createTasks([newDraft], { replacementTaskIds: [oldTaskId] });
+
+  assert.deepEqual(clearedTaskIds, [[oldTaskId]]);
+  assert.equal(appStore.tasks.length, 1);
+  assert.notEqual(appStore.tasks[0]?.id, oldTaskId);
+  assert.equal(appStore.activeTaskIds.includes(oldTaskId), false);
+
+  releaseFirstTask?.();
+
+  await waitFor(() => appStore.tasks.every((task) => task.lifecycle.phase === "completed"));
 });
 
 test("scheduler and task list keep FIFO order", async () => {

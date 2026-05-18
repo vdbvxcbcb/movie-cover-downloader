@@ -1005,18 +1005,13 @@ async function stopSelectedPhotoDiscovery(markDone = false) {
   }
 }
 
-async function confirmSelectedPhotoDownload() {
-  void stopSelectedPhotoDiscovery(true);
-  submitSelectedPhotoDownload();
-}
-
-function submitSelectedPhotoDownload() {
+function buildSelectedPhotoDraft(): TaskDraft | null {
   let detailUrl = "";
   try {
     detailUrl = normalizeSelectedPhotoUrl(selectedPhotoLink.value);
   } catch (error) {
     showAlert(error instanceof Error ? error.message : String(error));
-    return;
+    return null;
   }
 
   const selectedImages = selectedPhotos.value
@@ -1025,15 +1020,15 @@ function submitSelectedPhotoDownload() {
   const selectedPhotoAssetType = selectedImages[0]?.doubanAssetType ?? selectedPhotoFilter.value;
   if (selectedImages.length === 0) {
     showAlert("请先勾选需要下载的图片。");
-    return;
+    return null;
   }
 
   if (!form.outputRootDir.trim()) {
     showAlert("请先填写输出目录。");
-    return;
+    return null;
   }
 
-  const draft: TaskDraft = {
+  return {
     detailUrl,
     outputRootDir: form.outputRootDir.trim(),
     sourceHint: "auto",
@@ -1048,9 +1043,27 @@ function submitSelectedPhotoDownload() {
     selectedImages,
     selectedPhotoTitle: selectedPhotoTitle.value || undefined,
   };
+}
 
+async function prepareSelectedPhotoDownload() {
+  const draft = buildSelectedPhotoDraft();
+  if (!draft) {
+    return false;
+  }
+
+  const duplicateTasks = appStore.findDuplicateTasksForDrafts([draft]);
+  if (duplicateTasks.length === 0) {
+    clearAlert();
+    void stopSelectedPhotoDiscovery(true);
+    emit("submit", [draft]);
+    return false;
+  }
+
+  replacementConfirmTitle.value = "列表中任务已存在，是否覆盖目录并替换图片？";
+  pendingReplacementDrafts.value = [draft];
+  pendingReplacementTaskIds.value = Array.from(new Set(duplicateTasks.map((task) => task.id)));
   clearAlert();
-  emit("submit", [draft]);
+  return true;
 }
 
 // 阻止 e、正负号、小数点等非整数输入进入数量输入框。
@@ -1171,6 +1184,9 @@ async function prepareSubmit() {
 
 function confirmReplacementSubmit() {
   clearAlert();
+  if (activeMode.value === "selected") {
+    void stopSelectedPhotoDiscovery(true);
+  }
   emit("submit", pendingReplacementDrafts.value, pendingReplacementTaskIds.value);
   pendingReplacementDrafts.value = [];
   pendingReplacementTaskIds.value = [];
@@ -1587,12 +1603,14 @@ function cancelReplacementSubmit() {
             <PopConfirmAction
               :label="selectedPhotoDownloadLabel"
               variant="primary"
-              title="是否下载选中的所有图片，不再解析？"
-              confirm-label="下载"
+              :title="replacementConfirmTitle"
+              confirm-label="确认"
               cancel-label="取消"
               bubble-size="normal"
               :disabled="selectedPhotoCount === 0"
-              @confirm="void confirmSelectedPhotoDownload()"
+              :before-open="prepareSelectedPhotoDownload"
+              @confirm="confirmReplacementSubmit"
+              @cancel="cancelReplacementSubmit"
             />
           </div>
         </section>
