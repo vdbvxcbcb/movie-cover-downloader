@@ -24,6 +24,7 @@ import {
   normalizeDetailUrlsInput,
   validateTaskDraftInput,
 } from "../../lib/task-draft-input";
+import { isDoubanEmptyCategoryMessage } from "../../lib/douban-empty-category";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 import { useAppStore } from "../../stores/app";
 
@@ -766,8 +767,20 @@ async function loadNextSelectedPhotoBatch() {
       showAlert("没有解析到可下载图片。");
     }
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     if (!stoppedSelectedDiscoveryTaskIds.has(taskId)) {
-      showAlert(`解析图片失败：${error instanceof Error ? error.message : String(error)}`);
+      if (isDoubanEmptyCategoryMessage(message)) {
+        selectedPhotoDiscoveryByAsset.value = {
+          ...selectedPhotoDiscoveryByAsset.value,
+          [doubanAssetType]: {
+            cursor: null,
+            done: true,
+          },
+        };
+        showAlert("没有解析到可下载图片。");
+      } else {
+        showAlert(`解析图片失败：${message}`);
+      }
     }
   } finally {
     if (selectedDiscoveryTaskId.value === taskId) {
@@ -1350,7 +1363,7 @@ function cancelReplacementSubmit() {
             </div>
           </div>
           <div v-else class="selected-download__empty">
-            {{ discoveringSelectedPhotos ? "当前分类还没有图片，继续解析中..." : "输入链接后解析当前分类图片" }}
+            {{ selectedPhotoCurrentFilterDone ? "该分类暂无可下载图片" : "输入链接后解析当前分类图片" }}
           </div>
         </section>
 

@@ -692,6 +692,7 @@ const creationDrag = reactive({
 
 const selectedLayout = computed(() => layoutPresets.find((layout) => layout.id === selectedLayoutId.value) ?? layoutPresets[0]);
 const visibleCells = computed(() => selectedLayout.value.cells);
+const shouldContainSlotImages = computed(() => settings.ratio === "1:1" && selectedLayout.value.count === 1);
 const groupedLayouts = computed(() =>
   Array.from({ length: 9 }, (_, index) => ({
     count: index + 1,
@@ -1744,6 +1745,7 @@ function cellStyle(cell: LayoutCell) {
 
 function imageStyle(image: SlotImage) {
   return {
+    objectFit: shouldContainSlotImages.value ? ("scale-down" as const) : ("cover" as const),
     opacity: String(image.opacity / 100),
     transform: `scale(${image.scale})`,
   };
@@ -1810,6 +1812,63 @@ function drawCoverImage(
   context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
 }
 
+function getScaleDownImageRect(
+  image: HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  scale = 1,
+  exportScaleX = 1,
+  exportScaleY = 1,
+) {
+  const drawScale = Math.max(scale, 0.01);
+  const previewWidth = width / Math.max(exportScaleX, 0.01);
+  const previewHeight = height / Math.max(exportScaleY, 0.01);
+  const fitScale = Math.min(1, previewWidth / image.naturalWidth, previewHeight / image.naturalHeight);
+  const drawWidth = image.naturalWidth * fitScale * drawScale * exportScaleX;
+  const drawHeight = image.naturalHeight * fitScale * drawScale * exportScaleY;
+  return {
+    x: x + (width - drawWidth) / 2,
+    y: y + (height - drawHeight) / 2,
+    width: drawWidth,
+    height: drawHeight,
+  };
+}
+
+function paintOutsideContainedImage(
+  context: CanvasRenderingContext2D,
+  imageRect: { x: number; y: number; width: number; height: number },
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  fillStyle: string | null,
+) {
+  const imageLeft = clamp(imageRect.x, x, x + width);
+  const imageTop = clamp(imageRect.y, y, y + height);
+  const imageRight = clamp(imageRect.x + imageRect.width, x, x + width);
+  const imageBottom = clamp(imageRect.y + imageRect.height, y, y + height);
+  const topHeight = Math.max(0, imageTop - y);
+  const bottomHeight = Math.max(0, y + height - imageBottom);
+  const middleHeight = Math.max(0, imageBottom - imageTop);
+  const leftWidth = Math.max(0, imageLeft - x);
+  const rightWidth = Math.max(0, x + width - imageRight);
+  const paintRect = fillStyle
+    ? (rectX: number, rectY: number, rectWidth: number, rectHeight: number) => {
+        context.fillStyle = fillStyle;
+        context.fillRect(rectX, rectY, rectWidth, rectHeight);
+      }
+    : (rectX: number, rectY: number, rectWidth: number, rectHeight: number) => {
+        context.clearRect(rectX, rectY, rectWidth, rectHeight);
+      };
+
+  if (topHeight > 0) paintRect(x, y, width, topHeight);
+  if (bottomHeight > 0) paintRect(x, imageBottom, width, bottomHeight);
+  if (leftWidth > 0 && middleHeight > 0) paintRect(x, imageTop, leftWidth, middleHeight);
+  if (rightWidth > 0 && middleHeight > 0) paintRect(imageRight, imageTop, rightWidth, middleHeight);
+}
+
 async function renderCanvas(format: OutputFormat) {
   const { width, height } = getExportSize();
   const canvas = document.createElement("canvas");
@@ -1842,6 +1901,8 @@ async function renderCanvas(format: OutputFormat) {
   const innerY = borderTop;
   const innerWidth = Math.max(1, width - borderLeft - borderRight);
   const innerHeight = Math.max(1, height - borderTop - borderBottom);
+  const shouldDrawContainImages = shouldContainSlotImages.value;
+  const shouldPaintContainedPadding = shouldDrawContainImages && !backgroundImage;
 
   for (const [index, cell] of visibleCells.value.entries()) {
     const slotImage = slotImages.value[index];
@@ -1856,8 +1917,17 @@ async function renderCanvas(format: OutputFormat) {
 
     if (slotImage) {
       const image = await loadImage(slotImage.url);
-      context.globalAlpha = slotImage.opacity / 100;
-      drawCoverImage(context, image, x, y, cellWidth, cellHeight, slotImage.scale);
+      if (shouldDrawContainImages) {
+        const imageRect = getScaleDownImageRect(image, x, y, cellWidth, cellHeight, slotImage.scale, scaleX, scaleY);
+        if (shouldPaintContainedPadding) {
+          paintOutsideContainedImage(context, imageRect, x, y, cellWidth, cellHeight, format === "jpg" ? "#ffffff" : null);
+        }
+        context.globalAlpha = slotImage.opacity / 100;
+        context.drawImage(image, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
+      } else {
+        context.globalAlpha = slotImage.opacity / 100;
+        drawCoverImage(context, image, x, y, cellWidth, cellHeight, slotImage.scale);
+      }
       context.globalAlpha = 1;
     } else {
       context.fillStyle = "rgba(255, 255, 255, 0.05)";
@@ -1875,7 +1945,7 @@ async function renderCanvas(format: OutputFormat) {
 
   drawAnnotations(context, width, height);
 
-  return new Promise<Blob>((resolve, reject) => {
+  const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
         if (blob) resolve(blob);
@@ -1885,6 +1955,7 @@ async function renderCanvas(format: OutputFormat) {
       0.92,
     );
   });
+  return { blob, format };
 }
 
 function drawAnnotations(context: CanvasRenderingContext2D, width: number, height: number) {
@@ -2015,16 +2086,16 @@ async function exportImage(format: OutputFormat) {
   clearSavedOutputPath();
   try {
     await nextTick();
-    const blob = await renderCanvas(format);
+    const { blob, format: savedFormat } = await renderCanvas(format);
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const bridge = runtimeBridge as ProcessBridge;
     if (!bridge.saveProcessedImage) {
       throw new Error("runtimeBridge.saveProcessedImage 尚未实现。");
     }
 
-    const outputPath = await bridge.saveProcessedImage(localOutputRootDir.value.trim(), buildFileName(format), bytes, format);
+    const outputPath = await bridge.saveProcessedImage(localOutputRootDir.value.trim(), buildFileName(savedFormat), bytes, savedFormat);
     savedOutputPath.value = outputPath;
-    showNotice(`已导出 ${format.toUpperCase()} 图片。`, "success");
+    showNotice(`已导出 ${savedFormat.toUpperCase()} 图片。`, "success");
   } catch (error) {
     showNotice(error instanceof Error ? error.message : String(error), "error");
   } finally {
@@ -2632,15 +2703,16 @@ onBeforeUnmount(() => {
 }
 
 .canvas-panel {
-  display: block;
-  padding: 14px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 14px 14px;
 }
 
 .tool-strip {
-  position: absolute;
-  top: 14px;
-  left: 50%;
+  position: relative;
   z-index: 8;
+  justify-self: center;
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -2652,7 +2724,6 @@ onBeforeUnmount(() => {
   background: rgba(4, 16, 19, 0.72);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(14px);
-  transform: translateX(-50%);
 }
 
 .tool-strip button,
@@ -2689,11 +2760,11 @@ onBeforeUnmount(() => {
 }
 
 .preview-shell {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
   height: 100%;
   min-height: 0;
-  padding-top: 56px;
   overflow: auto;
   border-radius: 16px;
   background:
@@ -2706,7 +2777,9 @@ onBeforeUnmount(() => {
 
 .preview-board {
   position: relative;
+  flex: 0 0 auto;
   width: var(--board-fit-width);
+  margin-block: auto;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
