@@ -566,10 +566,11 @@ test("选图发现会保留大图下载地址并附带可预览 data URL", async
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
   const imageBytes = new Uint8Array([1, 2, 3]);
-  const photoHtml = '<html><img src="https://img1.doubanio.com/view/photo/m/public/p1.webp"></html>';
+  const photoHtml = '<html><img src="http://img1.doubanio.com/view/photo/m/public/p1.webp"></html>';
   const requests: string[] = [];
+  const previewCookies: Array<string | null> = [];
 
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     requests.push(url);
     if (url.endsWith("/subject/34780991/")) {
@@ -585,6 +586,7 @@ test("选图发现会保留大图下载地址并附带可预览 data URL", async
       });
     }
 
+    previewCookies.push(new Headers(init?.headers).get("cookie"));
     return {
       ok: true,
       url,
@@ -609,6 +611,7 @@ test("选图发现会保留大图下载地址并附带可预览 data URL", async
     assert.equal(result.images[0]?.imageUrl, "https://img1.doubanio.com/view/photo/l/public/p1.webp");
     assert.equal(result.images[0]?.previewUrl, "https://img1.doubanio.com/view/photo/m/public/p1.webp");
     assert.equal(result.images[0]?.previewDataUrl, "data:image/webp;base64,AQID");
+    assert.deepEqual(previewCookies, [""]);
     assert.deepEqual(requests, [
       "https://movie.douban.com/subject/34780991/",
       "https://movie.douban.com/subject/34780991/photos?type=W",

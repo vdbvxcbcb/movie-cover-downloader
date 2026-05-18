@@ -193,6 +193,36 @@ test("豆瓣壁纸任务会按 wallpaper 写入文件名而不是 still", async 
   }
 });
 
+test("下载图片请求不会携带豆瓣 Cookie", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcd-downloader-cookie-"));
+  const { logger } = createLogger();
+  const downloader = new DownloaderService(createConfig(), logger);
+  const originalFetch = globalThis.fetch;
+  const seenCookies: Array<string | null> = [];
+
+  globalThis.fetch = async (_input, init) => {
+    seenCookies.push(new Headers(init?.headers).get("cookie"));
+    return new Response(onePixelPng, {
+      status: 200,
+      headers: {
+        "content-type": "image/png",
+      },
+    });
+  };
+
+  try {
+    const discovery = createDiscovery(tempDir);
+    discovery.images = [discovery.images[1]!];
+    const result = await downloader.download(createTask(), discovery, "dbcl2=secret");
+
+    assert.equal(result.saved.length, 1);
+    assert.deepEqual(seenCookies, [""]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("存在 part 文件时会带 Range 请求续传当前图片", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcd-downloader-"));
   const { logger } = createLogger();

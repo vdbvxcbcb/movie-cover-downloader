@@ -136,6 +136,15 @@ function normalizeDoubanSubjectUrl(value: string) {
   return match ? `${match[1]}/` : value;
 }
 
+function normalizeDoubanImageUrl(value: string) {
+  const url = new URL(value);
+  if (!/^img\d+\.doubanio\.com$/i.test(url.hostname) || !url.pathname.includes("/view/photo/")) {
+    throw new Error("selected image url is not a douban image");
+  }
+  url.protocol = "https:";
+  return url.toString();
+}
+
 function parseDiscoveryCursor(): DoubanPhotoDiscoveryCursor | null {
   const raw = process.env.MCD_DISCOVERY_CURSOR;
   if (!raw) return null;
@@ -169,6 +178,8 @@ function parseSelectedImages(): DiscoveredImage[] {
     ...image,
     id: image.id || `selected-${index + 1}`,
     source: "douban",
+    imageUrl: normalizeDoubanImageUrl(image.imageUrl),
+    previewUrl: image.previewUrl ? normalizeDoubanImageUrl(image.previewUrl) : undefined,
   }));
 }
 

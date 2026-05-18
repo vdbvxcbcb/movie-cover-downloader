@@ -392,6 +392,7 @@ export class DownloaderService {
         {
           accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
           referer: image.pageUrl ?? discovery.detailUrl,
+          cookie: "",
         },
       ),
     );

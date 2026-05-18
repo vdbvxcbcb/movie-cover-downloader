@@ -33,6 +33,8 @@ const silentLogger: SidecarLogger = {
   warn: () => undefined,
   error: () => undefined,
 };
+const maxCoverImageBytes = 1_200_000;
+const doubanImageHostPattern = /^img\d+\.doubanio\.com$/i;
 
 // 在 HTML 中从 window.__DATA__ 后面按括号配对提取 JSON，避免简单正则被字符串内容误截断。
 function extractWindowDataJson(html: string) {
@@ -118,16 +120,61 @@ function normalizeSearchItem(item: RawDoubanSearchItem): DoubanSearchResultItem 
   };
 }
 
+function isDoubanCoverUrl(coverUrl: string) {
+  try {
+    const url = new URL(coverUrl);
+    return url.protocol === "https:" && doubanImageHostPattern.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function readCoverBytes(response: Response) {
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (contentLength > maxCoverImageBytes) {
+    return undefined;
+  }
+
+  if (!response.body) {
+    const bytes = await response.arrayBuffer();
+    return bytes.byteLength > maxCoverImageBytes ? undefined : Buffer.from(bytes);
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      total += value.byteLength;
+      if (total > maxCoverImageBytes) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return total === 0 ? undefined : Buffer.concat(chunks, total);
+}
+
 async function fetchCoverDataUrl(coverUrl: string | undefined, config: RuntimeConfig) {
-  if (!coverUrl) return undefined;
+  if (!coverUrl || !isDoubanCoverUrl(coverUrl)) return undefined;
 
   try {
     const response = await fetch(coverUrl, {
       headers: buildHeaders(
-        { config, logger: silentLogger, cookieHeader: config.doubanCookie },
+        { config, logger: silentLogger },
         {
           accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
           referer: "https://search.douban.com/",
+          cookie: "",
         },
       ),
       redirect: "follow",
@@ -137,7 +184,13 @@ async function fetchCoverDataUrl(coverUrl: string | undefined, config: RuntimeCo
     if (!response.ok) return undefined;
 
     const contentType = response.headers.get("content-type") ?? "image/jpeg";
-    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!contentType.split(";")[0]?.trim().toLowerCase().startsWith("image/")) {
+      return undefined;
+    }
+
+    const bytes = await readCoverBytes(response);
+    if (!bytes) return undefined;
+
     return `data:${contentType};base64,${bytes.toString("base64")}`;
   } catch {
     return undefined;

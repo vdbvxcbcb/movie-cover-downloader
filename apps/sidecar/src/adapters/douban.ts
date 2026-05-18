@@ -21,6 +21,7 @@ const doubanTypeMap = {
 const doubanCategoryPageSize = 30;
 const maxDoubanCategoryPages = 1000;
 const maxPreviewImageBytes = 1_200_000;
+const doubanImageHostPattern = /^img\d+\.doubanio\.com$/i;
 const doubanAssetTypeSequence: SidecarTask["doubanAssetType"][] = ["still", "poster", "wallpaper"];
 
 type DoubanPhotoType = keyof typeof doubanTypeMap;
@@ -57,8 +58,23 @@ function buildDoubanCategoryPageUrl(categoryUrl: string, pageIndex: number) {
 }
 
 // 把豆瓣缩略图域名升级成更清晰的大图域名，尽量保存原始质量更高的图片。
+function normalizeDoubanImageUrl(imageUrl: string) {
+  try {
+    const url = new URL(imageUrl);
+    if (!doubanImageHostPattern.test(url.hostname) || !url.pathname.includes("/view/photo/")) {
+      return null;
+    }
+    url.protocol = "https:";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function upgradeDoubanImageUrl(imageUrl: string) {
-  return imageUrl.replace(/\/view\/photo\/[a-z_]+\/public\//i, "/view/photo/l/public/");
+  const normalized = new URL(imageUrl);
+  normalized.pathname = normalized.pathname.replace(/\/view\/photo\/[a-z_]+\/public\//i, "/view/photo/l/public/");
+  return normalized.toString();
 }
 
 function inferPreviewContentType(imageUrl: string, contentType: string | null) {
@@ -74,13 +90,20 @@ function inferPreviewContentType(imageUrl: string, contentType: string | null) {
 }
 
 async function fetchPreviewDataUrl(imageUrl: string, pageUrl: string, context: AdapterContext) {
+  const safeImageUrl = normalizeDoubanImageUrl(imageUrl);
+  if (!safeImageUrl) {
+    return undefined;
+  }
+
   try {
-    const response = await fetch(imageUrl, {
+    const response = await fetch(safeImageUrl, {
       headers: buildHeaders(context, {
         accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         referer: pageUrl,
+        cookie: "",
       }),
       redirect: "follow",
+      signal: AbortSignal.timeout(context.config.requestTimeoutMs),
     });
     if (!response.ok) {
       return undefined;
@@ -96,7 +119,7 @@ async function fetchPreviewDataUrl(imageUrl: string, pageUrl: string, context: A
       return undefined;
     }
 
-    const contentType = inferPreviewContentType(response.url || imageUrl, response.headers.get("content-type"));
+    const contentType = inferPreviewContentType(response.url || safeImageUrl, response.headers.get("content-type"));
     return `data:${contentType};base64,${bytes.toString("base64")}`;
   } catch {
     return undefined;
@@ -178,19 +201,23 @@ function extractDoubanImages(
   offset: number,
 ): DiscoveredImage[] {
   const matches = html.match(/https?:\/\/img\d+\.doubanio\.com\/view\/photo\/[a-z_]+\/public\/[^"')\s]+/gi) ?? [];
-  return dedupeUrls(matches).map((imageUrl, index) => {
+  return dedupeUrls(matches).flatMap((imageUrl, index) => {
+    const previewUrl = normalizeDoubanImageUrl(imageUrl);
+    if (!previewUrl) {
+      return [];
+    }
     const config = doubanTypeMap[type];
-    return {
+    return [{
       id: `douban-${type}-${offset + index + 1}`,
       source: "douban",
       title: `${title} ${config.label} ${offset + index + 1}`,
-      imageUrl: upgradeDoubanImageUrl(imageUrl),
-      previewUrl: imageUrl,
+      imageUrl: upgradeDoubanImageUrl(previewUrl),
+      previewUrl,
       pageUrl,
       category: config.category,
       doubanAssetType: config.doubanAssetType,
       orientation: config.orientation,
-    };
+    }];
   });
 }
 
