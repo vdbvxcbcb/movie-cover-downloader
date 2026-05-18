@@ -90,6 +90,7 @@ const titlePreviewResolveConcurrency = 3;
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
 let selectedPhotoClickTimer: number | null = null;
+let selectedPhotoClickPhotoId: string | null = null;
 let selectedPhotoAutoDiscoverTimer: number | null = null;
 const stoppedSelectedDiscoveryTaskIds = new Set<string>();
 const selectedPhotoGridRef = ref<HTMLElement | null>(null);
@@ -98,11 +99,11 @@ const selectedPhotoDragState = ref<{
   pointerId: number;
   startClientX: number;
   startClientY: number;
+  startPhotoId: string | null;
   initialSelectedIds: Set<string>;
   selecting: boolean;
 } | null>(null);
 const selectedPhotoDragBox = ref<{ left: number; top: number; width: number; height: number } | null>(null);
-const suppressNextSelectedPhotoClick = ref(false);
 
 function pickMoreCompleteTitle(currentTitle: string, nextTitle?: string | null) {
   const normalizedNextTitle = nextTitle?.trim();
@@ -840,6 +841,7 @@ function clearSelectedPhotoClickTimer() {
   if (selectedPhotoClickTimer === null) return;
   window.clearTimeout(selectedPhotoClickTimer);
   selectedPhotoClickTimer = null;
+  selectedPhotoClickPhotoId = null;
 }
 
 function getSelectedPhotoDragBox(event: PointerEvent, grid: HTMLElement) {
@@ -861,6 +863,14 @@ function getSelectedPhotoDragBox(event: PointerEvent, grid: HTMLElement) {
 
 function rectsIntersect(a: { left: number; top: number; right: number; bottom: number }, b: DOMRect) {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function getSelectedPhotoIdFromEventTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement ? (target.closest<HTMLElement>(".selected-photo-card")?.dataset.selectedPhotoId ?? null) : null;
+}
+
+function getSelectedPhotoIdFromPointer(event: PointerEvent) {
+  return getSelectedPhotoIdFromEventTarget(document.elementFromPoint(event.clientX, event.clientY));
 }
 
 function updateSelectedPhotoDrag(event: PointerEvent) {
@@ -892,6 +902,7 @@ function handleSelectedPhotoGridPointerDown(event: PointerEvent) {
     pointerId: event.pointerId,
     startClientX: event.clientX,
     startClientY: event.clientY,
+    startPhotoId: getSelectedPhotoIdFromEventTarget(event.target),
     initialSelectedIds: new Set(selectedPhotos.value.filter((photo) => photo.selected).map((photo) => photo.id)),
     selecting: false,
   };
@@ -921,11 +932,9 @@ function finishSelectedPhotoDrag(event: PointerEvent) {
 
   if (dragState.selecting) {
     event.preventDefault();
-    suppressNextSelectedPhotoClick.value = true;
-    window.setTimeout(() => {
-      suppressNextSelectedPhotoClick.value = false;
-    }, 0);
     updateSelectedPhotoDrag(event);
+  } else if (dragState.startPhotoId && dragState.startPhotoId === getSelectedPhotoIdFromPointer(event)) {
+    handleSelectedPhotoClick(dragState.startPhotoId);
   }
 
   if (grid?.hasPointerCapture(event.pointerId)) {
@@ -947,17 +956,25 @@ function cancelSelectedPhotoDrag(event?: PointerEvent) {
 }
 
 function handleSelectedPhotoClick(photoId: string) {
-  if (suppressNextSelectedPhotoClick.value) {
-    suppressNextSelectedPhotoClick.value = false;
-    return;
-  }
   if (selectedPhotoClickTimer !== null) {
-    window.clearTimeout(selectedPhotoClickTimer);
+    const isDoubleClick = selectedPhotoClickPhotoId === photoId;
+    clearSelectedPhotoClickTimer();
+    if (isDoubleClick) {
+      openSelectedPhotoPreview(photoId);
+      return;
+    }
   }
+  selectedPhotoClickPhotoId = photoId;
   selectedPhotoClickTimer = window.setTimeout(() => {
     selectedPhotoClickTimer = null;
+    selectedPhotoClickPhotoId = null;
     toggleSelectedPhoto(photoId);
   }, 180);
+}
+
+function handleSelectedPhotoDoubleClick(photoId: string) {
+  clearSelectedPhotoClickTimer();
+  openSelectedPhotoPreview(photoId);
 }
 
 function selectAllPhotos() {
@@ -1480,8 +1497,7 @@ function cancelReplacementSubmit() {
               class="selected-photo-card"
               :class="{ 'selected-photo-card--selected': photo.selected }"
               :data-selected-photo-id="photo.id"
-              @click="handleSelectedPhotoClick(photo.id)"
-              @dblclick.stop="openSelectedPhotoPreview(photo.id)"
+              @dblclick.stop="handleSelectedPhotoDoubleClick(photo.id)"
               @dragstart.prevent
             >
               <span class="selected-photo-card__checkbox" :class="{ 'selected-photo-card__checkbox--checked': photo.selected }" aria-hidden="true"></span>
