@@ -104,7 +104,7 @@ function addDetailUrl(item: DoubanSearchResultItem) {
     coverDataUrl: item.coverDataUrl,
   });
   if (added) {
-    showAlert(`已添加到${item.title}链接到新增链接抓图任务。`, "success");
+    showAlert(`已添加到${item.title}链接到添加下载任务自动下载。`, "success");
   }
 }
 
@@ -121,7 +121,7 @@ function openSelectedPhotoDownload(item: DoubanSearchResultItem) {
 
 function removeDetailUrl(item: DoubanSearchResultItem) {
   appStore.removeCreateTaskDetailUrl(item.detailUrl);
-  showAlert("已从新增链接抓图任务中删除。", "success");
+  showAlert("已从添加下载任务自动下载中删除。", "success");
 }
 
 // 组装搜索请求：query 只取用户输入片名，cat=1002 和 start/pageSize 在 sidecar 内固定处理。
