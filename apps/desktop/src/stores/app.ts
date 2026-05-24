@@ -43,6 +43,8 @@ interface CreateTasksOptions {
   replacementTaskIds?: string[];
 }
 
+type PersistReason = "state" | "logs" | "progress";
+
 // 生成任务、日志和 Cookie 记录使用的当前本地时间字符串。
 function timestampNow() {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -236,6 +238,42 @@ function isSameTaskTarget(task: TaskItem, draft: TaskDraft) {
     normalizeComparablePath(task.target.outputRootDir) === normalizeComparablePath(draft.outputRootDir) &&
     task.target.doubanAssetType === draft.doubanAssetType &&
     task.target.imageAspectRatio === draft.imageAspectRatio
+  );
+}
+
+function buildComparableTaskTargetKey(
+  detailUrl: string,
+  outputRootDir: string,
+  doubanAssetType: TaskItem["target"]["doubanAssetType"],
+  imageAspectRatio: TaskItem["target"]["imageAspectRatio"],
+  isSelectedPhoto: boolean,
+) {
+  return [
+    normalizeComparableDetailUrl(detailUrl),
+    normalizeComparablePath(outputRootDir),
+    doubanAssetType,
+    imageAspectRatio,
+    isSelectedPhoto ? "selected" : "auto",
+  ].join("\u0001");
+}
+
+function buildTaskTargetKey(task: TaskItem) {
+  return buildComparableTaskTargetKey(
+    task.target.detailUrl,
+    task.target.outputRootDir,
+    task.target.doubanAssetType,
+    task.target.imageAspectRatio,
+    Boolean(task.target.selectedImages?.length),
+  );
+}
+
+function buildDraftTargetKey(draft: TaskDraft) {
+  return buildComparableTaskTargetKey(
+    draft.detailUrl,
+    draft.outputRootDir,
+    draft.doubanAssetType,
+    draft.imageAspectRatio,
+    Boolean(draft.selectedImages?.length),
   );
 }
 
@@ -467,6 +505,18 @@ export const useAppStore = defineStore("app", () => {
   const activeTaskIds = ref<string[]>([]);
   // 自定义裁剪默认保存到最近任务的输出根目录；没有任务时回退 D:/cover。
   const customCropOutputRootDir = computed(() => createTaskOutputRootDir.value || "D:/cover");
+  const taskLookup = computed(() => {
+    const byId = new Map<string, TaskItem>();
+    const indexById = new Map<string, number>();
+    tasks.value.forEach((task, index) => {
+      byId.set(task.id, task);
+      indexById.set(task.id, index);
+    });
+    return { byId, indexById };
+  });
+  const activeTaskIdSet = computed(() => new Set(activeTaskIds.value));
+  const pendingActionIdSet = computed(() => new Set(pendingActionIds.value));
+  const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder));
 
   let persistenceTimer: number | null = null;
   let logPersistenceTimer: number | null = null;
@@ -482,8 +532,8 @@ export const useAppStore = defineStore("app", () => {
 
   // 进度事件是下载实时更新的主路径：每保存一张图片都会推进 savedCount 和进度条。
   function applyTaskProgressUpdate(event: RuntimeTaskProgressEvent) {
-    const taskIndex = tasks.value.findIndex((task) => task.id === event.taskId);
-    if (taskIndex === -1) {
+    const taskIndex = taskLookup.value.indexById.get(event.taskId);
+    if (taskIndex === undefined) {
       return false;
     }
 
@@ -514,7 +564,7 @@ export const useAppStore = defineStore("app", () => {
 
     replaceTaskAtIndex(taskIndex, nextTask);
     progressTick.value += 1;
-    schedulePersist();
+    schedulePersist("progress");
     return true;
   }
 
@@ -529,8 +579,8 @@ export const useAppStore = defineStore("app", () => {
       return applyTaskProgressUpdate(taskProgress);
     }
 
-    const taskIndex = tasks.value.findIndex((task) => task.id === entry.taskId);
-    if (taskIndex === -1) {
+    const taskIndex = taskLookup.value.indexById.get(entry.taskId);
+    if (taskIndex === undefined) {
       return false;
     }
 
@@ -634,7 +684,7 @@ export const useAppStore = defineStore("app", () => {
     }
 
     if (changed) {
-      schedulePersist();
+      schedulePersist("progress");
     }
   }
 
@@ -709,10 +759,10 @@ export const useAppStore = defineStore("app", () => {
   }
 
   // 延迟保存状态：普通状态短防抖，日志保存稍长合并，减少 SQLite 写入频率。
-  function schedulePersist(reason: "state" | "logs" = "state") {
+  function schedulePersist(reason: PersistReason = "state") {
     if (!hydrated.value) return;
 
-    if (reason === "logs") {
+    if (reason === "logs" || reason === "progress") {
       if (logPersistenceTimer !== null) return;
       logPersistenceTimer = window.setTimeout(() => {
         void persistState();
@@ -883,28 +933,39 @@ export const useAppStore = defineStore("app", () => {
 
   // 判断某个异步动作是否执行中，用于按钮 loading/disabled 状态。
   function isActionPending(actionId: string) {
-    return pendingActionIds.value.includes(actionId);
+    return pendingActionIdSet.value.has(actionId);
   }
 
   // 按 taskId 替换任务，供浏览器演示流程和真实下载流程复用。
   function replaceTask(nextTask: TaskItem) {
-    const index = tasks.value.findIndex((task) => task.id === nextTask.id);
-    if (index === -1) return;
+    const index = taskLookup.value.indexById.get(nextTask.id);
+    if (index === undefined) return;
     replaceTaskAtIndex(index, nextTask);
     schedulePersist();
   }
 
   // 根据 id 查找当前最新任务快照，避免异步流程使用过期对象。
   function getTaskById(taskId: string) {
-    return tasks.value.find((task) => task.id === taskId);
+    return taskLookup.value.byId.get(taskId);
   }
 
   function findDuplicateTasksForDrafts(drafts: TaskDraft[]) {
+    const tasksByTarget = new Map<string, TaskItem[]>();
     const duplicateTaskIds = new Set<string>();
     const duplicateTasks: TaskItem[] = [];
 
+    for (const task of tasks.value) {
+      const key = buildTaskTargetKey(task);
+      const bucket = tasksByTarget.get(key);
+      if (bucket) {
+        bucket.push(task);
+      } else {
+        tasksByTarget.set(key, [task]);
+      }
+    }
+
     for (const draft of drafts) {
-      for (const task of tasks.value) {
+      for (const task of tasksByTarget.get(buildDraftTargetKey(draft)) ?? []) {
         if (!isSameTaskTarget(task, draft) || duplicateTaskIds.has(task.id)) continue;
 
         duplicateTaskIds.add(task.id);
@@ -926,8 +987,9 @@ export const useAppStore = defineStore("app", () => {
   function applyCookieMutations(mutations?: CookieMutation[]) {
     if (!mutations?.length) return;
 
+    const mutationById = new Map(mutations.map((mutation) => [mutation.id, mutation]));
     cookies.value = cookies.value.map((cookie) => {
-      const mutation = mutations.find((item) => item.id === cookie.id);
+      const mutation = mutationById.get(cookie.id);
       if (!mutation) return cookie;
 
       return {
@@ -979,10 +1041,20 @@ export const useAppStore = defineStore("app", () => {
 
   // 根据 sidecar 最终结果构造完成态任务，写入输出目录、文件列表和进度终值。
   function buildCompletedTask(task: TaskItem, result: RuntimeDownloadTaskResult, attempts: number): TaskItem {
+    let posterCount = 0;
+    let stillCount = 0;
+    let verticalCount = 0;
+    let horizontalCount = 0;
     const discovered = result.discovery.images.map((image) => ({
       ...image,
       extension: image.imageUrl.match(/\.[a-z0-9]+(?:$|\?)/i)?.[0]?.replace(/\?.*$/, ""),
     }));
+    for (const image of discovered) {
+      if (image.category === "poster") posterCount += 1;
+      if (image.category === "still") stillCount += 1;
+      if (image.orientation === "vertical") verticalCount += 1;
+      if (image.orientation === "horizontal") horizontalCount += 1;
+    }
 
     return {
       ...task,
@@ -1003,10 +1075,10 @@ export const useAppStore = defineStore("app", () => {
       },
       discovery: {
         discovered,
-        posterCount: discovered.filter((image) => image.category === "poster").length,
-        stillCount: discovered.filter((image) => image.category === "still").length,
-        verticalCount: discovered.filter((image) => image.orientation === "vertical").length,
-        horizontalCount: discovered.filter((image) => image.orientation === "horizontal").length,
+        posterCount,
+        stillCount,
+        verticalCount,
+        horizontalCount,
       },
       download: {
         savedCount: result.download.saved.length,
@@ -1064,7 +1136,7 @@ export const useAppStore = defineStore("app", () => {
   function hasActiveDoubanTask(excludeTaskId?: string) {
     return activeTaskIds.value.some((taskId) => {
       if (taskId === excludeTaskId) return false;
-      const task = tasks.value.find((item) => item.id === taskId);
+      const task = getTaskById(taskId);
       return task ? inferTaskSource(task) === "douban" : false;
     });
   }
@@ -1158,13 +1230,14 @@ export const useAppStore = defineStore("app", () => {
     const batch: TaskItem[] = [];
     let batchHasDouban = false;
 
-    for (const task of [...tasks.value].sort(compareTaskAddedOrder)) {
+    const activeIds = activeTaskIdSet.value;
+    for (const task of orderedTasks.value) {
       if (batch.length >= queueConfig.value.batchSize) {
         break;
       }
 
       if (!runnablePhases.has(task.lifecycle.phase)) continue;
-      if (activeTaskIds.value.includes(task.id)) continue;
+      if (activeIds.has(task.id)) continue;
       if (isCooling(task)) continue;
 
       const isDoubanTask = inferTaskSource(task) === "douban";
@@ -1349,7 +1422,7 @@ export const useAppStore = defineStore("app", () => {
         const inFlight = new Set<Promise<void>>();
         for (const task of batch) {
           const latestTask = getTaskById(task.id);
-          if (!latestTask || !runnablePhases.has(latestTask.lifecycle.phase) || activeTaskIds.value.includes(latestTask.id)) {
+          if (!latestTask || !runnablePhases.has(latestTask.lifecycle.phase) || activeTaskIdSet.value.has(latestTask.id)) {
             continue;
           }
 
@@ -1446,7 +1519,7 @@ export const useAppStore = defineStore("app", () => {
   // 手动重试失败任务：重置任务状态并重新启动队列循环。
   async function retryTask(taskId: string) {
     await withPending(`queue.retry.${taskId}`, async () => {
-      const task = tasks.value.find((item) => item.id === taskId);
+      const task = getTaskById(taskId);
       if (!task) return;
 
       replaceTask(resetTask(task));
@@ -1519,8 +1592,8 @@ export const useAppStore = defineStore("app", () => {
   // 删除单个任务，同时取消后台进程并删除该任务生成的输出目录。
   async function deleteTask(taskId: string) {
     await withPending(`queue.delete.${taskId}`, async () => {
-      const task = tasks.value.find((item) => item.id === taskId);
-      if (activeTaskIds.value.includes(taskId) && task?.lifecycle.phase !== "paused") {
+      const task = getTaskById(taskId);
+      if (activeTaskIdSet.value.has(taskId) && task?.lifecycle.phase !== "paused") {
         showNotice("任务下载中，不能删除任务", "warn");
         return;
       }
@@ -1690,7 +1763,7 @@ export const useAppStore = defineStore("app", () => {
   // 打开已完成任务的输出目录，未完成或无目录时忽略。
   async function openTaskOutputDirectory(taskId: string) {
     await withPending(`queue.open-output.${taskId}`, async () => {
-      const task = tasks.value.find((item) => item.id === taskId);
+      const task = getTaskById(taskId);
       if (!task?.outputDirectory || task.lifecycle.phase !== "completed") {
         return;
       }

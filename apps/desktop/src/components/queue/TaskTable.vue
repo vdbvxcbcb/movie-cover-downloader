@@ -60,31 +60,13 @@ onBeforeUnmount(() => {
   }
 });
 
-// 表格使用显式渲染依赖，让进度事件推进时即使任务对象引用变化较小也能刷新单元格。
-const taskRenderDependencyKey = computed(() =>
-  props.tasks
-    .map((task) =>
-      [
-        task.id,
-        task.title,
-        task.target.doubanAssetType,
-        task.lifecycle.phase,
-        task.summary,
-        task.download?.savedCount ?? -1,
-        task.download?.targetCount ?? -1,
-      ].join(":"),
-    )
-    .join("|"),
-);
+const activeTaskIdSet = computed(() => new Set(props.activeTaskIds ?? []));
 
 // 分页只负责当前视图切片，任务顺序由父页面传入的排序结果决定。
-const pagination = computed(() => {
-  taskRenderDependencyKey.value;
-  return paginateItems(props.tasks, currentPage.value);
-});
+const pagination = computed(() => paginateItems(props.tasks, currentPage.value));
 
 watch(
-  () => props.tasks,
+  () => props.tasks.length,
   () => {
     currentPage.value = pagination.value.currentPage;
     jumpPageInput.value = String(pagination.value.currentPage);
@@ -92,7 +74,7 @@ watch(
     coverCache.value = retainRecordKeys(coverCache.value, taskUrls);
     failedCoverSources.value = retainRecordKeys(failedCoverSources.value, taskUrls);
   },
-  { deep: true, immediate: true },
+  { immediate: true },
 );
 
 watch(
@@ -176,7 +158,7 @@ function getQueueActionDescriptor(task: TaskItem) {
 
 // 单条删除只受当前任务自身是否仍在执行影响；其他任务下载不应挡住已暂停任务。
 function isTaskDeleteDisabled(task: TaskItem) {
-  return Boolean(props.activeTaskIds?.includes(task.id) && task.lifecycle.phase !== "paused");
+  return activeTaskIdSet.value.has(task.id) && task.lifecycle.phase !== "paused";
 }
 
 // 跳转到指定页，并同步页码输入框。

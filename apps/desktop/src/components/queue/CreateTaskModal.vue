@@ -92,6 +92,8 @@ let titleResolveRevision = 0;
 let selectedPhotoClickTimer: number | null = null;
 let selectedPhotoClickPhotoId: string | null = null;
 let selectedPhotoAutoDiscoverTimer: number | null = null;
+let selectedPhotoDragFrame: number | null = null;
+let selectedPhotoDragFrameEvent: PointerEvent | null = null;
 const stoppedSelectedDiscoveryTaskIds = new Set<string>();
 const selectedPhotoGridRef = ref<HTMLElement | null>(null);
 const selectedPhotoDragThreshold = 6;
@@ -360,20 +362,31 @@ const canDecreaseMaxImages = computed(() => currentMaxImagesValue.value > 1);
 // 数量拨轮加号是否可用，最大值为 100。
 const canIncreaseMaxImages = computed(() => currentMaxImagesValue.value < 100);
 
-const selectedPhotoCounts = computed(() => ({
-  still: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "still").length,
-  poster: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "poster").length,
-  wallpaper: selectedPhotos.value.filter((photo) => photo.doubanAssetType === "wallpaper").length,
-}));
-const filteredSelectedPhotos = computed(() =>
-  selectedPhotos.value.filter((photo) => photo.doubanAssetType === selectedPhotoFilter.value),
-);
+const selectedPhotoStats = computed(() => {
+  const counts: Record<DoubanAssetType, number> = { still: 0, poster: 0, wallpaper: 0 };
+  const filtered: SelectableDoubanPhoto[] = [];
+  let selectedCount = 0;
+  let currentSelectedCount = 0;
+
+  for (const photo of selectedPhotos.value) {
+    counts[photo.doubanAssetType] += 1;
+    if (photo.selected) selectedCount += 1;
+    if (photo.doubanAssetType === selectedPhotoFilter.value) {
+      filtered.push(photo);
+      if (photo.selected) currentSelectedCount += 1;
+    }
+  }
+
+  return { counts, filtered, selectedCount, currentSelectedCount };
+});
+const selectedPhotoCounts = computed(() => selectedPhotoStats.value.counts);
+const filteredSelectedPhotos = computed(() => selectedPhotoStats.value.filtered);
 const visibleSelectedPhotos = computed(() => {
   const filtered = filteredSelectedPhotos.value;
   return filtered.slice(0, selectedPhotoVisibleLimit.value);
 });
-const selectedPhotoCount = computed(() => selectedPhotos.value.filter((photo) => photo.selected).length);
-const currentSelectedPhotoCount = computed(() => filteredSelectedPhotos.value.filter((photo) => photo.selected).length);
+const selectedPhotoCount = computed(() => selectedPhotoStats.value.selectedCount);
+const currentSelectedPhotoCount = computed(() => selectedPhotoStats.value.currentSelectedCount);
 const selectedPhotoDownloadLabel = computed(() =>
   selectedPhotoCount.value > 0 ? `下载选中 ${selectedPhotoCount.value} 张` : "请选择图片",
 );
@@ -832,9 +845,12 @@ async function loadNextSelectedPhotoBatch() {
 }
 
 function toggleSelectedPhoto(photoId: string) {
-  selectedPhotos.value = selectedPhotos.value.map((photo) =>
-    photo.id === photoId ? { ...photo, selected: !photo.selected } : photo,
-  );
+  const index = selectedPhotos.value.findIndex((photo) => photo.id === photoId);
+  if (index < 0) return;
+  const photo = selectedPhotos.value[index]!;
+  const nextPhotos = selectedPhotos.value.slice();
+  nextPhotos[index] = { ...photo, selected: !photo.selected };
+  selectedPhotos.value = nextPhotos;
 }
 
 function clearSelectedPhotoClickTimer() {
@@ -893,6 +909,20 @@ function updateSelectedPhotoDrag(event: PointerEvent) {
   });
 }
 
+function scheduleSelectedPhotoDragUpdate(event: PointerEvent) {
+  selectedPhotoDragFrameEvent = event;
+  if (selectedPhotoDragFrame !== null) return;
+
+  selectedPhotoDragFrame = window.requestAnimationFrame(() => {
+    selectedPhotoDragFrame = null;
+    const frameEvent = selectedPhotoDragFrameEvent;
+    selectedPhotoDragFrameEvent = null;
+    if (frameEvent) {
+      updateSelectedPhotoDrag(frameEvent);
+    }
+  });
+}
+
 function handleSelectedPhotoGridPointerDown(event: PointerEvent) {
   if (event.button !== 0 || !event.isPrimary) return;
   const grid = selectedPhotoGridRef.value;
@@ -903,7 +933,7 @@ function handleSelectedPhotoGridPointerDown(event: PointerEvent) {
     startClientX: event.clientX,
     startClientY: event.clientY,
     startPhotoId: getSelectedPhotoIdFromEventTarget(event.target),
-    initialSelectedIds: new Set(selectedPhotos.value.filter((photo) => photo.selected).map((photo) => photo.id)),
+    initialSelectedIds: new Set(selectedPhotos.value.flatMap((photo) => (photo.selected ? [photo.id] : []))),
     selecting: false,
   };
   selectedPhotoDragBox.value = null;
@@ -922,7 +952,7 @@ function handleSelectedPhotoGridPointerMove(event: PointerEvent) {
   }
 
   event.preventDefault();
-  updateSelectedPhotoDrag(event);
+  scheduleSelectedPhotoDragUpdate(event);
 }
 
 function finishSelectedPhotoDrag(event: PointerEvent) {
@@ -948,6 +978,11 @@ function cancelSelectedPhotoDrag(event?: PointerEvent) {
   const dragState = selectedPhotoDragState.value;
   const grid = selectedPhotoGridRef.value;
   if (event && dragState && dragState.pointerId !== event.pointerId) return;
+  if (selectedPhotoDragFrame !== null) {
+    window.cancelAnimationFrame(selectedPhotoDragFrame);
+    selectedPhotoDragFrame = null;
+    selectedPhotoDragFrameEvent = null;
+  }
   if (event && grid?.hasPointerCapture(event.pointerId)) {
     grid.releasePointerCapture(event.pointerId);
   }
