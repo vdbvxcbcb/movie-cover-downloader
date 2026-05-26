@@ -1,6 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
-import SelectedPhotoPreviewModal from "../../../components/queue/SelectedPhotoPreviewModal.vue";
+import SelectedPhotoPreviewModal from "../../../components/queue/create-task/SelectedPhotoPreviewModal.vue";
 import type { SelectableDoubanPhoto } from "../../../types/app";
 
 const photo: SelectableDoubanPhoto = {

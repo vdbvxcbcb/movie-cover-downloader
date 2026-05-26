@@ -255,6 +255,14 @@ function clearImagesAndAnnotations() {
   clearAnnotations();
 }
 
+async function handleAddTextAnnotation() {
+  const annotationId = addAnnotation("text");
+  await nextTick();
+  previewBoard.value
+    ?.querySelector<HTMLInputElement>(`.annotation-text-input[data-annotation-id="${annotationId}"]`)
+    ?.focus();
+}
+
 function handleBackgroundFile(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -738,7 +746,7 @@ onBeforeUnmount(() => {
             :active-drawing-kind="activeDrawingKind"
             :has-images="hasImages"
             :has-annotations="annotations.length > 0"
-            @add-text="addAnnotation('text')"
+            @add-text="void handleAddTextAnnotation()"
             @select-drawing="selectDrawingTool"
             @shuffle="shuffleImages"
             @clear="clearImagesAndAnnotations"
@@ -810,6 +818,7 @@ onBeforeUnmount(() => {
                     class="annotation-text-input"
                     type="text"
                     :value="annotation.text"
+                    :data-annotation-id="annotation.id"
                     :size="Math.max(Array.from(annotation.text).length, 1)"
                     aria-label="编辑文字"
                     @input="updateAnnotation(annotation.id, { text: ($event.target as HTMLInputElement).value })"

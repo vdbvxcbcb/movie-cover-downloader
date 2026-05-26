@@ -1,6 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
-import SelectedPhotoGrid from "../../../components/queue/SelectedPhotoGrid.vue";
+import SelectedPhotoGrid from "../../../components/queue/create-task/SelectedPhotoGrid.vue";
 import type { SelectableDoubanPhoto } from "../../../types/app";
 
 const photo: SelectableDoubanPhoto = {

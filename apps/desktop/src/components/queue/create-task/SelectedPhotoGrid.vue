@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { toRef, useTemplateRef } from "vue";
-import type { SelectableDoubanPhoto } from "../../types/app";
-import { formatSelectedPhotoCategory } from "../composables/selected-photo-helpers";
-import { useSelectedPhotoGridSelection } from "../composables/useSelectedPhotoGridSelection";
+import type { SelectableDoubanPhoto } from "../../../types/app";
+import { formatSelectedPhotoCategory } from "../../composables/selected-photo-helpers";
+import { useSelectedPhotoGridSelection } from "../../composables/useSelectedPhotoGridSelection";
 
 const props = defineProps<{
   photos: SelectableDoubanPhoto[];

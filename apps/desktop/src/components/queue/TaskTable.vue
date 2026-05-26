@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, ref, watch, shallowRef } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
 import StatusPill from "../common/StatusPill.vue";
-import TaskProgressCell from "./TaskProgressCell.vue";
+import TaskProgressCell from "./task-progress/TaskProgressCell.vue";
 import {
   describeQueueAction,
   describeTaskStatus,

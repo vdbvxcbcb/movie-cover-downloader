@@ -5,7 +5,7 @@ import type {
 } from "../../types/app";
 
 export const selectedPhotoAssetTypes: DoubanAssetType[] = ["still", "poster", "wallpaper"];
-export const selectedPhotoRenderBatchSize = 28;
+export const selectedPhotoRenderBatchSize = 14;
 export const titlePreviewResolveConcurrency = 3;
 
 export function pickMoreCompleteTitle(currentTitle: string, nextTitle?: string | null) {

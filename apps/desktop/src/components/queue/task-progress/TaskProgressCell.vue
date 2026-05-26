@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 任务进度单元格：把下载数量转换成文字和进度条。
 import { computed } from "vue";
-import type { TaskItem } from "../../types/app";
+import type { TaskItem } from "../../../types/app";
 
 const props = defineProps<{
   task: TaskItem;

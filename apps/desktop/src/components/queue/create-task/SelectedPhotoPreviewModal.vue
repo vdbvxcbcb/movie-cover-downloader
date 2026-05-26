@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SelectableDoubanPhoto } from "../../types/app";
+import type { SelectableDoubanPhoto } from "../../../types/app";
 
 defineProps<{
   photo: SelectableDoubanPhoto | null;

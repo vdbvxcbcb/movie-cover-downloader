@@ -297,6 +297,7 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
     }
     annotations.value = [...annotations.value, annotation];
     selectedAnnotationId.value = annotation.id;
+    return annotation.id;
   }
 
   function selectDrawingTool(kind: DrawingKind) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DoubanAssetType, ImageAspectRatio, ImageCountMode } from "../../types/app";
+import type { DoubanAssetType, ImageAspectRatio, ImageCountMode } from "../../../types/app";
 
 defineProps<{
   doubanAssetType: DoubanAssetType;

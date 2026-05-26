@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DoubanAssetType } from "../../types/app";
+import type { DoubanAssetType } from "../../../types/app";
 
 defineProps<{
   activeType: DoubanAssetType;

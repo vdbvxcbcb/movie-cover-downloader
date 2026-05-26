@@ -1,6 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
-import SelectedPhotoCategoryTabs from "../../../components/queue/SelectedPhotoCategoryTabs.vue";
+import SelectedPhotoCategoryTabs from "../../../components/queue/create-task/SelectedPhotoCategoryTabs.vue";
 
 describe("selected photo category tabs", () => {
   it("renders counts and emits the selected category", async () => {

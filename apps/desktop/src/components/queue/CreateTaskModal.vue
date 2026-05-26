@@ -4,10 +4,10 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, shallowRef 
 import ActionButton from "../common/ActionButton.vue";
 import MessageNotice from "../common/MessageNotice.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
-import AutoDownloadStrategyPanel from "./AutoDownloadStrategyPanel.vue";
-import SelectedPhotoCategoryTabs from "./SelectedPhotoCategoryTabs.vue";
-import SelectedPhotoGrid from "./SelectedPhotoGrid.vue";
-import SelectedPhotoPreviewModal from "./SelectedPhotoPreviewModal.vue";
+import AutoDownloadStrategyPanel from "./create-task/AutoDownloadStrategyPanel.vue";
+import SelectedPhotoCategoryTabs from "./create-task/SelectedPhotoCategoryTabs.vue";
+import SelectedPhotoGrid from "./create-task/SelectedPhotoGrid.vue";
+import SelectedPhotoPreviewModal from "./create-task/SelectedPhotoPreviewModal.vue";
 import type {
   DoubanAssetType,
   ImageCountMode,
