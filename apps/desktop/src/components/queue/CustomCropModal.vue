@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 自定义裁剪弹窗：上传本地图片、调整裁剪框并保存到输出目录。
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, shallowRef } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, shallowRef, useTemplateRef } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import ActionButton from "../common/ActionButton.vue";
@@ -21,10 +21,10 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-const fileInput = ref<HTMLInputElement | null>(null);
-const modalCard = ref<HTMLElement | null>(null);
-const workspace = ref<HTMLElement | null>(null);
-const imageElement = ref<HTMLImageElement | null>(null);
+const fileInput = useTemplateRef<HTMLInputElement>("fileInput");
+const modalCard = useTemplateRef<HTMLElement>("modalCard");
+const workspace = useTemplateRef<HTMLElement>("workspace");
+const imageElement = useTemplateRef<HTMLImageElement>("imageElement");
 const isDraggingFile = shallowRef(false);
 const selectedRatio = ref<CropRatio>("9:16");
 const zoom = shallowRef(1);

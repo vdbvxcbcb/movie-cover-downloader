@@ -10,6 +10,19 @@ import {
   formatDetailUrlDisplayLine,
   normalizeComparableDetailUrl,
 } from "../lib/task-draft-input";
+import {
+  buildAutoImportedCookieNote,
+  buildPersistErrorNotice,
+  extractDiscoveredDownloadSnapshotFromLogMessage,
+  extractResolvedTitleFromLogMessage,
+  extractSavedImagePathFromLogMessage,
+  fileNameFromPath,
+  inferTaskSource,
+  rehydrateTasks,
+  retainedRuntimeLogCount,
+  timestampNow,
+  toSnapshot,
+} from "./app-helpers";
 import type {
   AppSeedState,
   CookieDraft,
@@ -27,199 +40,18 @@ import type {
 
 // 队列阶段集合按行为能力分组：能运行、能恢复、能暂停、以及进度不应再被覆盖的终态。
 const runnablePhases = new Set(["queued", "retrying"]);
-const resumablePhases = new Set(["resolving", "discovering", "downloading"]);
 const pausablePhases = new Set(["resolving", "discovering", "downloading", "retrying"]);
 const terminalProgressPhases = new Set(["completed", "failed", "paused"]);
 const cookieRetentionMs = 30 * 24 * 60 * 60 * 1000;
-const retainedRuntimeLogCount = 200;
 
 // store 内部等待工具，用于队列冷却、登录窗口轮询等异步等待场景。
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
-const resolvedTitleLogPrefix = "片名已解析: ";
-const discoveredImagesLogPattern = /^(?:\[[^\]]+\]\s*)?discovered\s+(\d+)\s+images\s+from\s+\S+\s+->\s+(.+)$/i;
-const savedImageLogPattern = /^(?:\[[^\]]+\]\s*)?saved image:\s*(.+)$/i;
 
 interface CreateTasksOptions {
   replacementTaskIds?: string[];
 }
 
 type PersistReason = "state" | "logs" | "progress";
-
-// 生成任务、日志和 Cookie 记录使用的当前本地时间字符串。
-function timestampNow() {
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  })
-    .format(new Date())
-    .replace(/\//g, "-");
-}
-
-// 通过 JSON 深拷贝去掉 Vue 响应式代理，得到可安全持久化的普通对象。
-function clonePersistable<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-// 重新载入本地快照时会裁剪日志并修正重复 id，避免旧数据导致 Vue 列表 key 冲突。
-function normalizeSnapshotLogs(logs: AppSeedState["logs"]) {
-  const nextLogs = clonePersistable(logs.slice(0, retainedRuntimeLogCount));
-  const usedIds = new Set<number>();
-  let maxId = nextLogs.reduce((currentMax, entry) => Math.max(currentMax, entry.id), 0);
-
-  return nextLogs.map((entry) => {
-    if (!usedIds.has(entry.id)) {
-      usedIds.add(entry.id);
-      return entry;
-    }
-
-    maxId += 1;
-    usedIds.add(maxId);
-    return {
-      ...entry,
-      id: maxId,
-    };
-  });
-}
-
-// 把持久化异常压缩成适合 toast 展示的短提示。
-function buildPersistErrorNotice(message: string) {
-  const compactMessage = message.replace(/\s+/g, " ").trim().slice(0, 120);
-  return compactMessage ? `本地持久化保存失败：${compactMessage}` : "本地持久化保存失败";
-}
-
-// 把当前 store 状态组装成持久化快照，Rust 会按这个结构写入 SQLite。
-function toSnapshot(
-  tasks: TaskItem[],
-  cookies: CookieProfile[],
-  logs: AppSeedState["logs"],
-  queueConfig: QueueConfig,
-  createTaskOutputRootDir: string,
-  imageProcessOutputRootDir: string,
-): AppSeedState {
-  return {
-    schemaVersion: 2,
-    tasks: clonePersistable(tasks),
-    cookies: clonePersistable(cookies),
-    logs: normalizeSnapshotLogs(logs),
-    queueConfig: clonePersistable(queueConfig),
-    createTaskOutputRootDir,
-    imageProcessOutputRootDir,
-  };
-}
-
-// 持久化恢复后，未结束任务统一退回可重试，避免应用重启后卡在中间态。
-function rehydrateTasks(tasks: TaskItem[]) {
-  return tasks.map((task) => {
-    const normalizedTask = {
-      ...task,
-      target: {
-        ...task.target,
-        doubanAssetType: task.target.doubanAssetType ?? "still",
-        imageCountMode: task.target.imageCountMode ?? "limited",
-        outputImageFormat: task.target.outputImageFormat ?? "jpg",
-        imageAspectRatio: task.target.imageAspectRatio ?? "original",
-        requestIntervalSeconds: task.target.requestIntervalSeconds ?? 1,
-      },
-    };
-
-    if (
-      normalizedTask.download?.targetCount &&
-      normalizedTask.download.savedCount >= normalizedTask.download.targetCount &&
-      (normalizedTask.outputDirectory || normalizedTask.download.directory)
-    ) {
-      return {
-        ...normalizedTask,
-        lifecycle: {
-          ...normalizedTask.lifecycle,
-          phase: "completed" as const,
-          updatedAt: timestampNow(),
-          cooldownUntil: undefined,
-          lastError: undefined,
-        },
-        outputDirectory: normalizedTask.outputDirectory ?? normalizedTask.download.directory,
-        summary: `已下载 ${normalizedTask.download.savedCount}/${normalizedTask.download.targetCount} 张图片`,
-      };
-    }
-
-    if (!resumablePhases.has(task.lifecycle.phase)) {
-      return normalizedTask;
-    }
-
-    return {
-      ...normalizedTask,
-      lifecycle: {
-        ...normalizedTask.lifecycle,
-        phase: "retrying" as const,
-        updatedAt: timestampNow(),
-      },
-      summary: "应用重启后恢复为待重试状态",
-    };
-  });
-}
-
-// 根据任务 sourceHint 推断站点来源；auto 目前默认按豆瓣处理。
-function inferTaskSource(task: TaskItem) {
-  if (task.target.sourceHint !== "auto") {
-    return task.target.sourceHint;
-  }
-
-  return "douban";
-}
-
-// 从完整路径中提取文件名，用于 download.files 列表。
-function fileNameFromPath(filePath: string) {
-  return filePath.split(/[/\\]/).pop() ?? filePath;
-}
-
-// 为自动登录导入的 Cookie 生成备注，方便用户区分导入来源和时间。
-function buildAutoImportedCookieNote() {
-  return `豆瓣登录导入 ${timestampNow()}`;
-}
-
-// 从 sidecar 片名解析日志中提取影片标题，用于实时更新任务标题。
-function extractResolvedTitleFromLogMessage(message: string) {
-  if (!message.startsWith(resolvedTitleLogPrefix)) {
-    return null;
-  }
-
-  const title = message.slice(resolvedTitleLogPrefix.length).trim();
-  return title || null;
-}
-
-// 从 discovered images 日志中提取图片总数和输出目录，用于初始化进度分母。
-function extractDiscoveredDownloadSnapshotFromLogMessage(message: string) {
-  const match = discoveredImagesLogPattern.exec(message.trim());
-  if (!match) {
-    return null;
-  }
-
-  const targetCount = Number(match[1]);
-  const outputDirectory = match[2]?.trim();
-  if (!Number.isFinite(targetCount) || targetCount < 0) {
-    return null;
-  }
-
-  return {
-    targetCount,
-    outputDirectory: outputDirectory || null,
-  };
-}
-
-// 从 saved image 日志中提取已保存图片路径，用作进度事件兜底。
-function extractSavedImagePathFromLogMessage(message: string) {
-  const match = savedImageLogPattern.exec(message.trim());
-  if (!match) {
-    return null;
-  }
-
-  const outputPath = match[1]?.trim();
-  return outputPath || null;
-}
 
 // 比较目录时统一去掉结尾斜杠并转小写，避免 Windows 路径大小写差异。
 function normalizeComparablePath(path: string) {

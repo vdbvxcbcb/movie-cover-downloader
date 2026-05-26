@@ -2,8 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPinia, setActivePinia } from "pinia";
-import { formatTaskProgress, getTaskProgressPercent } from "../lib/presenters";
-import type { AppSeedState, RuntimeDownloadTaskResult, RuntimeTaskProgressEvent, TaskDraft } from "../types/app";
+import { formatTaskProgress, getTaskProgressPercent } from "../../lib/presenters";
+import type { AppSeedState, RuntimeDownloadTaskResult, RuntimeTaskProgressEvent, TaskDraft } from "../../types/app";
 
 // 创建测试用 window/localStorage/prompt stub，避免 Pinia store 测试依赖真实浏览器环境。
 function createWindowStub() {
@@ -119,8 +119,8 @@ function createPersistedSnapshot(overrides: Partial<AppSeedState> = {}): AppSeed
 }
 
 async function setupStore(overrides?: {
-  loadState?: typeof import("../lib/runtime-bridge").runtimeBridge.loadState;
-  saveState?: typeof import("../lib/runtime-bridge").runtimeBridge.saveState;
+  loadState?: typeof import("../../lib/runtime-bridge").runtimeBridge.loadState;
+  saveState?: typeof import("../../lib/runtime-bridge").runtimeBridge.saveState;
   structuredCloneImpl?: typeof globalThis.structuredClone;
 }) {
   const nativeStructuredClone = globalThis.structuredClone;
@@ -140,8 +140,8 @@ async function setupStore(overrides?: {
     },
   });
 
-  const { runtimeBridge } = await import("../lib/runtime-bridge");
-  let runtimeLogListener: ((entries: import("../types/app").LogEntry[]) => void) | null = null;
+  const { runtimeBridge } = await import("../../lib/runtime-bridge");
+  let runtimeLogListener: ((entries: import("../../types/app").LogEntry[]) => void) | null = null;
   let taskProgressListener: ((event: RuntimeTaskProgressEvent) => void) | null = null;
   runtimeBridge.onRuntimeLogBatch = async () => () => {};
   runtimeBridge.onRuntimeLogBatch = async (listener) => {
@@ -166,7 +166,7 @@ async function setupStore(overrides?: {
   runtimeBridge.deleteDirectoryPath = async (directoryPath: string) => directoryPath;
   runtimeBridge.clearDirectoryContents = async () => 0;
 
-  const { useAppStore } = await import("./app");
+  const { useAppStore } = await import("../../stores/app");
   setActivePinia(createPinia());
   const appStore = useAppStore();
   await appStore.bootstrap();
@@ -174,7 +174,7 @@ async function setupStore(overrides?: {
   return {
     appStore,
     runtimeBridge,
-    emitRuntimeLogs(entries: import("../types/app").LogEntry[]) {
+    emitRuntimeLogs(entries: import("../../types/app").LogEntry[]) {
       runtimeLogListener?.(entries);
     },
     // 主动触发已注册的进度监听器，用来测试实时进度更新。
@@ -270,7 +270,7 @@ test("持久化写入进行中时新的保存请求会串行排队而不是并�
 });
 
 test("已恢复日志与新运行日志撞号时保存前会自动改写为唯一日志 ID", async () => {
-  const savedSnapshots: import("../types/app").AppSeedState[] = [];
+  const savedSnapshots: import("../../types/app").AppSeedState[] = [];
   const { appStore, emitRuntimeLogs } = await setupStore({
     loadState: async () => ({
       schemaVersion: 2,
@@ -336,7 +336,7 @@ test("持久化保存失败时会在提示中显示真实错误摘要", async ()
 });
 
 test("浏览器原生 structuredClone 遇到响应式数组时持久化仍然可以成功", async () => {
-  const saveSnapshots: import("../types/app").AppSeedState[] = [];
+  const saveSnapshots: import("../../types/app").AppSeedState[] = [];
   const { appStore, restoreStructuredClone } = await setupStore({
     structuredCloneImpl: globalThis.structuredClone,
     saveState: async (snapshot) => {

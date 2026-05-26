@@ -5,8 +5,8 @@ import {
   formatSelectedPhotoCategory,
   pickMoreCompleteTitle,
   selectedPhotoAssetTypes,
-} from "./selected-photo-helpers";
-import type { SelectableDoubanPhoto } from "../../types/app";
+} from "../../../components/composables/selected-photo-helpers";
+import type { SelectableDoubanPhoto } from "../../../types/app";
 
 describe("selected photo helpers", () => {
   it("prefers a more complete resolved title", () => {

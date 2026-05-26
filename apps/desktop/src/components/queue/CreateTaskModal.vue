@@ -4,6 +4,10 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, shallowRef 
 import ActionButton from "../common/ActionButton.vue";
 import MessageNotice from "../common/MessageNotice.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
+import AutoDownloadStrategyPanel from "./AutoDownloadStrategyPanel.vue";
+import SelectedPhotoCategoryTabs from "./SelectedPhotoCategoryTabs.vue";
+import SelectedPhotoGrid from "./SelectedPhotoGrid.vue";
+import SelectedPhotoPreviewModal from "./SelectedPhotoPreviewModal.vue";
 import type {
   DoubanAssetType,
   ImageCountMode,
@@ -28,12 +32,11 @@ import { runtimeBridge } from "../../lib/runtime-bridge";
 import { useAppStore } from "../../stores/app";
 import {
   createSelectedPhotoDiscoveryState,
-  formatSelectedPhotoCategory,
   pickMoreCompleteTitle,
   selectedPhotoAssetTypes,
   selectedPhotoRenderBatchSize,
   titlePreviewResolveConcurrency,
-} from "./selected-photo-helpers";
+} from "../composables/selected-photo-helpers";
 
 const props = withDefaults(
   defineProps<{
@@ -93,23 +96,8 @@ const selectedPhotoVisibleLimit = ref(selectedPhotoRenderBatchSize);
 const selectedPhotoGridLoadingRequested = shallowRef(false);
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
-let selectedPhotoClickTimer: number | null = null;
-let selectedPhotoClickPhotoId: string | null = null;
 let selectedPhotoAutoDiscoverTimer: number | null = null;
-let selectedPhotoDragFrame: number | null = null;
-let selectedPhotoDragFrameEvent: PointerEvent | null = null;
 const stoppedSelectedDiscoveryTaskIds = new Set<string>();
-const selectedPhotoGridRef = ref<HTMLElement | null>(null);
-const selectedPhotoDragThreshold = 6;
-const selectedPhotoDragState = ref<{
-  pointerId: number;
-  startClientX: number;
-  startClientY: number;
-  startPhotoId: string | null;
-  initialSelectedIds: Set<string>;
-  selecting: boolean;
-} | null>(null);
-const selectedPhotoDragBox = ref<{ left: number; top: number; width: number; height: number } | null>(null);
 
 function resetSelectedPhotoDiscoveryState() {
   selectedPhotoDiscoveryByAsset.value = createSelectedPhotoDiscoveryState();
@@ -262,8 +250,6 @@ onBeforeUnmount(() => {
   if (titleResolveTimer !== null) {
     window.clearTimeout(titleResolveTimer);
   }
-  clearSelectedPhotoClickTimer();
-  cancelSelectedPhotoDrag();
   clearSelectedPhotoAutoDiscoverTimer();
   void stopSelectedPhotoDiscovery();
   document.removeEventListener("keydown", handleSelectedPhotoPreviewKeydown);
@@ -384,18 +370,10 @@ const showSelectedPhotoGridLoading = computed(
     !selectedPhotoCurrentFilterDone.value &&
     filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value,
 );
+const selectedPhotoGridEmptyText = computed(() =>
+  selectedPhotoCurrentFilterDone.value ? "该分类暂无可下载图片" : "输入链接后解析当前分类图片",
+);
 const selectedPhotoPreviewItems = computed(() => selectedPhotos.value);
-const isSelectedPhotoDragSelecting = computed(() => Boolean(selectedPhotoDragState.value?.selecting));
-const selectedPhotoDragBoxStyle = computed(() => {
-  const box = selectedPhotoDragBox.value;
-  if (!box) return {};
-  return {
-    left: `${box.left}px`,
-    top: `${box.top}px`,
-    width: `${box.width}px`,
-    height: `${box.height}px`,
-  };
-});
 const activeSelectedPhotoPreview = computed(() => {
   const index = selectedPhotoPreviewIndex.value;
   return index === null ? null : selectedPhotoPreviewItems.value[index] ?? null;
@@ -413,12 +391,7 @@ function revealNextSelectedPhotoBatch() {
   }
 }
 
-function handleSelectedPhotoGridScroll(event: Event) {
-  const element = event.currentTarget as HTMLElement | null;
-  if (!element) return;
-  const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-  if (distanceToBottom > 24) return;
-
+function handleSelectedPhotoGridRequestNextBatch() {
   selectedPhotoGridLoadingRequested.value = true;
   revealNextSelectedPhotoBatch();
   requestNextSelectedPhotoBatch();
@@ -488,8 +461,6 @@ function closeSelectedPhotoPreview() {
 }
 
 function openSelectedPhotoPreview(photoId: string) {
-  clearSelectedPhotoClickTimer();
-
   const index = selectedPhotoPreviewItems.value.findIndex((photo) => photo.id === photoId);
   if (index >= 0) {
     selectedPhotoPreviewIndex.value = index;
@@ -820,174 +791,6 @@ async function loadNextSelectedPhotoBatch() {
   }
 }
 
-function toggleSelectedPhoto(photoId: string) {
-  const index = selectedPhotos.value.findIndex((photo) => photo.id === photoId);
-  if (index < 0) return;
-  const photo = selectedPhotos.value[index]!;
-  const nextPhotos = selectedPhotos.value.slice();
-  nextPhotos[index] = { ...photo, selected: !photo.selected };
-  selectedPhotos.value = nextPhotos;
-}
-
-function clearSelectedPhotoClickTimer() {
-  if (selectedPhotoClickTimer === null) return;
-  window.clearTimeout(selectedPhotoClickTimer);
-  selectedPhotoClickTimer = null;
-  selectedPhotoClickPhotoId = null;
-}
-
-function getSelectedPhotoDragBox(event: PointerEvent, grid: HTMLElement) {
-  const gridRect = grid.getBoundingClientRect();
-  const left = Math.min(selectedPhotoDragState.value!.startClientX, event.clientX);
-  const top = Math.min(selectedPhotoDragState.value!.startClientY, event.clientY);
-  const right = Math.max(selectedPhotoDragState.value!.startClientX, event.clientX);
-  const bottom = Math.max(selectedPhotoDragState.value!.startClientY, event.clientY);
-
-  selectedPhotoDragBox.value = {
-    left: left - gridRect.left + grid.scrollLeft,
-    top: top - gridRect.top + grid.scrollTop,
-    width: right - left,
-    height: bottom - top,
-  };
-
-  return { left, top, right, bottom };
-}
-
-function rectsIntersect(a: { left: number; top: number; right: number; bottom: number }, b: DOMRect) {
-  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-}
-
-function getSelectedPhotoIdFromEventTarget(target: EventTarget | null) {
-  return target instanceof HTMLElement ? (target.closest<HTMLElement>(".selected-photo-card")?.dataset.selectedPhotoId ?? null) : null;
-}
-
-function getSelectedPhotoIdFromPointer(event: PointerEvent) {
-  return getSelectedPhotoIdFromEventTarget(document.elementFromPoint(event.clientX, event.clientY));
-}
-
-function updateSelectedPhotoDrag(event: PointerEvent) {
-  const dragState = selectedPhotoDragState.value;
-  const grid = selectedPhotoGridRef.value;
-  if (!dragState || !grid) return;
-
-  const box = getSelectedPhotoDragBox(event, grid);
-  const hitIds = new Set<string>();
-  grid.querySelectorAll<HTMLElement>(".selected-photo-card[data-selected-photo-id]").forEach((card) => {
-    const photoId = card.dataset.selectedPhotoId;
-    if (photoId && rectsIntersect(box, card.getBoundingClientRect())) {
-      hitIds.add(photoId);
-    }
-  });
-
-  selectedPhotos.value = selectedPhotos.value.map((photo) => {
-    const selected = dragState.initialSelectedIds.has(photo.id) || hitIds.has(photo.id);
-    return photo.selected === selected ? photo : { ...photo, selected };
-  });
-}
-
-function scheduleSelectedPhotoDragUpdate(event: PointerEvent) {
-  selectedPhotoDragFrameEvent = event;
-  if (selectedPhotoDragFrame !== null) return;
-
-  selectedPhotoDragFrame = window.requestAnimationFrame(() => {
-    selectedPhotoDragFrame = null;
-    const frameEvent = selectedPhotoDragFrameEvent;
-    selectedPhotoDragFrameEvent = null;
-    if (frameEvent) {
-      updateSelectedPhotoDrag(frameEvent);
-    }
-  });
-}
-
-function handleSelectedPhotoGridPointerDown(event: PointerEvent) {
-  if (event.button !== 0 || !event.isPrimary) return;
-  const grid = selectedPhotoGridRef.value;
-  if (!grid) return;
-
-  selectedPhotoDragState.value = {
-    pointerId: event.pointerId,
-    startClientX: event.clientX,
-    startClientY: event.clientY,
-    startPhotoId: getSelectedPhotoIdFromEventTarget(event.target),
-    initialSelectedIds: new Set(selectedPhotos.value.flatMap((photo) => (photo.selected ? [photo.id] : []))),
-    selecting: false,
-  };
-  selectedPhotoDragBox.value = null;
-  grid.setPointerCapture(event.pointerId);
-}
-
-function handleSelectedPhotoGridPointerMove(event: PointerEvent) {
-  const dragState = selectedPhotoDragState.value;
-  if (!dragState || dragState.pointerId !== event.pointerId) return;
-
-  const distance = Math.hypot(event.clientX - dragState.startClientX, event.clientY - dragState.startClientY);
-  if (!dragState.selecting && distance < selectedPhotoDragThreshold) return;
-  if (!dragState.selecting) {
-    clearSelectedPhotoClickTimer();
-    dragState.selecting = true;
-  }
-
-  event.preventDefault();
-  scheduleSelectedPhotoDragUpdate(event);
-}
-
-function finishSelectedPhotoDrag(event: PointerEvent) {
-  const dragState = selectedPhotoDragState.value;
-  const grid = selectedPhotoGridRef.value;
-  if (!dragState || dragState.pointerId !== event.pointerId) return;
-
-  if (dragState.selecting) {
-    event.preventDefault();
-    updateSelectedPhotoDrag(event);
-  } else if (dragState.startPhotoId && dragState.startPhotoId === getSelectedPhotoIdFromPointer(event)) {
-    handleSelectedPhotoClick(dragState.startPhotoId);
-  }
-
-  if (grid?.hasPointerCapture(event.pointerId)) {
-    grid.releasePointerCapture(event.pointerId);
-  }
-  selectedPhotoDragState.value = null;
-  selectedPhotoDragBox.value = null;
-}
-
-function cancelSelectedPhotoDrag(event?: PointerEvent) {
-  const dragState = selectedPhotoDragState.value;
-  const grid = selectedPhotoGridRef.value;
-  if (event && dragState && dragState.pointerId !== event.pointerId) return;
-  if (selectedPhotoDragFrame !== null) {
-    window.cancelAnimationFrame(selectedPhotoDragFrame);
-    selectedPhotoDragFrame = null;
-    selectedPhotoDragFrameEvent = null;
-  }
-  if (event && grid?.hasPointerCapture(event.pointerId)) {
-    grid.releasePointerCapture(event.pointerId);
-  }
-  selectedPhotoDragState.value = null;
-  selectedPhotoDragBox.value = null;
-}
-
-function handleSelectedPhotoClick(photoId: string) {
-  if (selectedPhotoClickTimer !== null) {
-    const isDoubleClick = selectedPhotoClickPhotoId === photoId;
-    clearSelectedPhotoClickTimer();
-    if (isDoubleClick) {
-      openSelectedPhotoPreview(photoId);
-      return;
-    }
-  }
-  selectedPhotoClickPhotoId = photoId;
-  selectedPhotoClickTimer = window.setTimeout(() => {
-    selectedPhotoClickTimer = null;
-    selectedPhotoClickPhotoId = null;
-    toggleSelectedPhoto(photoId);
-  }, 180);
-}
-
-function handleSelectedPhotoDoubleClick(photoId: string) {
-  clearSelectedPhotoClickTimer();
-  openSelectedPhotoPreview(photoId);
-}
-
 function selectAllPhotos() {
   selectedPhotos.value = selectedPhotos.value.map((photo) =>
     photo.doubanAssetType === selectedPhotoFilter.value ? { ...photo, selected: true } : photo,
@@ -1291,129 +1094,21 @@ function cancelReplacementSubmit() {
           </select>
         </label>
 
-        <section class="strategy-card field--wide">
-          <div class="strategy-grid">
-            <div class="strategy-panel">
-              <span class="create-task-modal__field-label">豆瓣抓图类型</span>
-              <div class="segmented-control">
-                <button
-                  type="button"
-                  class="segmented-control__item"
-                  :class="{ 'segmented-control__item--active': form.doubanAssetType === 'still' }"
-                  @click="form.doubanAssetType = 'still'"
-                >
-                  剧照
-                </button>
-                <button
-                  type="button"
-                  class="segmented-control__item"
-                  :class="{ 'segmented-control__item--active': form.doubanAssetType === 'poster' }"
-                  @click="form.doubanAssetType = 'poster'"
-                >
-                  海报
-                </button>
-                <button
-                  type="button"
-                  class="segmented-control__item"
-                  :class="{ 'segmented-control__item--active': form.doubanAssetType === 'wallpaper' }"
-                  @click="form.doubanAssetType = 'wallpaper'"
-                >
-                  壁纸
-                </button>
-              </div>
-              <p class="field-hint field-hint--spacer" aria-hidden="true">&nbsp;</p>
-            </div>
-
-            <div class="strategy-panel">
-              <span class="create-task-modal__field-label">数量（张）</span>
-              <div class="quantity-control-row">
-                <div class="segmented-control">
-                  <button
-                    type="button"
-                    class="segmented-control__item"
-                    :class="{ 'segmented-control__item--active': form.imageCountMode === 'limited' }"
-                    @click="form.imageCountMode = 'limited'"
-                  >
-                    限制
-                  </button>
-                  <button
-                    type="button"
-                    class="segmented-control__item"
-                    :class="{ 'segmented-control__item--active': form.imageCountMode === 'unlimited' }"
-                    @click="form.imageCountMode = 'unlimited'"
-                  >
-                    无限制
-                  </button>
-                </div>
-                <div v-if="form.imageCountMode === 'limited'" class="quantity-field">
-                  <div class="number-stepper">
-                    <button
-                      type="button"
-                      class="number-stepper__control"
-                      :disabled="!canDecreaseMaxImages"
-                      aria-label="减少下载数量"
-                      @click="stepMaxImages(-1)"
-                    >
-                      -
-                    </button>
-                    <input
-                      :value="form.maxImagesInput"
-                      type="text"
-                      min="1"
-                      max="100"
-                      step="1"
-                      inputmode="numeric"
-                      placeholder="默认 10"
-                      @blur="handleMaxImagesBlur"
-                      @input="handleMaxImagesInput"
-                      @keydown="handleMaxImagesKeydown"
-                    />
-                    <button
-                      type="button"
-                      class="number-stepper__control"
-                      :disabled="!canIncreaseMaxImages"
-                      aria-label="增加下载数量"
-                      @click="stepMaxImages(1)"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <p v-if="form.imageCountMode === 'unlimited'" class="field-hint">将抓取当前分类页可发现的全部图片，不再显示数量输入。</p>
-              <p v-else class="field-hint field-hint--spacer" aria-hidden="true">&nbsp;</p>
-            </div>
-            <div class="strategy-panel">
-              <span class="create-task-modal__field-label">图片尺寸</span>
-              <div class="segmented-control">
-                <button
-                  type="button"
-                  class="segmented-control__item"
-                  :class="{ 'segmented-control__item--active': form.imageAspectRatio === 'original' }"
-                  @click="form.imageAspectRatio = 'original'"
-                >
-                  原图尺寸
-                </button>
-                <button
-                  type="button"
-                  class="segmented-control__item"
-                  :class="{ 'segmented-control__item--active': form.imageAspectRatio === '9:16' }"
-                  @click="form.imageAspectRatio = '9:16'"
-                >
-                  9:16
-                </button>
-                <button
-                  type="button"
-                  class="segmented-control__item"
-                  :class="{ 'segmented-control__item--active': form.imageAspectRatio === '3:4' }"
-                  @click="form.imageAspectRatio = '3:4'"
-                >
-                  3:4
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
+        <AutoDownloadStrategyPanel
+          :douban-asset-type="form.doubanAssetType"
+          :image-count-mode="form.imageCountMode"
+          :max-images-input="form.maxImagesInput"
+          :image-aspect-ratio="form.imageAspectRatio"
+          :can-decrease-max-images="canDecreaseMaxImages"
+          :can-increase-max-images="canIncreaseMaxImages"
+          @select-asset-type="form.doubanAssetType = $event"
+          @select-count-mode="form.imageCountMode = $event"
+          @max-images-blur="handleMaxImagesBlur"
+          @max-images-input="handleMaxImagesInput"
+          @max-images-keydown="handleMaxImagesKeydown"
+          @step-max-images="stepMaxImages"
+          @select-aspect-ratio="form.imageAspectRatio = $event"
+        />
 
         <label class="field field--wide">
           <span>任务说明</span>
@@ -1480,96 +1175,28 @@ function cancelReplacementSubmit() {
             </span>
           </p>
 
-          <div class="selected-download__filters">
-            <button
-              type="button"
-              :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'still' }"
-              @click="void setSelectedPhotoFilter('still')"
-            >
-              剧照 {{ selectedPhotoCounts.still }}
-            </button>
-            <button
-              type="button"
-              :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'poster' }"
-              @click="void setSelectedPhotoFilter('poster')"
-            >
-              海报 {{ selectedPhotoCounts.poster }}
-            </button>
-            <button
-              type="button"
-              :class="{ 'selected-download__filter--active': selectedPhotoFilter === 'wallpaper' }"
-              @click="void setSelectedPhotoFilter('wallpaper')"
-            >
-              壁纸 {{ selectedPhotoCounts.wallpaper }}
-            </button>
-          </div>
+          <SelectedPhotoCategoryTabs
+            :active-type="selectedPhotoFilter"
+            :counts="selectedPhotoCounts"
+            @select="void setSelectedPhotoFilter($event)"
+          />
 
           <div v-if="discoveringSelectedPhotos && filteredSelectedPhotos.length === 0" class="selected-download__empty">正在解析当前分类，发现后会立即显示...</div>
-          <div
-            v-else-if="filteredSelectedPhotos.length"
-            ref="selectedPhotoGridRef"
-            class="selected-photo-grid"
-            :class="{ 'selected-photo-grid--selecting': isSelectedPhotoDragSelecting }"
-            @scroll="handleSelectedPhotoGridScroll"
-            @pointerdown="handleSelectedPhotoGridPointerDown"
-            @pointermove="handleSelectedPhotoGridPointerMove"
-            @pointerup="finishSelectedPhotoDrag"
-            @pointercancel="cancelSelectedPhotoDrag"
-            @lostpointercapture="cancelSelectedPhotoDrag"
-          >
-            <button
-              v-for="photo in visibleSelectedPhotos"
-              :key="photo.id"
-              type="button"
-              class="selected-photo-card"
-              :class="{ 'selected-photo-card--selected': photo.selected }"
-              :data-selected-photo-id="photo.id"
-              @dblclick.stop="handleSelectedPhotoDoubleClick(photo.id)"
-              @dragstart.prevent
-            >
-              <span class="selected-photo-card__checkbox" :class="{ 'selected-photo-card__checkbox--checked': photo.selected }" aria-hidden="true"></span>
-              <span class="selected-photo-card__tag">{{ formatSelectedPhotoCategory(photo) }}</span>
-              <span class="selected-photo-card__media">
-                <span
-                  v-if="!isSelectedPhotoLoaded(photo) && !isSelectedPhotoFailed(photo)"
-                  class="selected-photo-card__loading"
-                  aria-hidden="true"
-                ></span>
-                <span v-if="isSelectedPhotoFailed(photo)" class="selected-photo-card__placeholder" aria-hidden="true">
-                  <span class="selected-photo-card__placeholder-icon"></span>
-                </span>
-                <img
-                  v-show="!isSelectedPhotoFailed(photo)"
-                  :src="getSelectedPhotoPreviewUrl(photo)"
-                  :alt="photo.title"
-                  loading="lazy"
-                  @load="handleSelectedPhotoLoad(photo)"
-                  @error="handleSelectedPhotoError(photo)"
-                />
-              </span>
-              <span class="selected-photo-card__meta">
-                <span>{{ photo.title || formatSelectedPhotoCategory(photo) }}</span>
-              </span>
-            </button>
-            <div v-if="showSelectedPhotoGridLoading" class="selected-photo-grid__loading" aria-live="polite">
-              <span class="selected-spin selected-spin--large" aria-hidden="true">
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-              </span>
-              <span>继续解析中...</span>
-            </div>
-            <span
-              v-if="selectedPhotoDragBox"
-              class="selected-photo-grid__selection"
-              :style="selectedPhotoDragBoxStyle"
-              aria-hidden="true"
-            ></span>
-          </div>
-          <div v-else class="selected-download__empty">
-            {{ selectedPhotoCurrentFilterDone ? "该分类暂无可下载图片" : "输入链接后解析当前分类图片" }}
-          </div>
+          <SelectedPhotoGrid
+            v-else
+            :photos="selectedPhotos"
+            :visible-photos="visibleSelectedPhotos"
+            :show-loading="showSelectedPhotoGridLoading"
+            :empty-text="selectedPhotoGridEmptyText"
+            :is-photo-loaded="isSelectedPhotoLoaded"
+            :is-photo-failed="isSelectedPhotoFailed"
+            :get-preview-url="getSelectedPhotoPreviewUrl"
+            @update-photos="selectedPhotos = $event"
+            @request-next-batch="handleSelectedPhotoGridRequestNextBatch"
+            @photo-load="handleSelectedPhotoLoad"
+            @photo-error="handleSelectedPhotoError"
+            @open-preview="openSelectedPhotoPreview"
+          />
         </section>
 
         <section class="selected-download__bar">
@@ -1628,42 +1255,15 @@ function cancelReplacementSubmit() {
       </div>
     </section>
 
-    <Teleport to="body">
-      <div
-        v-if="activeSelectedPhotoPreview"
-        class="selected-photo-preview"
-        role="dialog"
-        aria-modal="true"
-        @click.self="closeSelectedPhotoPreview"
-      >
-        <button type="button" class="selected-photo-preview__close" aria-label="关闭预览" @click="closeSelectedPhotoPreview">×</button>
-        <button
-          type="button"
-          class="selected-photo-preview__nav selected-photo-preview__nav--prev"
-          aria-label="上一张"
-          @click="stepSelectedPhotoPreview(-1)"
-        >
-          ‹
-        </button>
-        <img
-          class="selected-photo-preview__image"
-          :src="getSelectedPhotoLargePreviewUrl(activeSelectedPhotoPreview)"
-          :alt="activeSelectedPhotoPreview.title"
-          @error="handleSelectedPhotoLargeError(activeSelectedPhotoPreview)"
-        />
-        <button
-          type="button"
-          class="selected-photo-preview__nav selected-photo-preview__nav--next"
-          aria-label="下一张"
-          @click="stepSelectedPhotoPreview(1)"
-        >
-          ›
-        </button>
-        <div class="selected-photo-preview__counter">
-          {{ (selectedPhotoPreviewIndex ?? 0) + 1 }} / {{ selectedPhotoPreviewItems.length }}
-        </div>
-      </div>
-    </Teleport>
+    <SelectedPhotoPreviewModal
+      :photo="activeSelectedPhotoPreview"
+      :image-url="activeSelectedPhotoPreview ? getSelectedPhotoLargePreviewUrl(activeSelectedPhotoPreview) : ''"
+      :current-index="selectedPhotoPreviewIndex"
+      :total="selectedPhotoPreviewItems.length"
+      @close="closeSelectedPhotoPreview"
+      @step="stepSelectedPhotoPreview"
+      @image-error="handleSelectedPhotoLargeError"
+    />
   </div>
 </template>
 
@@ -1868,202 +1468,12 @@ function cancelReplacementSubmit() {
   height: 14px;
 }
 
-.selected-spin--large {
-  width: 34px;
-  height: 34px;
-}
-
 .selected-download__bulk,
-.selected-download__filters,
 .selected-download__settings {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;
-}
-
-.selected-download__filters button {
-  min-height: 38px;
-  padding: 0 13px;
-  border-radius: 12px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--line);
-}
-
-.selected-download__filters button:hover,
-.selected-download__filter--active {
-  color: var(--text) !important;
-  border-color: var(--line-strong) !important;
-  background: rgba(77, 212, 198, 0.1) !important;
-}
-
-.selected-photo-grid {
-  position: relative;
-  grid-row: 4;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(clamp(118px, 10vw, 138px), 1fr));
-  align-content: start;
-  gap: 14px;
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-  max-height: 100%;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: 2px 4px 8px 2px;
-  scrollbar-gutter: stable;
-  user-select: none;
-}
-
-.selected-photo-grid--selecting {
-  cursor: crosshair;
-}
-
-.selected-photo-grid__selection {
-  position: absolute;
-  z-index: 4;
-  pointer-events: none;
-  border: 1px solid rgba(77, 212, 198, 0.88);
-  border-radius: 8px;
-  background: rgba(77, 212, 198, 0.16);
-  box-shadow: 0 0 0 1px rgba(3, 17, 19, 0.28);
-}
-
-.selected-photo-grid__loading {
-  grid-column: 1 / -1;
-  min-height: 118px;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 10px;
-  color: var(--accent);
-  border: 1px dashed rgba(77, 212, 198, 0.22);
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(77, 212, 198, 0.06), rgba(77, 212, 198, 0.02)),
-    rgba(4, 16, 19, 0.62);
-  font-size: 0.86rem;
-}
-
-.selected-photo-card {
-  position: relative;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) 34px;
-  height: 188px;
-  padding: 0;
-  overflow: hidden;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(7, 23, 27, 0.92);
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background 160ms ease;
-  user-select: none;
-}
-
-.selected-photo-card:hover {
-  border-color: rgba(77, 212, 198, 0.58);
-  background: rgba(11, 33, 38, 0.96);
-  transform: translateY(-1px);
-}
-
-.selected-photo-card--selected {
-  border-color: var(--accent);
-  box-shadow:
-    inset 0 0 0 2px rgba(77, 212, 198, 0.96),
-    0 0 0 1px rgba(77, 212, 198, 0.36);
-}
-
-.selected-photo-card__media {
-  position: relative;
-  display: block;
-  min-height: 0;
-  overflow: hidden;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.05), transparent),
-    rgba(255, 255, 255, 0.04);
-}
-
-.selected-photo-card__media img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.selected-photo-card__loading {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background:
-    linear-gradient(110deg, rgba(255, 255, 255, 0.04) 8%, rgba(255, 255, 255, 0.1) 18%, rgba(255, 255, 255, 0.04) 33%),
-    rgba(15, 37, 42, 0.92);
-  background-size: 200% 100%;
-  animation: selected-photo-loading 1.1s linear infinite;
-}
-
-.selected-photo-card__loading::after {
-  content: "";
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  border: 2px solid rgba(223, 240, 235, 0.2);
-  border-top-color: var(--accent);
-  animation: selected-photo-spinner 760ms linear infinite;
-}
-
-.selected-photo-card__placeholder {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: #f6f6f3;
-}
-
-.selected-photo-card__placeholder-icon {
-  position: relative;
-  width: 42px;
-  height: 42px;
-  border-radius: 10px;
-  border: 2px solid #deded9;
-}
-
-.selected-photo-card__placeholder-icon::before,
-.selected-photo-card__placeholder-icon::after {
-  content: "";
-  position: absolute;
-}
-
-.selected-photo-card__placeholder-icon::before {
-  left: 10px;
-  top: 9px;
-  width: 18px;
-  height: 18px;
-  border: 2px solid #deded9;
-  border-top: 0;
-  border-radius: 0 0 8px 8px;
-}
-
-.selected-photo-card__placeholder-icon::after {
-  left: 13px;
-  top: 5px;
-  width: 12px;
-  height: 9px;
-  border: 2px solid #deded9;
-  border-bottom: 0;
-  border-radius: 9px 9px 0 0;
-}
-
-@keyframes selected-photo-loading {
-  to {
-    background-position-x: -200%;
-  }
-}
-
-@keyframes selected-photo-spinner {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @keyframes selected-spin-rotate {
@@ -2078,75 +1488,6 @@ function cancelReplacementSubmit() {
   }
 }
 
-.selected-photo-card__tag {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 1;
-  max-width: calc(100% - 42px);
-  padding: 3px 7px;
-  border-radius: 999px;
-  color: rgba(223, 240, 235, 0.92);
-  background: rgba(3, 10, 13, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  font-size: 0.72rem;
-  line-height: 1.2;
-}
-
-.selected-photo-card__meta {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  padding: 0 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-  color: rgba(223, 240, 235, 0.9);
-  background: rgba(3, 10, 13, 0.78);
-  font-size: 0.8rem;
-  text-align: left;
-}
-
-.selected-photo-card__meta span {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.selected-photo-card__checkbox {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 1;
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  border: 1px solid rgba(223, 240, 235, 0.78);
-  background: rgba(3, 10, 13, 0.72);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-}
-
-.selected-photo-card:hover .selected-photo-card__checkbox {
-  border-color: var(--accent);
-}
-
-.selected-photo-card__checkbox--checked {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-.selected-photo-card__checkbox--checked::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 2px;
-  width: 5px;
-  height: 9px;
-  border: solid #031113;
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
-
 .selected-download__empty {
   grid-row: 4;
   min-height: 0;
@@ -2157,92 +1498,6 @@ function cancelReplacementSubmit() {
   place-items: center;
   color: var(--muted);
   text-align: center;
-}
-
-.selected-photo-preview {
-  position: fixed;
-  inset: 0;
-  z-index: 2200;
-  display: grid;
-  place-items: center;
-  padding: 56px 76px 72px;
-  background: rgba(0, 0, 0, 0.68);
-  backdrop-filter: blur(2px);
-}
-
-.selected-photo-preview__image {
-  max-width: min(86vw, 1120px);
-  max-height: calc(100vh - 150px);
-  object-fit: contain;
-  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.44);
-}
-
-.selected-photo-preview__close,
-.selected-photo-preview__nav {
-  position: fixed;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(8px);
-  line-height: 1;
-}
-
-.selected-photo-preview__close {
-  top: 24px;
-  right: 24px;
-  width: 42px;
-  height: 42px;
-  border-radius: 999px;
-  font-size: 1.5rem;
-}
-
-.selected-photo-preview__nav {
-  top: 50%;
-  width: 48px;
-  height: 48px;
-  border-radius: 999px;
-  color: transparent;
-  transform: translateY(50%);
-}
-
-.selected-photo-preview__nav::before {
-  content: "";
-  width: 12px;
-  height: 12px;
-  border-top: 3px solid rgba(255, 255, 255, 0.9);
-  border-right: 3px solid rgba(255, 255, 255, 0.9);
-}
-
-.selected-photo-preview__nav--prev {
-  left: 28px;
-}
-
-.selected-photo-preview__nav--prev::before {
-  transform: translate(2px, 80%) rotate(-135deg);
-}
-
-.selected-photo-preview__nav--next {
-  right: 28px;
-}
-
-.selected-photo-preview__nav--next::before {
-  transform: translate(-2px, 80%) rotate(45deg);
-}
-
-.selected-photo-preview__counter {
-  position: fixed;
-  left: 50%;
-  bottom: 28px;
-  min-width: 72px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  color: rgba(255, 255, 255, 0.92);
-  background: rgba(255, 255, 255, 0.18);
-  text-align: center;
-  transform: translateX(-50%);
 }
 
 .selected-download__bar {
@@ -2291,168 +1546,6 @@ function cancelReplacementSubmit() {
   margin-bottom: 10px;
 }
 
-.create-task-modal__field-label {
-  color: var(--muted);
-  font-size: 0.84rem;
-}
-
-.strategy-card {
-  display: grid;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background:
-    linear-gradient(180deg, rgba(77, 212, 198, 0.05), transparent 100%),
-    rgba(255, 255, 255, 0.03);
-}
-
-.strategy-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 1.15fr) minmax(0, 1fr);
-  gap: 10px;
-}
-
-.strategy-panel {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  min-width: 0;
-  padding: 10px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(4, 16, 19, 0.44);
-}
-
-.strategy-panel:first-child .segmented-control {
-  align-self: start;
-}
-
-.field-hint {
-  min-height: 1.65em;
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.84rem;
-  line-height: 1.65;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.field-hint--spacer {
-  display: none;
-}
-
-/* 数量输入与限制/无限制按钮同排，宽度受控以避免挤压右侧策略区域。 */
-.quantity-control-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-}
-
-.quantity-control-row .segmented-control {
-  flex: 0 0 auto;
-}
-
-.segmented-control {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: flex-start;
-}
-
-.segmented-control__item {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 42px;
-  min-width: 88px;
-  padding: 0 16px;
-  border-radius: 14px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--muted);
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
-}
-
-.segmented-control__item:hover {
-  border-color: var(--line-strong);
-  color: var(--text);
-  transform: translateY(-1px);
-}
-
-.segmented-control__item--active {
-  color: #031113;
-  border-color: transparent;
-  background: linear-gradient(135deg, var(--accent), #7ce5c9);
-  box-shadow: 0 10px 24px rgba(77, 212, 198, 0.2);
-}
-
-.quantity-field {
-  flex: 1 1 180px;
-  min-width: 176px;
-  max-width: 186px;
-}
-.number-stepper {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 44px;
-  align-items: stretch;
-  width: 100%;
-  min-height: 44px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.number-stepper:focus-within {
-  border-color: var(--line-strong);
-  box-shadow: 0 0 0 3px rgba(77, 212, 198, 0.12);
-}
-
-.number-stepper__control {
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.03);
-  border: 0;
-  border-right: 1px solid var(--line);
-  font-size: 1.05rem;
-  line-height: 1;
-  transition: background 160ms ease, color 160ms ease;
-}
-
-.number-stepper__control:last-child {
-  border-right: 0;
-  border-left: 1px solid var(--line);
-}
-
-.number-stepper__control:hover:not(:disabled) {
-  color: var(--text);
-  background: rgba(77, 212, 198, 0.1);
-}
-
-.number-stepper__control:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
-}
-
-.quantity-field .number-stepper input {
-  min-width: 0;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  text-align: center;
-}
-
-.quantity-field .number-stepper input:focus {
-  box-shadow: none;
-  text-align: center;
-}
-
 .create-task-modal textarea {
   height: 108px;
   min-height: 108px;
@@ -2466,9 +1559,6 @@ function cancelReplacementSubmit() {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .strategy-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 1280px) {
@@ -2499,10 +1589,6 @@ function cancelReplacementSubmit() {
 
 @media (max-width: 980px) {
   .create-task-modal__grid {
-    grid-template-columns: 1fr;
-  }
-
-  .strategy-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2565,23 +1651,6 @@ function cancelReplacementSubmit() {
     border-radius: 16px;
   }
 
-  .selected-photo-grid {
-    grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
-    gap: 10px;
-  }
-
-  .selected-photo-card {
-    height: 154px;
-    grid-template-rows: minmax(0, 1fr) 28px;
-    border-radius: 10px;
-  }
-
-  .selected-photo-card__meta {
-    min-height: 28px;
-    padding: 0 9px;
-    font-size: 0.74rem;
-  }
-
   .selected-download__bar {
     gap: 10px;
     padding-top: 8px;
@@ -2600,15 +1669,5 @@ function cancelReplacementSubmit() {
     min-height: 88px;
   }
 
-  .strategy-card,
-  .strategy-panel {
-    padding: 8px;
-  }
-
-  .segmented-control__item {
-    height: 38px;
-    min-width: 78px;
-    padding: 0 12px;
-  }
 }
 </style>

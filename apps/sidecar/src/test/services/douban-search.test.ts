@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { searchDoubanMovies } from "./douban-search.js";
-import type { RuntimeConfig } from "../shared/runtime-config.js";
+import { searchDoubanMovies } from "../../services/douban-search.js";
+import type { RuntimeConfig } from "../../shared/runtime-config.js";
 
 function createConfig(): RuntimeConfig {
   return {

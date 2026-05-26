@@ -5,12 +5,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { DownloaderService } from "./downloader.js";
-import { buildResumeArtifacts, saveResumeMetadata } from "./resume-store.js";
-import { FileTaskControl } from "./task-control.js";
-import type { DiscoveryResult, SidecarTask } from "../shared/contracts.js";
-import type { SidecarLogger } from "../shared/logger.js";
-import type { RuntimeConfig } from "../shared/runtime-config.js";
+import { DownloaderService } from "../../services/downloader.js";
+import { buildResumeArtifacts, saveResumeMetadata } from "../../services/resume-store.js";
+import { FileTaskControl } from "../../services/task-control.js";
+import type { DiscoveryResult, SidecarTask } from "../../shared/contracts.js";
+import type { SidecarLogger } from "../../shared/logger.js";
+import type { RuntimeConfig } from "../../shared/runtime-config.js";
 
 const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+tm2QAAAAASUVORK5CYII=",

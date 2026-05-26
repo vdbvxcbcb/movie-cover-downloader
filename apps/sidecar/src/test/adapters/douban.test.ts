@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 
-import type { SidecarTask } from "../shared/contracts.js";
-import type { SidecarLogger } from "../shared/logger.js";
-import { buildOutputFolderName, sanitizeNameSegment } from "../utils/output-folder.js";
-import { fetchText, resolveRequestIntervalMs } from "./base.js";
-import { classifyDoubanPhotoPage, DoubanAdapter } from "./douban.js";
+import type { SidecarTask } from "../../shared/contracts.js";
+import type { SidecarLogger } from "../../shared/logger.js";
+import { buildOutputFolderName, sanitizeNameSegment } from "../../utils/output-folder.js";
+import { fetchText, resolveRequestIntervalMs } from "../../adapters/base.js";
+import { classifyDoubanPhotoPage, DoubanAdapter } from "../../adapters/douban.js";
 
 // 创建测试用空日志器，避免单元测试向 stdout 输出噪声。
 function createLogger(): SidecarLogger {

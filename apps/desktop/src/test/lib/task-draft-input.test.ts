@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   normalizeDetailUrlsInput,
   validateTaskDraftInput,
-} from "./task-draft-input";
+} from "../../lib/task-draft-input";
 
 test("批量链接输入会把连续链接自动拆成逐行", () => {
   const normalized = normalizeDetailUrlsInput(

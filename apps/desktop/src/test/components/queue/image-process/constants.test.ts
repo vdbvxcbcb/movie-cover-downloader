@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { layoutPresets, ratios, strokeWidths } from "./constants";
+import { layoutPresets, ratios, strokeWidths } from "../../../../components/composables/constants";
 
 describe("image process constants", () => {
   it("keeps layout preset ids unique and cell bounds valid", () => {

@@ -8,7 +8,7 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/adapters/douban.test.ts src/services/downloader.test.ts src/services/douban-search.test.ts"
+    "test": "tsx --test src/test/adapters/douban.test.ts src/test/services/downloader.test.ts src/test/services/douban-search.test.ts"
   },
   "dependencies": {
     "sharp": "^0.34.2"

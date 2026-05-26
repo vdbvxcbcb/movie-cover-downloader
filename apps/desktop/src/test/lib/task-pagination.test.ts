@@ -1,7 +1,7 @@
 // 分页工具测试：覆盖边界页码和页数计算。
 import test from "node:test";
 import assert from "node:assert/strict";
-import { paginateItems } from "./task-pagination";
+import { paginateItems } from "../../lib/task-pagination";
 
 test("分页器默认每页 5 条并返回对应页数据", () => {
   const items = Array.from({ length: 12 }, (_, index) => `task-${index + 1}`);

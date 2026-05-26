@@ -1,29 +1,23 @@
 <script setup lang="ts">
 // 图片拼版处理弹窗：固定预设布局、轻量标注和 canvas 导出。
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, shallowRef } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, shallowRef, useTemplateRef } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  Annotation,
   AnnotationDragMode,
-  AnnotationKind,
   AspectRatio,
-  DrawingKind,
   LayoutCell,
   NoticeTone,
   OutputFormat,
   SlotImage,
-} from "./image-process/types";
-import {
-  defaultAnnotationFontSize,
-  defaultBackgroundColor,
-  layoutPresets,
-  ratios,
-  shapeResizeHandles,
-  strokeWidths,
-  textResizeHandles,
-} from "./image-process/constants";
-import ActionButton from "../common/ActionButton.vue";
+} from "../composables/types";
+import { defaultBackgroundColor, ratios, strokeWidths } from "../composables/constants";
+import ImageProcessLayoutPicker from "./image-process/ImageProcessLayoutPicker.vue";
+import ImageProcessSettingsContent from "./image-process/ImageProcessSettingsContent.vue";
+import ImageProcessToolStrip from "./image-process/ImageProcessToolStrip.vue";
+import { useImageProcessAnnotations } from "../composables/useImageProcessAnnotations";
+import { useImageProcessLayoutState } from "../composables/useImageProcessLayoutState";
+import { useImageProcessSlotImages } from "../composables/useImageProcessSlotImages";
 import MessageNotice from "../common/MessageNotice.vue";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 
@@ -34,8 +28,22 @@ type ProcessBridge = typeof runtimeBridge & {
     imageBytes: Uint8Array,
     format: OutputFormat,
   ) => Promise<string>;
-  readDroppedImageFile?: (filePath: string) => Promise<Uint8Array>;
 };
+
+interface ImageProcessSettings {
+  ratio: AspectRatio;
+  borderTop: number;
+  borderRight: number;
+  borderBottom: number;
+  borderLeft: number;
+  gap: number;
+  radius: number;
+  backgroundColor: string;
+  backgroundUrl: string;
+  backgroundName: string;
+  backgroundOpacity: number;
+  backgroundOverlay: boolean;
+}
 
 const props = defineProps<{
   outputRootDir: string;
@@ -48,20 +56,11 @@ const emit = defineEmits<{
 
 let unlistenDragDrop: UnlistenFn | null = null;
 let exportDebounceTimer: number | null = null;
-const fileInput = ref<HTMLInputElement | null>(null);
-const backgroundInput = ref<HTMLInputElement | null>(null);
-const previewBoard = ref<HTMLElement | null>(null);
-const selectedLayoutId = ref("q4-grid");
+const fileInput = useTemplateRef<HTMLInputElement>("fileInput");
+const backgroundInput = useTemplateRef<HTMLInputElement>("backgroundInput");
+const previewBoard = useTemplateRef<HTMLElement>("previewBoard");
 const activeSlotIndex = shallowRef(0);
 const selectedSlotIndex = ref<number | null>(null);
-const draggedSlotIndex = ref<number | null>(null);
-const hoveredSlotIndex = ref<number | null>(null);
-const selectedAnnotationId = shallowRef("");
-const draggingAnnotationId = shallowRef("");
-const annotationDragMode = ref<AnnotationDragMode>("move");
-const activeDrawingKind = ref<DrawingKind | null>(null);
-const creatingAnnotationId = shallowRef("");
-const suppressNextBoardClick = shallowRef(false);
 const saving = shallowRef(false);
 const exportDebouncing = shallowRef(false);
 const browsingOutputDirectory = shallowRef(false);
@@ -74,8 +73,8 @@ const localOutputRootDir = ref(props.outputRootDir);
 const leftSidebarCollapsed = shallowRef(false);
 const rightSidebarCollapsed = shallowRef(false);
 
-const settings = reactive({
-  ratio: "1:1" as AspectRatio,
+const settings = reactive<ImageProcessSettings>({
+  ratio: "1:1",
   borderTop: 0,
   borderRight: 0,
   borderBottom: 0,
@@ -89,42 +88,74 @@ const settings = reactive({
   backgroundOverlay: false,
 });
 
-function createEmptySlotImages() {
-  return Array.from({ length: 9 }).fill(null) as (SlotImage | null)[];
-}
-
-const slotImages = ref<(SlotImage | null)[]>(createEmptySlotImages());
-const annotations = ref<Annotation[]>([]);
-const annotationDrag = reactive({
-  startX: 0,
-  startY: 0,
-  originX: 0,
-  originY: 0,
-  originW: 0,
-  originH: 0,
-  originArrowStartX: 0,
-  originArrowStartY: 0,
-  originArrowEndX: 0,
-  originArrowEndY: 0,
-  originFontSize: 0,
-  originRotation: 0,
-  startAngle: 0,
-  hasMoved: false,
+const { selectedLayoutId, selectedLayout, visibleCells, singleImageLayoutSelected, groupedLayouts } = useImageProcessLayoutState({
+  activeSlotIndex,
+  selectedSlotIndex,
 });
-const creationDrag = reactive({
-  startX: 0,
-  startY: 0,
+const {
+  slotImages,
+  selectedSlotImage,
+  selectedImageOpacity,
+  draggedSlotIndex,
+  hoveredSlotIndex,
+  hasImages,
+  acceptDroppedPath,
+  openSlotFilePicker,
+  handleSlotClick,
+  handleSlotFileChange,
+  handleSlotDrop,
+  handleSlotDragEnter,
+  handleSlotDragLeave,
+  startSlotSwapDrag,
+  removeSlotImage,
+  zoomSlot,
+  resetSlotZoom,
+  shuffleImages,
+  clearSlotImages,
+  cleanupSlotImages,
+  slotIndexFromDropPosition,
+} = useImageProcessSlotImages({
+  activeSlotIndex,
+  selectedSlotIndex,
+  visibleCells,
+  previewBoard,
+  bridge: runtimeBridge,
+  createId,
+  showNotice,
+  clearNotice,
 });
-
-const selectedLayout = computed(() => layoutPresets.find((layout) => layout.id === selectedLayoutId.value) ?? layoutPresets[0]);
-const visibleCells = computed(() => selectedLayout.value.cells);
-const shouldContainSlotImages = computed(() => settings.ratio === "1:1" && selectedLayout.value.count === 1);
-const groupedLayouts = computed(() =>
-  Array.from({ length: 9 }, (_, index) => ({
-    count: index + 1,
-    layouts: layoutPresets.filter((layout) => layout.count === index + 1),
-  })),
-);
+const {
+  annotations,
+  selectedAnnotationId,
+  activeDrawingKind,
+  addAnnotation,
+  selectDrawingTool,
+  clearAnnotations,
+  annotationStyle,
+  arrowHandleStyle,
+  arrowSvgViewBox,
+  arrowSvgCoordinate,
+  arrowBodyEndCoordinate,
+  arrowHeadPoints,
+  shouldShowAnnotationToolbar,
+  shouldShowArrowHandles,
+  shouldShowResizeHandles,
+  resizeHandlesFor,
+  updateAnnotation,
+  copyAnnotation,
+  deleteAnnotation,
+  startAnnotationDrag,
+  startTextAnnotationPointer,
+  editTextAnnotation,
+  startAnnotationCreate,
+  blockDrawingClick,
+  cleanupAnnotationInteractions,
+  arrowEndpoints,
+} = useImageProcessAnnotations({
+  previewBoard,
+  createId,
+});
+const shouldContainSlotImages = computed(() => settings.ratio === "1:1" && singleImageLayoutSelected.value);
 const aspectRatioValue = computed(() => {
   const [width, height] = settings.ratio.split(":").map(Number);
   return width / height;
@@ -142,27 +173,7 @@ const boardStyle = computed(() => ({
   "--gap": `${settings.gap}px`,
   "--cell-radius": `${settings.radius}px`,
 } as Record<string, string>));
-const selectedSlotImage = computed(() =>
-  selectedSlotIndex.value === null ? null : slotImages.value[selectedSlotIndex.value] ?? null,
-);
-const selectedImageOpacity = computed({
-  get() {
-    return selectedSlotImage.value?.opacity ?? 100;
-  },
-  set(value: number) {
-    if (selectedSlotIndex.value === null) return;
-    const current = slotImages.value[selectedSlotIndex.value];
-    if (!current) return;
-    const nextImages = [...slotImages.value];
-    nextImages[selectedSlotIndex.value] = {
-      ...current,
-      opacity: clamp(Number(value) || 100, 20, 100),
-    };
-    slotImages.value = nextImages;
-  },
-});
 const displaySavedOutputPath = computed(() => normalizeDisplayPath(savedOutputPath.value));
-const hasImages = computed(() => slotImages.value.some(Boolean));
 const layoutShellClass = computed(() => ({
   "image-process-layout--left-collapsed": leftSidebarCollapsed.value,
   "image-process-layout--right-collapsed": rightSidebarCollapsed.value,
@@ -183,13 +194,6 @@ watch(
     }
   },
 );
-
-watch(selectedLayoutId, () => {
-  activeSlotIndex.value = 0;
-  if (selectedSlotIndex.value !== null && selectedSlotIndex.value >= visibleCells.value.length) {
-    selectedSlotIndex.value = null;
-  }
-});
 
 function showNotice(message: string, tone: NoticeTone = "warn") {
   noticeMessage.value = message;
@@ -217,111 +221,8 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function measureTextAnnotation(text: string, fontSize: number) {
-  const content = text || " ";
-  let width = Array.from(content).length * fontSize * 0.9;
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  if (context) {
-    context.font = `700 ${fontSize}px "Microsoft YaHei UI", sans-serif`;
-    width = context.measureText(content).width;
-  }
-
-  return {
-    width: Math.max(fontSize * 0.75, width + 4),
-    height: Math.max(fontSize * 1.15, fontSize + 4),
-  };
-}
-
-function measuredTextAnnotation(annotation: Annotation, anchorX: "left" | "right" = "left", anchorY: "top" | "bottom" = "top") {
-  const boardWidth = Math.max(1, previewBoard.value?.clientWidth ?? 980);
-  const boardHeight = Math.max(1, previewBoard.value?.clientHeight ?? 640);
-  const measured = measureTextAnnotation(annotation.text, annotation.fontSize);
-  const w = clamp(measured.width / boardWidth, 0.01, 1);
-  const h = clamp(measured.height / boardHeight, 0.01, 1);
-  const right = annotation.x + annotation.w;
-  const bottom = annotation.y + annotation.h;
-
-  return {
-    ...annotation,
-    x: anchorX === "right" ? clamp(right - w, 0, 1 - w) : clamp(annotation.x, 0, 1 - w),
-    y: anchorY === "bottom" ? clamp(bottom - h, 0, 1 - h) : clamp(annotation.y, 0, 1 - h),
-    w,
-    h,
-  };
-}
-
-function arrowEndpoints(annotation: Annotation) {
-  if (
-    typeof annotation.arrowStartX === "number" &&
-    typeof annotation.arrowStartY === "number" &&
-    typeof annotation.arrowEndX === "number" &&
-    typeof annotation.arrowEndY === "number"
-  ) {
-    return {
-      startX: annotation.arrowStartX,
-      startY: annotation.arrowStartY,
-      endX: annotation.arrowEndX,
-      endY: annotation.arrowEndY,
-    };
-  }
-
-  return {
-    startX: annotation.arrowReverseX ? annotation.x + annotation.w : annotation.x,
-    startY: annotation.arrowReverseY ? annotation.y + annotation.h : annotation.y,
-    endX: annotation.arrowReverseX ? annotation.x : annotation.x + annotation.w,
-    endY: annotation.arrowReverseY ? annotation.y : annotation.y + annotation.h,
-  };
-}
-
-function normalizeArrowAnnotation(annotation: Annotation, startX: number, startY: number, endX: number, endY: number): Annotation {
-  const nextStartX = clamp(startX, 0, 1);
-  const nextStartY = clamp(startY, 0, 1);
-  const nextEndX = clamp(endX, 0, 1);
-  const nextEndY = clamp(endY, 0, 1);
-  const x = Math.min(nextStartX, nextEndX);
-  const y = Math.min(nextStartY, nextEndY);
-  const w = Math.abs(nextEndX - nextStartX);
-  const h = Math.abs(nextEndY - nextStartY);
-
-  return {
-    ...annotation,
-    x,
-    y,
-    w,
-    h,
-    arrowReverseX: nextEndX < nextStartX,
-    arrowReverseY: nextEndY < nextStartY,
-    arrowStartX: nextStartX,
-    arrowStartY: nextStartY,
-    arrowEndX: nextEndX,
-    arrowEndY: nextEndY,
-  };
-}
-
-function arrowLayout(annotation: Annotation) {
-  const boardWidth = Math.max(1, previewBoard.value?.clientWidth ?? 980);
-  const boardHeight = Math.max(1, previewBoard.value?.clientHeight ?? 640);
-  const paddingX = Math.max(12, annotation.strokeWidth * 2.4) / boardWidth;
-  const paddingY = Math.max(12, annotation.strokeWidth * 2.4) / boardHeight;
-  const endpoints = arrowEndpoints(annotation);
-  const left = clamp(Math.min(endpoints.startX, endpoints.endX) - paddingX, 0, 1);
-  const top = clamp(Math.min(endpoints.startY, endpoints.endY) - paddingY, 0, 1);
-  const right = clamp(Math.max(endpoints.startX, endpoints.endX) + paddingX, left + 0.001, 1);
-  const bottom = clamp(Math.max(endpoints.startY, endpoints.endY) + paddingY, top + 0.001, 1);
-  const w = Math.max(0.001, right - left);
-  const h = Math.max(0.001, bottom - top);
-
-  return {
-    left,
-    top,
-    w,
-    h,
-    startX: ((endpoints.startX - left) / w) * 100,
-    startY: ((endpoints.startY - top) / h) * 100,
-    endX: ((endpoints.endX - left) / w) * 100,
-    endY: ((endpoints.endY - top) / h) * 100,
-  };
+function updateImageProcessSetting<K extends keyof ImageProcessSettings>(key: K, value: ImageProcessSettings[K]) {
+  settings[key] = value;
 }
 
 function createId(prefix: string) {
@@ -349,786 +250,9 @@ async function browseOutputDirectory() {
   }
 }
 
-function revokeSlotImage(image: SlotImage | null) {
-  if (image?.url) {
-    URL.revokeObjectURL(image.url);
-  }
-}
-
-function setSlotImage(index: number, file: File) {
-  if (!file.type.startsWith("image/")) {
-    showNotice("请选择图片文件。", "warn");
-    return;
-  }
-
-  const nextImages = [...slotImages.value];
-  revokeSlotImage(nextImages[index] ?? null);
-  nextImages[index] = {
-    id: createId("image"),
-    url: URL.createObjectURL(file),
-    name: file.name,
-    scale: 1,
-    opacity: 100,
-  };
-  slotImages.value = nextImages;
-  selectedSlotIndex.value = index;
-  clearNotice();
-}
-
-function fileNameFromPath(filePath: string) {
-  return filePath.split(/[\\/]/).pop() || "dropped-image";
-}
-
-function imageMimeType(fileName: string) {
-  const extension = fileName.split(".").pop()?.toLowerCase();
-  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
-  if (extension === "png") return "image/png";
-  if (extension === "webp") return "image/webp";
-  if (extension === "gif") return "image/gif";
-  if (extension === "bmp") return "image/bmp";
-  return "application/octet-stream";
-}
-
-async function acceptDroppedPath(filePath: string, index: number) {
-  try {
-  const bridge = runtimeBridge as ProcessBridge;
-    if (!bridge.readDroppedImageFile) {
-      throw new Error("runtimeBridge.readDroppedImageFile 尚未实现。");
-    }
-
-    const fileName = fileNameFromPath(filePath);
-    const bytes = await bridge.readDroppedImageFile(filePath);
-    const file = new File([bytes], fileName, { type: imageMimeType(fileName) });
-    setSlotImage(index, file);
-  } catch (error) {
-    showNotice(error instanceof Error ? error.message : String(error), "error");
-  }
-}
-
-function openSlotFilePicker(index: number) {
-  activeSlotIndex.value = index;
-  fileInput.value?.click();
-}
-
-function handleSlotClick(index: number) {
-  if (slotImages.value[index]) {
-    selectedSlotIndex.value = index;
-    return;
-  }
-
-  openSlotFilePicker(index);
-}
-
-function handleSlotFileChange(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const files = Array.from(input.files ?? []);
-  if (files.length === 0) return;
-
-  let targetIndex = activeSlotIndex.value;
-  for (const file of files) {
-    if (targetIndex >= visibleCells.value.length) break;
-    setSlotImage(targetIndex, file);
-    targetIndex += 1;
-  }
-  input.value = "";
-}
-
-function handleSlotDrop(event: DragEvent, index: number) {
-  event.preventDefault();
-  event.stopPropagation();
-  hoveredSlotIndex.value = null;
-
-  if (draggedSlotIndex.value !== null && draggedSlotIndex.value !== index) {
-    swapSlotImages(draggedSlotIndex.value, index);
-    draggedSlotIndex.value = null;
-    return;
-  }
-
-  const file = event.dataTransfer?.files?.[0];
-  if (file) {
-    setSlotImage(index, file);
-  }
-}
-
-function swapSlotImages(source: number, target: number) {
-  if (source === target || source < 0 || target < 0) return;
-  const nextImages = [...slotImages.value];
-  [nextImages[source], nextImages[target]] = [nextImages[target] ?? null, nextImages[source] ?? null];
-  slotImages.value = nextImages;
-  if (selectedSlotIndex.value === source) {
-    selectedSlotIndex.value = target;
-  } else if (selectedSlotIndex.value === target) {
-    selectedSlotIndex.value = source;
-  }
-}
-
-function slotIndexFromClientPosition(clientX: number, clientY: number) {
-  if (!previewBoard.value) return -1;
-  const rect = previewBoard.value.getBoundingClientRect();
-  const x = clientX - rect.left;
-  const y = clientY - rect.top;
-  if (x < 0 || y < 0 || x > rect.width || y > rect.height) return -1;
-
-  const style = getComputedStyle(previewBoard.value);
-  const left = Number.parseFloat(style.getPropertyValue("--border-left")) || 0;
-  const top = Number.parseFloat(style.getPropertyValue("--border-top")) || 0;
-  const right = Number.parseFloat(style.getPropertyValue("--border-right")) || 0;
-  const bottom = Number.parseFloat(style.getPropertyValue("--border-bottom")) || 0;
-  const innerWidth = Math.max(1, rect.width - left - right);
-  const innerHeight = Math.max(1, rect.height - top - bottom);
-  const innerX = x - left;
-  const innerY = y - top;
-  if (innerX < 0 || innerY < 0 || innerX > innerWidth || innerY > innerHeight) return -1;
-
-  return visibleCells.value.findIndex((cell) => {
-    const cellLeft = (cell.x / 100) * innerWidth;
-    const cellTop = (cell.y / 100) * innerHeight;
-    const cellRight = cellLeft + (cell.w / 100) * innerWidth;
-    const cellBottom = cellTop + (cell.h / 100) * innerHeight;
-    return innerX >= cellLeft && innerX <= cellRight && innerY >= cellTop && innerY <= cellBottom;
-  });
-}
-
-function slotIndexFromDropPosition(position: { x: number; y: number }) {
-  const scaleFactor = window.devicePixelRatio || 1;
-  return slotIndexFromClientPosition(position.x / scaleFactor, position.y / scaleFactor);
-}
-
-function handleSlotDragEnter(event: DragEvent, index: number) {
-  event.preventDefault();
-  event.stopPropagation();
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = draggedSlotIndex.value !== null ? "move" : "copy";
-  }
-  hoveredSlotIndex.value = index;
-}
-
-function handleSlotDragLeave(event: DragEvent, index: number) {
-  event.preventDefault();
-  event.stopPropagation();
-  const current = event.currentTarget as HTMLElement;
-  const nextTarget = event.relatedTarget as Node | null;
-  if (hoveredSlotIndex.value === index && (!nextTarget || !current.contains(nextTarget))) {
-    hoveredSlotIndex.value = null;
-  }
-}
-
-function startSlotSwapDrag(event: PointerEvent, index: number) {
-  event.preventDefault();
-  event.stopPropagation();
-  draggedSlotIndex.value = index;
-  hoveredSlotIndex.value = index;
-  window.addEventListener("pointermove", handleSlotSwapMove);
-  window.addEventListener("pointerup", stopSlotSwapDrag, { once: true });
-  window.addEventListener("pointercancel", cancelSlotSwapDrag, { once: true });
-  window.addEventListener("blur", cancelSlotSwapDrag, { once: true });
-}
-
-function handleSlotSwapMove(event: PointerEvent) {
-  if (draggedSlotIndex.value === null) return;
-  hoveredSlotIndex.value = slotIndexFromClientPosition(event.clientX, event.clientY);
-}
-
-function stopSlotSwapDrag(event: PointerEvent) {
-  if (draggedSlotIndex.value !== null) {
-    const targetIndex = slotIndexFromClientPosition(event.clientX, event.clientY);
-    if (targetIndex >= 0) {
-      swapSlotImages(draggedSlotIndex.value, targetIndex);
-    }
-  }
-  draggedSlotIndex.value = null;
-  hoveredSlotIndex.value = null;
-  window.removeEventListener("pointermove", handleSlotSwapMove);
-  window.removeEventListener("pointercancel", cancelSlotSwapDrag);
-  window.removeEventListener("blur", cancelSlotSwapDrag);
-}
-
-function cancelSlotSwapDrag() {
-  draggedSlotIndex.value = null;
-  hoveredSlotIndex.value = null;
-  window.removeEventListener("pointermove", handleSlotSwapMove);
-  window.removeEventListener("pointerup", stopSlotSwapDrag);
-  window.removeEventListener("pointercancel", cancelSlotSwapDrag);
-  window.removeEventListener("blur", cancelSlotSwapDrag);
-}
-
-function resizeAnnotationFromDrag(annotation: Annotation, deltaX: number, deltaY: number) {
-  if (annotation.kind === "text") {
-    return resizeTextAnnotationFromDrag(annotation, deltaX, deltaY);
-  }
-
-  const minSize = 0.04;
-  let x = annotationDrag.originX;
-  let y = annotationDrag.originY;
-  let w = annotationDrag.originW;
-  let h = annotationDrag.originH;
-
-  if (annotationDragMode.value === "resize-se") {
-    w = annotationDrag.originW + deltaX;
-    h = annotationDrag.originH + deltaY;
-  } else if (annotationDragMode.value === "resize-s") {
-    h = annotationDrag.originH + deltaY;
-  } else if (annotationDragMode.value === "resize-e") {
-    w = annotationDrag.originW + deltaX;
-  } else if (annotationDragMode.value === "resize-sw") {
-    x = annotationDrag.originX + deltaX;
-    w = annotationDrag.originW - deltaX;
-    h = annotationDrag.originH + deltaY;
-  } else if (annotationDragMode.value === "resize-w") {
-    x = annotationDrag.originX + deltaX;
-    w = annotationDrag.originW - deltaX;
-  } else if (annotationDragMode.value === "resize-ne") {
-    y = annotationDrag.originY + deltaY;
-    w = annotationDrag.originW + deltaX;
-    h = annotationDrag.originH - deltaY;
-  } else if (annotationDragMode.value === "resize-n") {
-    y = annotationDrag.originY + deltaY;
-    h = annotationDrag.originH - deltaY;
-  } else if (annotationDragMode.value === "resize-nw") {
-    x = annotationDrag.originX + deltaX;
-    y = annotationDrag.originY + deltaY;
-    w = annotationDrag.originW - deltaX;
-    h = annotationDrag.originH - deltaY;
-  }
-
-  if (annotationDragMode.value.includes("w")) {
-    x = clamp(x, 0, annotationDrag.originX + annotationDrag.originW - minSize);
-    w = annotationDrag.originX + annotationDrag.originW - x;
-  } else {
-    w = clamp(w, minSize, 1 - annotation.x);
-  }
-
-  if (annotationDragMode.value.includes("n")) {
-    y = clamp(y, 0, annotationDrag.originY + annotationDrag.originH - minSize);
-    h = annotationDrag.originY + annotationDrag.originH - y;
-  } else {
-    h = clamp(h, minSize, 1 - annotation.y);
-  }
-
-  return {
-    ...annotation,
-    x,
-    y,
-    w: clamp(w, minSize, 1 - x),
-    h: clamp(h, minSize, 1 - y),
-  };
-}
-
-function resizeTextAnnotationFromDrag(annotation: Annotation, deltaX: number, deltaY: number) {
-  const boardWidth = Math.max(1, previewBoard.value?.clientWidth ?? 980);
-  const boardHeight = Math.max(1, previewBoard.value?.clientHeight ?? 640);
-  const minPixelSize = 12;
-  const originWidth = Math.max(minPixelSize, annotationDrag.originW * boardWidth);
-  const originHeight = Math.max(minPixelSize, annotationDrag.originH * boardHeight);
-  let targetWidth = originWidth;
-  let targetHeight = originHeight;
-
-  if (annotationDragMode.value.includes("e")) {
-    targetWidth = originWidth + deltaX * boardWidth;
-  } else if (annotationDragMode.value.includes("w")) {
-    targetWidth = originWidth - deltaX * boardWidth;
-  }
-
-  if (annotationDragMode.value.includes("s")) {
-    targetHeight = originHeight + deltaY * boardHeight;
-  } else if (annotationDragMode.value.includes("n")) {
-    targetHeight = originHeight - deltaY * boardHeight;
-  }
-
-  const scale = Math.max(targetWidth / originWidth, targetHeight / originHeight);
-  const fontSize = clamp(Math.round(annotationDrag.originFontSize * scale), 12, 180);
-  return measuredTextAnnotation(
-    { ...annotation, fontSize },
-    annotationDragMode.value.includes("w") ? "right" : "left",
-    annotationDragMode.value.includes("n") ? "bottom" : "top",
-  );
-}
-
-function updateArrowPointFromDrag(annotation: Annotation, deltaX: number, deltaY: number, point: "start" | "end") {
-  const startX = annotationDrag.originArrowStartX;
-  const startY = annotationDrag.originArrowStartY;
-  const endX = annotationDrag.originArrowEndX;
-  const endY = annotationDrag.originArrowEndY;
-  const movedX = clamp((point === "start" ? startX : endX) + deltaX, 0, 1);
-  const movedY = clamp((point === "start" ? startY : endY) + deltaY, 0, 1);
-  const nextStartX = point === "start" ? movedX : startX;
-  const nextStartY = point === "start" ? movedY : startY;
-  const nextEndX = point === "end" ? movedX : endX;
-  const nextEndY = point === "end" ? movedY : endY;
-
-  return normalizeArrowAnnotation(annotation, nextStartX, nextStartY, nextEndX, nextEndY);
-}
-
-function moveArrowFromDrag(annotation: Annotation, deltaX: number, deltaY: number) {
-  const minX = Math.min(annotationDrag.originArrowStartX, annotationDrag.originArrowEndX);
-  const maxX = Math.max(annotationDrag.originArrowStartX, annotationDrag.originArrowEndX);
-  const minY = Math.min(annotationDrag.originArrowStartY, annotationDrag.originArrowEndY);
-  const maxY = Math.max(annotationDrag.originArrowStartY, annotationDrag.originArrowEndY);
-  const safeDeltaX = clamp(deltaX, -minX, 1 - maxX);
-  const safeDeltaY = clamp(deltaY, -minY, 1 - maxY);
-
-  return normalizeArrowAnnotation(
-    annotation,
-    annotationDrag.originArrowStartX + safeDeltaX,
-    annotationDrag.originArrowStartY + safeDeltaY,
-    annotationDrag.originArrowEndX + safeDeltaX,
-    annotationDrag.originArrowEndY + safeDeltaY,
-  );
-}
-
-function removeSlotImage(index: number) {
-  const nextImages = [...slotImages.value];
-  revokeSlotImage(nextImages[index] ?? null);
-  nextImages[index] = null;
-  slotImages.value = nextImages;
-  if (selectedSlotIndex.value === index) {
-    selectedSlotIndex.value = null;
-  }
-}
-
-function zoomSlot(index: number, delta: number) {
-  const current = slotImages.value[index];
-  if (!current) return;
-  const nextImages = [...slotImages.value];
-  nextImages[index] = {
-    ...current,
-    scale: clamp(Number((current.scale + delta).toFixed(2)), 0.5, 3),
-  };
-  slotImages.value = nextImages;
-}
-
-function resetSlotZoom(index: number) {
-  const current = slotImages.value[index];
-  if (!current) return;
-  const nextImages = [...slotImages.value];
-  nextImages[index] = { ...current, scale: 1 };
-  slotImages.value = nextImages;
-}
-
-function shuffleImages() {
-  const visibleIndexes = visibleCells.value.map((_, index) => index);
-  const images = visibleIndexes.map((index) => slotImages.value[index]).filter((image): image is SlotImage => Boolean(image));
-  if (images.length < 2) return;
-
-  const slots = [...visibleIndexes].sort(() => Math.random() - 0.5);
-  const shuffled = [...images].sort(() => Math.random() - 0.5);
-  const nextImages = [...slotImages.value];
-  for (const index of visibleIndexes) {
-    nextImages[index] = null;
-  }
-  shuffled.forEach((image, index) => {
-    const slotIndex = slots[index];
-    if (slotIndex !== undefined) {
-      nextImages[slotIndex] = image;
-    }
-  });
-  slotImages.value = nextImages;
-  selectedSlotIndex.value = null;
-}
-
 function clearImagesAndAnnotations() {
-  for (const image of slotImages.value) {
-    revokeSlotImage(image);
-  }
-  slotImages.value = createEmptySlotImages();
-  selectedSlotIndex.value = null;
-  annotations.value = [];
-  activeDrawingKind.value = null;
-}
-
-function addAnnotation(kind: AnnotationKind) {
-  const base = annotations.value.length * 0.035;
-  let annotation: Annotation = {
-    id: createId(kind),
-    kind,
-    x: clamp(0.42 + base, 0.08, 0.82),
-    y: clamp(0.42 + base, 0.08, 0.82),
-    w: kind === "arrow" ? 0.2 : 0.16,
-    h: kind === "arrow" ? 0.12 : 0.16,
-    text: "",
-    color: kind === "text" ? "#ff3b30" : "#ff3b30",
-    fontSize: defaultAnnotationFontSize,
-    strokeWidth: kind === "text" ? 2 : 5,
-    rotation: 0,
-  };
-  if (kind === "text") {
-    annotation = measuredTextAnnotation(annotation);
-  }
-  annotations.value = [...annotations.value, annotation];
-  selectedAnnotationId.value = annotation.id;
-}
-
-function selectDrawingTool(kind: DrawingKind) {
-  activeDrawingKind.value = activeDrawingKind.value === kind ? null : kind;
-  selectedAnnotationId.value = "";
-}
-
-function annotationStyle(annotation: Annotation) {
-  if (annotation.kind === "arrow") {
-    const layout = arrowLayout(annotation);
-    return {
-      left: `${layout.left * 100}%`,
-      top: `${layout.top * 100}%`,
-      width: `${layout.w * 100}%`,
-      height: `${layout.h * 100}%`,
-      color: annotation.color,
-      fontSize: `${annotation.fontSize}px`,
-      "--annotation-line-width": `${annotation.strokeWidth}px`,
-      "--annotation-rotation": `${annotation.rotation}deg`,
-      "--arrow-start-x": `${layout.startX}%`,
-      "--arrow-start-y": `${layout.startY}%`,
-      "--arrow-end-x": `${layout.endX}%`,
-      "--arrow-end-y": `${layout.endY}%`,
-    };
-  }
-
-  return {
-    left: `${annotation.x * 100}%`,
-    top: `${annotation.y * 100}%`,
-    width: `${annotation.w * 100}%`,
-    height: `${annotation.h * 100}%`,
-    color: annotation.color,
-    fontSize: `${annotation.fontSize}px`,
-    "--annotation-line-width": `${annotation.strokeWidth}px`,
-    "--annotation-rotation": `${annotation.rotation}deg`,
-  };
-}
-
-function arrowHandleStyle(annotation: Annotation, point: "start" | "end") {
-  const layout = arrowLayout(annotation);
-  return {
-    left: `${point === "start" ? layout.startX : layout.endX}%`,
-    top: `${point === "start" ? layout.startY : layout.endY}%`,
-  };
-}
-
-function arrowPreviewGeometry(annotation: Annotation) {
-  const layout = arrowLayout(annotation);
-  const boardWidth = Math.max(1, previewBoard.value?.clientWidth ?? 980);
-  const boardHeight = Math.max(1, previewBoard.value?.clientHeight ?? 640);
-  const boxWidth = Math.max(1, layout.w * boardWidth);
-  const boxHeight = Math.max(1, layout.h * boardHeight);
-  const startX = (layout.startX / 100) * boxWidth;
-  const startY = (layout.startY / 100) * boxHeight;
-  const endX = (layout.endX / 100) * boxWidth;
-  const endY = (layout.endY / 100) * boxHeight;
-  const angle = Math.atan2(endY - startY, endX - startX);
-  const headLength = clamp(annotation.strokeWidth * 2.6, 8, 18);
-  const headWidth = clamp(annotation.strokeWidth * 1.9, 6, 14);
-  const baseX = endX - headLength * Math.cos(angle);
-  const baseY = endY - headLength * Math.sin(angle);
-  const normalX = Math.cos(angle + Math.PI / 2);
-  const normalY = Math.sin(angle + Math.PI / 2);
-
-  return {
-    boxWidth,
-    boxHeight,
-    startX,
-    startY,
-    endX,
-    endY,
-    bodyEndX: baseX,
-    bodyEndY: baseY,
-    headPoints: [
-      [endX, endY],
-      [baseX + (headWidth / 2) * normalX, baseY + (headWidth / 2) * normalY],
-      [baseX - (headWidth / 2) * normalX, baseY - (headWidth / 2) * normalY],
-    ],
-  };
-}
-
-function arrowSvgViewBox(annotation: Annotation) {
-  const geometry = arrowPreviewGeometry(annotation);
-  return `0 0 ${geometry.boxWidth} ${geometry.boxHeight}`;
-}
-
-function arrowSvgCoordinate(annotation: Annotation, point: "start" | "end", axis: "x" | "y") {
-  const geometry = arrowPreviewGeometry(annotation);
-  if (point === "start") return axis === "x" ? geometry.startX : geometry.startY;
-  return axis === "x" ? geometry.endX : geometry.endY;
-}
-
-function arrowBodyEndCoordinate(annotation: Annotation, axis: "x" | "y") {
-  const geometry = arrowPreviewGeometry(annotation);
-  return axis === "x" ? geometry.bodyEndX : geometry.bodyEndY;
-}
-
-function arrowHeadPoints(annotation: Annotation) {
-  return arrowPreviewGeometry(annotation)
-    .headPoints.map(([x, y]) => `${x},${y}`)
-    .join(" ");
-}
-
-function shouldShowAnnotationToolbar(annotation: Annotation) {
-  if (selectedAnnotationId.value !== annotation.id) return false;
-  return draggingAnnotationId.value !== annotation.id && creatingAnnotationId.value !== annotation.id;
-}
-
-function shouldShowArrowHandles(annotation: Annotation) {
-  return annotation.kind === "arrow" && selectedAnnotationId.value === annotation.id;
-}
-
-function shouldShowResizeHandles(annotation: Annotation) {
-  return annotation.kind !== "arrow" && selectedAnnotationId.value === annotation.id;
-}
-
-function resizeHandlesFor(kind: AnnotationKind) {
-  return kind === "text" ? textResizeHandles : shapeResizeHandles;
-}
-
-function updateAnnotation(annotationId: string, patch: Partial<Annotation>) {
-  annotations.value = annotations.value.map((annotation) => {
-    if (annotation.id !== annotationId) return annotation;
-    const nextAnnotation = { ...annotation, ...patch };
-    return nextAnnotation.kind === "text" && ("text" in patch || "fontSize" in patch) ? measuredTextAnnotation(nextAnnotation) : nextAnnotation;
-  });
-}
-
-function copyAnnotation(annotation: Annotation) {
-  const copy: Annotation = {
-    ...annotation,
-    id: createId(annotation.kind),
-    x: clamp(annotation.x + 0.03, 0, 1 - annotation.w),
-    y: clamp(annotation.y + 0.03, 0, 1 - annotation.h),
-  };
-  annotations.value = [...annotations.value, copy];
-  selectedAnnotationId.value = copy.id;
-}
-
-function deleteAnnotation(annotationId: string) {
-  annotations.value = annotations.value.filter((annotation) => annotation.id !== annotationId);
-  if (selectedAnnotationId.value === annotationId) {
-    selectedAnnotationId.value = "";
-  }
-}
-
-function startAnnotationDrag(event: PointerEvent, annotation: Annotation, mode: AnnotationDragMode = "move") {
-  event.preventDefault();
-  event.stopPropagation();
-  selectedAnnotationId.value = annotation.id;
-  activeDrawingKind.value = null;
-  draggingAnnotationId.value = annotation.id;
-  annotationDragMode.value = mode;
-  annotationDrag.startX = event.clientX;
-  annotationDrag.startY = event.clientY;
-  annotationDrag.hasMoved = false;
-  annotationDrag.originX = annotation.x;
-  annotationDrag.originY = annotation.y;
-  annotationDrag.originW = annotation.w;
-  annotationDrag.originH = annotation.h;
-  const endpoints = arrowEndpoints(annotation);
-  annotationDrag.originArrowStartX = endpoints.startX;
-  annotationDrag.originArrowStartY = endpoints.startY;
-  annotationDrag.originArrowEndX = endpoints.endX;
-  annotationDrag.originArrowEndY = endpoints.endY;
-  annotationDrag.originFontSize = annotation.fontSize;
-  annotationDrag.originRotation = annotation.rotation;
-
-  if (mode === "rotate" && previewBoard.value) {
-    const rect = previewBoard.value.getBoundingClientRect();
-    const centerX = rect.left + (annotation.x + annotation.w / 2) * rect.width;
-    const centerY = rect.top + (annotation.y + annotation.h / 2) * rect.height;
-    annotationDrag.startAngle = Math.atan2(event.clientY - centerY, event.clientX - centerX);
-  }
-
-  window.addEventListener("pointermove", handleAnnotationDrag);
-  window.addEventListener("pointerup", stopAnnotationDrag, { once: true });
-}
-
-function startTextAnnotationPointer(event: PointerEvent, annotation: Annotation) {
-  event.stopPropagation();
-  selectedAnnotationId.value = annotation.id;
-  activeDrawingKind.value = null;
-  draggingAnnotationId.value = annotation.id;
-  annotationDragMode.value = "move";
-  annotationDrag.startX = event.clientX;
-  annotationDrag.startY = event.clientY;
-  annotationDrag.hasMoved = false;
-  annotationDrag.originX = annotation.x;
-  annotationDrag.originY = annotation.y;
-  annotationDrag.originW = annotation.w;
-  annotationDrag.originH = annotation.h;
-  const endpoints = arrowEndpoints(annotation);
-  annotationDrag.originArrowStartX = endpoints.startX;
-  annotationDrag.originArrowStartY = endpoints.startY;
-  annotationDrag.originArrowEndX = endpoints.endX;
-  annotationDrag.originArrowEndY = endpoints.endY;
-  annotationDrag.originFontSize = annotation.fontSize;
-  annotationDrag.originRotation = annotation.rotation;
-  window.addEventListener("pointermove", handleAnnotationDrag);
-  window.addEventListener("pointerup", stopAnnotationDrag, { once: true });
-}
-
-function handleAnnotationDrag(event: PointerEvent) {
-  if (!draggingAnnotationId.value || !previewBoard.value) return;
-
-  const rect = previewBoard.value.getBoundingClientRect();
-  const movedPixels = Math.hypot(event.clientX - annotationDrag.startX, event.clientY - annotationDrag.startY);
-  if (movedPixels > 3) {
-    annotationDrag.hasMoved = true;
-  }
-  const deltaX = (event.clientX - annotationDrag.startX) / rect.width;
-  const deltaY = (event.clientY - annotationDrag.startY) / rect.height;
-  annotations.value = annotations.value.map((annotation) => {
-    if (annotation.id !== draggingAnnotationId.value) return annotation;
-    if (annotationDragMode.value === "rotate") {
-      const centerX = rect.left + (annotationDrag.originX + annotationDrag.originW / 2) * rect.width;
-      const centerY = rect.top + (annotationDrag.originY + annotationDrag.originH / 2) * rect.height;
-      const angle = Math.atan2(event.clientY - centerY, event.clientX - centerX);
-      return {
-        ...annotation,
-        rotation: Math.round(annotationDrag.originRotation + ((angle - annotationDrag.startAngle) * 180) / Math.PI),
-      };
-    }
-    if (annotationDragMode.value.startsWith("resize-")) {
-      return resizeAnnotationFromDrag(annotation, deltaX, deltaY);
-    }
-    if (annotationDragMode.value === "arrow-end") {
-      return updateArrowPointFromDrag(annotation, deltaX, deltaY, "end");
-    }
-    if (annotationDragMode.value === "arrow-start") {
-      return updateArrowPointFromDrag(annotation, deltaX, deltaY, "start");
-    }
-    if (annotation.kind === "arrow") {
-      return moveArrowFromDrag(annotation, deltaX, deltaY);
-    }
-    return {
-      ...annotation,
-      x: clamp(annotationDrag.originX + deltaX, 0, 1 - annotation.w),
-      y: clamp(annotationDrag.originY + deltaY, 0, 1 - annotation.h),
-    };
-  });
-}
-
-function stopAnnotationDrag() {
-  const draggedAnnotation = annotations.value.find((annotation) => annotation.id === draggingAnnotationId.value);
-  if (draggedAnnotation && draggedAnnotation.kind !== "text" && annotationDrag.hasMoved) {
-    selectedAnnotationId.value = "";
-  }
-  draggingAnnotationId.value = "";
-  annotationDragMode.value = "move";
-  annotationDrag.hasMoved = false;
-  window.removeEventListener("pointermove", handleAnnotationDrag);
-}
-
-function editTextAnnotation(annotation: Annotation) {
-  if (annotation.kind !== "text") return;
-  selectedAnnotationId.value = annotation.id;
-}
-
-function pointFromBoardEvent(event: PointerEvent) {
-  if (!previewBoard.value) return null;
-  const rect = previewBoard.value.getBoundingClientRect();
-  return {
-    x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
-    y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
-  };
-}
-
-function buildDrawnAnnotation(kind: DrawingKind, startX: number, startY: number, endX: number, endY: number): Annotation {
-  if (kind === "arrow") {
-    return normalizeArrowAnnotation(
-      {
-        id: createId(kind),
-        kind,
-        x: startX,
-        y: startY,
-        w: 0,
-        h: 0,
-        text: "",
-        color: "#ff3b30",
-        fontSize: defaultAnnotationFontSize,
-        strokeWidth: 5,
-        rotation: 0,
-      },
-      startX,
-      startY,
-      endX,
-      endY,
-    );
-  }
-
-  const minSize = 0.025;
-  const x = Math.min(startX, endX);
-  const y = Math.min(startY, endY);
-  const w = Math.max(minSize, Math.abs(endX - startX));
-  const h = Math.max(minSize, Math.abs(endY - startY));
-  return {
-    id: createId(kind),
-    kind,
-    x: clamp(x, 0, 1 - w),
-    y: clamp(y, 0, 1 - h),
-    w,
-    h,
-    text: "",
-    color: "#ff3b30",
-    fontSize: defaultAnnotationFontSize,
-    strokeWidth: 5,
-    rotation: 0,
-  };
-}
-
-function startAnnotationCreate(event: PointerEvent) {
-  if (!activeDrawingKind.value || event.button !== 0) return;
-
-  const point = pointFromBoardEvent(event);
-  if (!point) return;
-
-  event.preventDefault();
-  event.stopPropagation();
-  suppressNextBoardClick.value = true;
-  creationDrag.startX = point.x;
-  creationDrag.startY = point.y;
-  const annotation = buildDrawnAnnotation(activeDrawingKind.value, point.x, point.y, point.x, point.y);
-  annotations.value = [...annotations.value, annotation];
-  creatingAnnotationId.value = annotation.id;
-  selectedAnnotationId.value = annotation.id;
-  window.addEventListener("pointermove", updateAnnotationCreate);
-  window.addEventListener("pointerup", finishAnnotationCreate, { once: true });
-  window.addEventListener("pointercancel", cancelAnnotationCreate, { once: true });
-  window.addEventListener("blur", cancelAnnotationCreate, { once: true });
-}
-
-function updateAnnotationCreate(event: PointerEvent) {
-  if (!creatingAnnotationId.value || !activeDrawingKind.value) return;
-  const point = pointFromBoardEvent(event);
-  if (!point) return;
-  const annotation = buildDrawnAnnotation(activeDrawingKind.value, creationDrag.startX, creationDrag.startY, point.x, point.y);
-  annotations.value = annotations.value.map((item) => (item.id === creatingAnnotationId.value ? { ...annotation, id: item.id } : item));
-}
-
-function finishAnnotationCreate(event: PointerEvent) {
-  updateAnnotationCreate(event);
-  activeDrawingKind.value = null;
-  creatingAnnotationId.value = "";
-  selectedAnnotationId.value = "";
-  window.setTimeout(() => {
-    suppressNextBoardClick.value = false;
-  }, 0);
-  window.removeEventListener("pointermove", updateAnnotationCreate);
-  window.removeEventListener("pointercancel", cancelAnnotationCreate);
-  window.removeEventListener("blur", cancelAnnotationCreate);
-}
-
-function cancelAnnotationCreate() {
-  if (creatingAnnotationId.value) {
-    annotations.value = annotations.value.filter((annotation) => annotation.id !== creatingAnnotationId.value);
-  }
-  creatingAnnotationId.value = "";
-  window.setTimeout(() => {
-    suppressNextBoardClick.value = false;
-  }, 0);
-  window.removeEventListener("pointermove", updateAnnotationCreate);
-  window.removeEventListener("pointerup", finishAnnotationCreate);
-  window.removeEventListener("pointercancel", cancelAnnotationCreate);
-  window.removeEventListener("blur", cancelAnnotationCreate);
-}
-
-function blockDrawingClick(event: MouseEvent) {
-  if (!activeDrawingKind.value && !suppressNextBoardClick.value) return;
-  event.preventDefault();
-  event.stopPropagation();
-  suppressNextBoardClick.value = false;
+  clearSlotImages();
+  clearAnnotations();
 }
 
 function handleBackgroundFile(event: Event) {
@@ -1555,15 +679,11 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  for (const image of slotImages.value) {
-    revokeSlotImage(image);
-  }
+  cleanupSlotImages();
   removeBackgroundImage();
-  window.removeEventListener("pointermove", handleAnnotationDrag);
+  cleanupAnnotationInteractions();
   window.removeEventListener("resize", updateViewportHeight);
   clearExportDebounce();
-  cancelAnnotationCreate();
-  cancelSlotSwapDrag();
   void unlistenDragDrop?.();
 });
 </script>
@@ -1609,65 +729,20 @@ onBeforeUnmount(() => {
               <span>预设布局</span>
               <strong>{{ selectedLayout.count }} 图</strong>
             </div>
-            <div class="layout-groups">
-              <section v-for="group in groupedLayouts" :key="group.count" class="layout-group">
-                <p>{{ group.count }} 张图片</p>
-                <div class="preset-list">
-                  <button
-                    v-for="layout in group.layouts"
-                    :key="layout.id"
-                    type="button"
-                    class="preset-card"
-                    :class="{ 'preset-card--active': selectedLayoutId === layout.id }"
-                    :title="layout.name"
-                    @click="selectedLayoutId = layout.id"
-                  >
-                    <span class="preset-thumb">
-                      <i v-for="cell in layout.cells" :key="`${layout.id}-${cell.x}-${cell.y}-${cell.w}-${cell.h}`" :style="cellStyle(cell)"></i>
-                    </span>
-                    <small>{{ layout.name }}</small>
-                  </button>
-                </div>
-              </section>
-            </div>
+            <ImageProcessLayoutPicker :groups="groupedLayouts" :selected-layout-id="selectedLayoutId" @select="selectedLayoutId = $event" />
           </div>
         </aside>
 
         <main class="canvas-panel">
-          <div class="tool-strip">
-            <button type="button" title="添加文字" @click="addAnnotation('text')">文字</button>
-            <button
-              type="button"
-              class="tool-strip__icon"
-              :class="{ 'tool-strip__icon--active': activeDrawingKind === 'arrow' }"
-              title="绘制箭头"
-              @click="selectDrawingTool('arrow')"
-            >
-              ↗
-            </button>
-            <button
-              type="button"
-              class="tool-strip__icon"
-              :class="{ 'tool-strip__icon--active': activeDrawingKind === 'rect' }"
-              title="绘制方框"
-              @click="selectDrawingTool('rect')"
-            >
-              □
-            </button>
-            <button
-              type="button"
-              class="tool-strip__icon tool-strip-circle"
-              :class="{ 'tool-strip__icon--active': activeDrawingKind === 'circle' }"
-              title="绘制圆圈"
-              @click="selectDrawingTool('circle')"
-            >
-              ○
-            </button>
-            <button type="button" title="随机图片位置" :disabled="!hasImages" @click="shuffleImages">随机</button>
-            <button type="button" title="清空图片和标注" :disabled="!hasImages && annotations.length === 0" @click="clearImagesAndAnnotations">
-              清除
-            </button>
-          </div>
+          <ImageProcessToolStrip
+            :active-drawing-kind="activeDrawingKind"
+            :has-images="hasImages"
+            :has-annotations="annotations.length > 0"
+            @add-text="addAnnotation('text')"
+            @select-drawing="selectDrawingTool"
+            @shuffle="shuffleImages"
+            @clear="clearImagesAndAnnotations"
+          />
 
           <div class="preview-shell">
             <div
@@ -1693,9 +768,9 @@ onBeforeUnmount(() => {
                     'preview-cell--selected': selectedSlotIndex === index && Boolean(slotImages[index]),
                   }"
                   :style="cellStyle(cell)"
-                  @click="handleSlotClick(index)"
-                  @keydown.enter.prevent="handleSlotClick(index)"
-                  @keydown.space.prevent="handleSlotClick(index)"
+                  @click="handleSlotClick(fileInput, index)"
+                  @keydown.enter.prevent="handleSlotClick(fileInput, index)"
+                  @keydown.space.prevent="handleSlotClick(fileInput, index)"
                   @dragenter="handleSlotDragEnter($event, index)"
                   @dragover="handleSlotDragEnter($event, index)"
                   @dragleave="handleSlotDragLeave($event, index)"
@@ -1708,7 +783,7 @@ onBeforeUnmount(() => {
 
                   <span v-if="slotImages[index]" class="slot-actions" @click.stop>
                     <button type="button" title="拖拽换格" aria-label="拖拽换格" @pointerdown="startSlotSwapDrag($event, index)">↕</button>
-                    <button type="button" title="替换图片" aria-label="替换图片" @click="openSlotFilePicker(index)">替</button>
+                    <button type="button" title="替换图片" aria-label="替换图片" @click="openSlotFilePicker(fileInput, index)">替</button>
                     <button type="button" title="删除图片" aria-label="删除图片" @click="removeSlotImage(index)">×</button>
                     <button type="button" title="放大" aria-label="放大" @click="zoomSlot(index, 0.12)">＋</button>
                     <button type="button" title="缩小" aria-label="缩小" @click="zoomSlot(index, -0.12)">－</button>
@@ -1839,86 +914,24 @@ onBeforeUnmount(() => {
           >
             {{ rightSidebarCollapsed ? "‹" : "›" }}
           </button>
-          <div class="sidebar-content settings-sidebar__content">
-            <section class="settings-section">
-            <h4>画布</h4>
-            <label class="field compact-field">
-              <span>比例</span>
-              <select v-model="settings.ratio">
-                <option v-for="ratio in ratios" :key="ratio" :value="ratio">{{ ratio }}</option>
-              </select>
-            </label>
-          </section>
-
-          <section class="settings-section">
-            <h4>边框</h4>
-            <div class="number-grid">
-              <label><span>上</span><input v-model.number="settings.borderTop" type="number" min="0" max="220" /></label>
-              <label><span>右</span><input v-model.number="settings.borderRight" type="number" min="0" max="220" /></label>
-              <label><span>下</span><input v-model.number="settings.borderBottom" type="number" min="0" max="220" /></label>
-              <label><span>左</span><input v-model.number="settings.borderLeft" type="number" min="0" max="220" /></label>
-            </div>
-            <label class="range-field">
-              <span>间距 {{ settings.gap }}px</span>
-              <input v-model.number="settings.gap" type="range" min="0" max="60" />
-            </label>
-            <label class="range-field">
-              <span>圆角 {{ settings.radius }}px</span>
-              <input v-model.number="settings.radius" type="range" min="0" max="80" />
-            </label>
-          </section>
-
-          <section class="settings-section">
-            <h4>背景</h4>
-            <div class="color-field">
-              <span>背景色</span>
-              <div class="color-field__actions">
-                <input v-model="settings.backgroundColor" type="color" aria-label="背景色" />
-                <ActionButton label="重置背景色" size="sm" @click="resetBackgroundColor" />
-              </div>
-            </div>
-            <label class="range-field">
-              <span>背景图透明度 {{ settings.backgroundUrl ? `${settings.backgroundOpacity}%` : "未上传" }}</span>
-              <input v-model.number="settings.backgroundOpacity" type="range" min="0" max="100" :disabled="!settings.backgroundUrl" />
-            </label>
-            <div class="setting-actions">
-              <ActionButton label="上传背景图" size="sm" @click="backgroundInput?.click()" />
-              <ActionButton
-                :label="settings.backgroundOverlay ? '取消' : '重叠'"
-                :variant="settings.backgroundOverlay ? 'primary' : 'ghost'"
-                size="sm"
-                :disabled="!settings.backgroundUrl"
-                @click="settings.backgroundOverlay = !settings.backgroundOverlay"
-              />
-              <ActionButton label="移除" size="sm" :disabled="!settings.backgroundUrl" @click="removeBackgroundImage" />
-            </div>
-            <p v-if="settings.backgroundName" class="setting-meta">{{ settings.backgroundName }}</p>
-          </section>
-
-          <section class="settings-section">
-            <h4>图片</h4>
-            <label class="range-field">
-              <span>图片透明度 {{ selectedSlotImage ? `${selectedImageOpacity}%` : "未选择" }}</span>
-              <input v-model.number="selectedImageOpacity" type="range" min="20" max="100" :disabled="!selectedSlotImage" />
-            </label>
-            <p class="setting-meta">{{ selectedSlotImage ? selectedSlotImage.name : "点击画布中的某一张图片后，可单独调整透明度。" }}</p>
-          </section>
-
-          <section class="settings-section">
-            <h4>导出</h4>
-            <label class="field compact-field">
-              <span>图片输出目录</span>
-              <div class="field-inline">
-                <input :value="localOutputRootDir" placeholder="例如：D:\cover" @input="syncOutputRootDir(($event.target as HTMLInputElement).value)" />
-                <ActionButton label="浏览" size="sm" :disabled="browsingOutputDirectory" @click="void browseOutputDirectory()" />
-              </div>
-            </label>
-            <div class="export-actions">
-              <ActionButton label="导出 JPG" variant="primary" :disabled="saving || exportDebouncing" @click="scheduleExportImage('jpg')" />
-              <ActionButton label="导出 PNG" :disabled="saving || exportDebouncing" @click="scheduleExportImage('png')" />
-            </div>
-            </section>
-          </div>
+          <ImageProcessSettingsContent
+            :settings="settings"
+            :ratios="ratios"
+            :selected-slot-image="selectedSlotImage"
+            :selected-image-opacity="selectedImageOpacity"
+            :output-root-dir="localOutputRootDir"
+            :browsing-output-directory="browsingOutputDirectory"
+            :saving="saving"
+            :export-debouncing="exportDebouncing"
+            @update-setting="updateImageProcessSetting"
+            @update-selected-image-opacity="selectedImageOpacity = $event"
+            @reset-background-color="resetBackgroundColor"
+            @select-background-file="backgroundInput?.click()"
+            @remove-background-image="removeBackgroundImage"
+            @update-output-root-dir="syncOutputRootDir"
+            @browse-output-directory="void browseOutputDirectory()"
+            @export-image="scheduleExportImage"
+          />
         </aside>
       </div>
 
@@ -2057,77 +1070,6 @@ onBeforeUnmount(() => {
   color: var(--accent);
 }
 
-.layout-groups {
-  display: grid;
-  gap: 12px;
-}
-
-.layout-group {
-  display: grid;
-  gap: 8px;
-}
-
-.layout-group p,
-.settings-section h4 {
-  color: var(--muted);
-  font-size: 0.84rem;
-  font-weight: 500;
-}
-
-.preset-list {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.preset-card {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--muted);
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
-}
-
-.preset-card:hover,
-.preset-card--active {
-  color: var(--text);
-  border-color: var(--line-strong);
-  background: rgba(77, 212, 198, 0.1);
-}
-
-.preset-thumb {
-  position: relative;
-  aspect-ratio: 1 / 0.72;
-  overflow: hidden;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.preset-thumb i {
-  position: absolute;
-  padding: 2px;
-}
-
-.preset-thumb i::after {
-  content: "";
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 4px;
-  background: rgba(77, 212, 198, 0.32);
-}
-
-.preset-card small {
-  overflow: hidden;
-  font-size: 0.76rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .canvas-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -2135,24 +1077,6 @@ onBeforeUnmount(() => {
   padding: 8px 14px 14px;
 }
 
-.tool-strip {
-  position: relative;
-  z-index: 8;
-  justify-self: center;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  width: max-content;
-  max-width: 100%;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(4, 16, 19, 0.72);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(14px);
-}
-
-.tool-strip button,
 .slot-actions button {
   min-width: 38px;
   height: 34px;
@@ -2163,26 +1087,10 @@ onBeforeUnmount(() => {
   transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
 }
 
-.tool-strip button {
-  padding: 0 12px;
-}
-
-.tool-strip__icon {
-  font-size: 1.3rem;
-  font-weight: 700;
-}
-
-.tool-strip button:hover:not(:disabled),
-.tool-strip__icon--active,
 .slot-actions button:hover {
   border-color: var(--line-strong);
   background: rgba(77, 212, 198, 0.1);
   transform: translateY(-1px);
-}
-
-.tool-strip button:disabled {
-  cursor: not-allowed;
-  opacity: 0.46;
 }
 
 .preview-shell {
@@ -2685,111 +1593,6 @@ onBeforeUnmount(() => {
   display: grid;
   align-content: start;
   gap: 12px;
-}
-
-.settings-sidebar__content {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-}
-
-.settings-section {
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.055);
-  border-radius: 14px;
-  background: rgba(2, 10, 12, 0.24);
-}
-
-.compact-field {
-  margin: 0;
-}
-
-.number-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.number-grid label,
-.range-field,
-.color-field {
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.number-grid input,
-.compact-field input,
-.compact-field select {
-  min-width: 0;
-}
-
-.number-grid input {
-  width: 100%;
-  padding: 8px 9px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  outline: none;
-}
-
-.range-field input {
-  width: 100%;
-  accent-color: var(--accent);
-}
-
-.color-field {
-  grid-template-columns: minmax(0, 1fr);
-  align-items: center;
-}
-
-.color-field__actions {
-  display: flex;
-  align-items: center;
-  justify-content: stretch;
-  gap: 8px;
-  min-width: 0;
-}
-
-.color-field input {
-  flex: 0 0 52px;
-  width: 52px;
-  height: 38px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.color-field__actions :deep(.action-btn) {
-  flex: 1 1 auto;
-  min-height: 38px;
-  padding-top: 0;
-  padding-bottom: 0;
-  white-space: nowrap;
-}
-
-.setting-actions,
-.export-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.setting-meta {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 0.8rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.export-actions :deep(.action-btn) {
-  flex: 1 1 120px;
 }
 
 .visually-hidden {

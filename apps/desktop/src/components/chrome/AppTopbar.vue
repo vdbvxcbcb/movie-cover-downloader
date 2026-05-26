@@ -27,7 +27,7 @@ const emit = defineEmits<{
     <div class="topbar__actions">
       <ActionButton
         v-for="action in actions"
-        :key="action.label"
+        :key="action.id"
         :label="action.label"
         :variant="action.variant"
         :size="action.size"
