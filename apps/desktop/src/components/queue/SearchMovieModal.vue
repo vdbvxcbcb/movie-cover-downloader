@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 豆瓣影片搜索弹窗：输入片名后通过 Tauri 调用 sidecar 搜索，并把详情页链接写入新增任务草稿。
-import { computed, ref } from "vue";
+import { computed, ref, shallowRef } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import MessageNotice from "../common/MessageNotice.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
@@ -14,13 +14,13 @@ const emit = defineEmits<{
 }>();
 
 const appStore = useAppStore();
-const queryInput = ref("");
-const currentPage = ref(1);
-const loading = ref(false);
-const alertMessage = ref("");
+const queryInput = shallowRef("");
+const currentPage = shallowRef(1);
+const loading = shallowRef(false);
+const alertMessage = shallowRef("");
 const alertTone = ref<"success" | "error" | "warn">("warn");
-const alertRevision = ref(0);
-const searchAttempted = ref(false);
+const alertRevision = shallowRef(0);
+const searchAttempted = shallowRef(false);
 const searchPage = ref<DoubanSearchResultPage | null>(null);
 const searchPageCache = new Map<string, DoubanSearchResultPage>();
 const addedDetailUrlSet = computed(() =>

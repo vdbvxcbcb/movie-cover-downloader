@@ -10,11 +10,15 @@
     "build:desktop": "pnpm --dir apps/desktop tauri build",
     "dev:sidecar": "pnpm --dir apps/sidecar dev",
     "build:sidecar": "pnpm --dir apps/sidecar build",
-    "lint": "echo \"待初始化\"",
+    "lint": "eslint apps/desktop/src apps/desktop/vite.config.ts",
+    "lint:fix": "eslint apps/desktop/src apps/desktop/vite.config.ts --fix",
     "test": "pnpm --dir apps/desktop test && pnpm --dir apps/sidecar test",
     "typecheck": "pnpm --dir apps/desktop exec vue-tsc --noEmit",
     "typecheck:sidecar": "pnpm --dir apps/sidecar typecheck",
     "prepare:sidecar-bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-sidecar-bundle.ps1"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^9.0.0",
+    "eslint": "^10.4.0"
   }
 }
-

@@ -1,5 +1,5 @@
 // Pinia 核心状态仓库：集中管理任务队列、Cookie、日志、持久化和下载调度。
-import { computed, ref } from "vue";
+import { computed, ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 import { createInitialAppSeed, createTaskFromDraft } from "../data/mock";
 import { extractDoubanEmptyCategoryTitle, formatDoubanAssetTypeLabel } from "../lib/douban-empty-category";
@@ -480,22 +480,22 @@ function normalizeCookieProfiles(rawCookies: CookieProfile[], now = Date.now()) 
 export const useAppStore = defineStore("app", () => {
   const seed = createInitialAppSeed();
 
-  const hydrated = ref(false);
-  const bootstrapping = ref(false);
-  const queueRunning = ref(false);
-  const queueBusy = ref(false);
-  const createTaskOpen = ref(false);
-  const createTaskDetailUrls = ref("");
+  const hydrated = shallowRef(false);
+  const bootstrapping = shallowRef(false);
+  const queueRunning = shallowRef(false);
+  const queueBusy = shallowRef(false);
+  const createTaskOpen = shallowRef(false);
+  const createTaskDetailUrls = shallowRef("");
   const selectedPhotoDownloadSeed = ref<SelectedPhotoDownloadSeed | null>(null);
-  const createTaskOutputRootDir = ref("");
+  const createTaskOutputRootDir = shallowRef("");
   const createTaskMoviePreviews = ref<Record<string, Partial<DoubanMoviePreview>>>({});
-  const importCookieOpen = ref(false);
-  const searchMovieOpen = ref(false);
-  const customCropOpen = ref(false);
-  const imageProcessOpen = ref(false);
-  const imageProcessOutputRootDir = ref("");
-  const logOnlyErrors = ref(false);
-  const progressTick = ref(0);
+  const importCookieOpen = shallowRef(false);
+  const searchMovieOpen = shallowRef(false);
+  const customCropOpen = shallowRef(false);
+  const imageProcessOpen = shallowRef(false);
+  const imageProcessOutputRootDir = shallowRef("");
+  const logOnlyErrors = shallowRef(false);
+  const progressTick = shallowRef(0);
   const tasks = ref<TaskItem[]>(seed.tasks);
   const cookies = ref<CookieProfile[]>(seed.cookies);
   const logs = ref(seed.logs);

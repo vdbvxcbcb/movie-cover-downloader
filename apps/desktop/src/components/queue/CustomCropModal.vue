@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 自定义裁剪弹窗：上传本地图片、调整裁剪框并保存到输出目录。
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, shallowRef } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import ActionButton from "../common/ActionButton.vue";
@@ -25,12 +25,12 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const modalCard = ref<HTMLElement | null>(null);
 const workspace = ref<HTMLElement | null>(null);
 const imageElement = ref<HTMLImageElement | null>(null);
-const isDraggingFile = ref(false);
+const isDraggingFile = shallowRef(false);
 const selectedRatio = ref<CropRatio>("9:16");
-const zoom = ref(1);
-const alertMessage = ref("");
-const savedOutputPath = ref("");
-const saving = ref(false);
+const zoom = shallowRef(1);
+const alertMessage = shallowRef("");
+const savedOutputPath = shallowRef("");
+const saving = shallowRef(false);
 
 // 图片状态记录原图尺寸、展示尺寸和偏移量，裁剪时需要在展示坐标与原图像素之间换算。
 const imageState = reactive({

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 桌面端主框架：侧边栏、顶栏、弹窗和页面内容在这里组合。
-import { computed, ref, watch } from "vue";
+import { computed, watch, shallowRef } from "vue";
 import { RouterView, useRoute } from "vue-router";
 import AppSidebar from "../components/chrome/AppSidebar.vue";
 import AppTopbar from "../components/chrome/AppTopbar.vue";
@@ -15,7 +15,7 @@ import type { CookieDraft, TaskDraft, TopAction } from "../types/app";
 
 const route = useRoute();
 const appStore = useAppStore();
-const noticeRevision = ref(0);
+const noticeRevision = shallowRef(0);
 
 // 根据当前路由 meta 计算页面标题、副标题和顶栏操作按钮。
 const pageMeta = computed(() => {

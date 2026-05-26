@@ -10,7 +10,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "pnpm --dir ../sidecar exec tsx --test ../desktop/src/package-scripts.test.ts ../desktop/src/lib/presenters.test.ts ../desktop/src/lib/task-draft-input.test.ts ../desktop/src/lib/task-pagination.test.ts ../desktop/src/stores/app.test.ts"
+    "test": "pnpm --dir ../sidecar exec tsx --test ../desktop/src/package-scripts.test.ts ../desktop/src/lib/presenters.test.ts ../desktop/src/lib/task-draft-input.test.ts ../desktop/src/lib/task-pagination.test.ts ../desktop/src/stores/app.test.ts ../desktop/src/components/queue/image-process/constants.test.ts ../desktop/src/components/queue/selected-photo-helpers.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

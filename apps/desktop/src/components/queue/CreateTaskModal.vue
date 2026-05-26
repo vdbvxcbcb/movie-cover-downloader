@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 新增链接任务弹窗：收集豆瓣链接、输出目录、抓取类型、数量和图片尺寸。
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, shallowRef } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import MessageNotice from "../common/MessageNotice.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
@@ -10,7 +10,6 @@ import type {
   ImageAspectRatio,
   OutputImageFormat,
   RequestIntervalSeconds,
-  RuntimeDoubanPhotoDiscoveryCursor,
   RuntimeDiscoveredAsset,
   SelectableDoubanPhoto,
   SelectedDoubanPhoto,
@@ -27,6 +26,14 @@ import {
 import { isDoubanEmptyCategoryMessage } from "../../lib/douban-empty-category";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 import { useAppStore } from "../../stores/app";
+import {
+  createSelectedPhotoDiscoveryState,
+  formatSelectedPhotoCategory,
+  pickMoreCompleteTitle,
+  selectedPhotoAssetTypes,
+  selectedPhotoRenderBatchSize,
+  titlePreviewResolveConcurrency,
+} from "./selected-photo-helpers";
 
 const props = withDefaults(
   defineProps<{
@@ -57,36 +64,33 @@ const form = reactive({
   imageAspectRatio: "original" as ImageAspectRatio,
   requestIntervalSeconds: "1" as "1" | "2" | "3" | "4" | "5",
 });
-const alertMessage = ref("");
-const alertRevision = ref(0);
+const alertMessage = shallowRef("");
+const alertRevision = shallowRef(0);
 const pendingReplacementDrafts = ref<TaskDraft[]>([]);
 const pendingReplacementTaskIds = ref<string[]>([]);
-const replacementConfirmTitle = ref("");
-const browsingOutputDirectory = ref(false);
+const replacementConfirmTitle = shallowRef("");
+const browsingOutputDirectory = shallowRef(false);
 const resolvedTitleCache = new Map<string, string>();
 const activeMode = ref<"auto" | "selected">("auto");
-const selectedPhotoLink = ref("");
-const selectedPhotoTitle = ref("");
-const selectedPhotoCover = ref("");
-const selectedPhotoCoverUrl = ref("");
-const selectedPhotoCoverDataUrl = ref("");
-const selectedPhotoPreviewSubjectUrl = ref("");
+const selectedPhotoLink = shallowRef("");
+const selectedPhotoTitle = shallowRef("");
+const selectedPhotoCover = shallowRef("");
+const selectedPhotoCoverUrl = shallowRef("");
+const selectedPhotoCoverDataUrl = shallowRef("");
+const selectedPhotoPreviewSubjectUrl = shallowRef("");
 const selectedPhotos = ref<SelectableDoubanPhoto[]>([]);
 const selectedPhotoFilter = ref<DoubanAssetType>("still");
-const discoveringSelectedPhotos = ref(false);
-const switchingSelectedPhotoFilter = ref(false);
-const selectedDiscoveryTaskId = ref("");
-const selectedPhotoDiscoveryStartedKey = ref("");
+const discoveringSelectedPhotos = shallowRef(false);
+const switchingSelectedPhotoFilter = shallowRef(false);
+const selectedDiscoveryTaskId = shallowRef("");
+const selectedPhotoDiscoveryStartedKey = shallowRef("");
 const selectedPhotoLoadedUrls = ref(new Set<string>());
 const selectedPhotoFailedUrls = ref(new Set<string>());
-const selectedPhotoAssetTypes: DoubanAssetType[] = ["still", "poster", "wallpaper"];
 const selectedPhotoDiscoveryByAsset = ref(createSelectedPhotoDiscoveryState());
 const selectedPhotoPreviewIndex = ref<number | null>(null);
 const selectedPhotoLargeFailedIds = ref(new Set<string>());
-const selectedPhotoRenderBatchSize = 28;
 const selectedPhotoVisibleLimit = ref(selectedPhotoRenderBatchSize);
-const selectedPhotoGridLoadingRequested = ref(false);
-const titlePreviewResolveConcurrency = 3;
+const selectedPhotoGridLoadingRequested = shallowRef(false);
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
 let selectedPhotoClickTimer: number | null = null;
@@ -107,28 +111,6 @@ const selectedPhotoDragState = ref<{
 } | null>(null);
 const selectedPhotoDragBox = ref<{ left: number; top: number; width: number; height: number } | null>(null);
 
-function pickMoreCompleteTitle(currentTitle: string, nextTitle?: string | null) {
-  const normalizedNextTitle = nextTitle?.trim();
-  if (!normalizedNextTitle) return currentTitle;
-
-  const normalizedCurrentTitle = currentTitle.trim();
-  if (!normalizedCurrentTitle || normalizedNextTitle.includes(normalizedCurrentTitle)) {
-    return normalizedNextTitle;
-  }
-
-  return normalizedNextTitle.length > normalizedCurrentTitle.length ? normalizedNextTitle : currentTitle;
-}
-
-function createSelectedPhotoDiscoveryState() {
-  return selectedPhotoAssetTypes.reduce(
-    (state, assetType) => {
-      state[assetType] = { cursor: null, done: false };
-      return state;
-    },
-    {} as Record<DoubanAssetType, { cursor: RuntimeDoubanPhotoDiscoveryCursor | null; done: boolean }>,
-  );
-}
-
 function resetSelectedPhotoDiscoveryState() {
   selectedPhotoDiscoveryByAsset.value = createSelectedPhotoDiscoveryState();
 }
@@ -143,12 +125,12 @@ function markAllSelectedPhotoDiscoveryDone() {
       state[assetType] = { ...selectedPhotoDiscoveryByAsset.value[assetType], done: true };
       return state;
     },
-    {} as Record<DoubanAssetType, { cursor: RuntimeDoubanPhotoDiscoveryCursor | null; done: boolean }>,
+    createSelectedPhotoDiscoveryState(),
   );
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, run: (item: T) => Promise<R>) {
-  const results = new Array<R>(items.length);
+  const results: R[] = [];
   let nextIndex = 0;
 
   async function worker() {
@@ -265,7 +247,7 @@ function scheduleSelectedPhotoAutoDiscover(delay = 400) {
   clearSelectedPhotoAutoDiscoverTimer();
   selectedPhotoAutoDiscoverTimer = window.setTimeout(() => {
     selectedPhotoAutoDiscoverTimer = null;
-    if (selectedPhotoDiscoveryBusy.value) return;
+    if (discoveringSelectedPhotos.value || switchingSelectedPhotoFilter.value) return;
     selectedPhotoFilter.value = "still";
     void discoverSelectedPhotos();
   }, delay);
@@ -478,12 +460,6 @@ watch(
     }
   },
 );
-
-function formatSelectedPhotoCategory(photo: SelectableDoubanPhoto) {
-  if (photo.doubanAssetType === "poster") return "海报";
-  if (photo.doubanAssetType === "wallpaper") return "壁纸";
-  return "剧照";
-}
 
 function isSelectedPhotoLoaded(photo: SelectableDoubanPhoto) {
   return selectedPhotoLoadedUrls.value.has(getSelectedPhotoPreviewUrl(photo));
@@ -837,7 +813,7 @@ async function loadNextSelectedPhotoBatch() {
         filteredSelectedPhotos.value.length === 0 &&
         !selectedPhotoCurrentFilterDone.value
       ) {
-        window.setTimeout(() => requestNextSelectedPhotoBatch(), 0);
+        window.setTimeout(requestNextSelectedPhotoBatch, 0);
       }
     }
     stoppedSelectedDiscoveryTaskIds.delete(taskId);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 任务队列表格：负责分页展示任务和触发单任务操作。
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch, shallowRef } from "vue";
 import ActionButton from "../common/ActionButton.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
 import StatusPill from "../common/StatusPill.vue";
@@ -32,11 +32,11 @@ const emit = defineEmits<{
 const isNativeRuntime = runtimeBridge.isNativeRuntime();
 const appStore = useAppStore();
 const nativeBackgroundPhases = new Set(["resolving", "discovering", "downloading"]);
-const currentPage = ref(1);
+const currentPage = shallowRef(1);
 const jumpPageInput = ref("1");
 const coverCache = ref<Record<string, string>>({});
 const failedCoverSources = ref<Record<string, string>>({});
-const copiedTaskId = ref("");
+const copiedTaskId = shallowRef("");
 let copiedIconTimer: ReturnType<typeof setTimeout> | undefined;
 
 function retainRecordKeys(record: Record<string, string>, keys: Set<string>) {

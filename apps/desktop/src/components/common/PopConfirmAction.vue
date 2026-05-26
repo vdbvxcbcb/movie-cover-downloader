@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 气泡确认组件：用于删除、清空等危险操作的二次确认。
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import ActionButton from "./ActionButton.vue";
 
 const props = withDefaults(
@@ -32,7 +32,7 @@ const emit = defineEmits<{
   cancel: [];
 }>();
 
-const isOpen = ref(false);
+const isOpen = shallowRef(false);
 const rootRef = ref<HTMLElement | null>(null);
 const bubbleRef = ref<HTMLElement | null>(null);
 const bubbleStyle = ref<Record<string, string>>({});
