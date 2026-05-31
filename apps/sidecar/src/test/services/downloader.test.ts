@@ -223,6 +223,46 @@ test("下载图片请求不会携带豆瓣 Cookie", async () => {
   }
 });
 
+test("下载图片重定向到非豆瓣图片域名时会跳过", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcd-downloader-redirect-"));
+  const { logger, warnings } = createLogger();
+  const downloader = new DownloaderService(createConfig(), logger);
+  const originalFetch = globalThis.fetch;
+  const discovery = createDiscovery(tempDir);
+  discovery.images = [
+    {
+      id: "redirected-image",
+      source: "douban",
+      title: "redirected image",
+      imageUrl: "https://img1.doubanio.com/view/photo/l/public/redirected.png",
+      pageUrl: "https://movie.douban.com/subject/34780991/photos?type=W",
+      category: "still",
+      orientation: "horizontal",
+    },
+  ];
+
+  globalThis.fetch = (async () =>
+    ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      url: "https://example.com/redirected.png",
+      headers: {
+        get() {
+          return null;
+        },
+      },
+    }) as unknown as Response) as unknown as typeof fetch;
+
+  try {
+    await assert.rejects(() => downloader.download(createTask(), discovery), /no downloadable images were saved/);
+    assert.equal(warnings.some((warning) => warning.includes("image redirect target is not a douban image")), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("存在 part 文件时会带 Range 请求续传当前图片", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcd-downloader-"));
   const { logger } = createLogger();

@@ -2598,10 +2598,27 @@ fn save_custom_cropped_image(
         return Err("裁剪图片内容为空".to_string());
     }
 
-    let output_dir = PathBuf::from(output_root_dir).join("custom-crop-photo");
-    fs::create_dir_all(&output_dir).map_err(|error| format!("创建输出目录失败: {error}"))?;
+    let output_root_dir = PathBuf::from(output_root_dir.trim());
+    if output_root_dir.as_os_str().is_empty() {
+        return Err("输出根目录不能为空".to_string());
+    }
+    if !output_root_dir.is_absolute() {
+        return Err("输出根目录必须是绝对路径".to_string());
+    }
 
-    let output_path = output_dir.join(sanitize_output_file_name(&file_name));
+    fs::create_dir_all(&output_root_dir).map_err(|error| format!("创建输出根目录失败: {error}"))?;
+    let output_root_dir = fs::canonicalize(&output_root_dir)
+        .map_err(|error| format!("解析输出根目录失败: {error}"))?;
+
+    let output_dir = output_root_dir.join("custom-crop-photo");
+    fs::create_dir_all(&output_dir).map_err(|error| format!("创建输出目录失败: {error}"))?;
+    let output_dir =
+        fs::canonicalize(&output_dir).map_err(|error| format!("解析输出目录失败: {error}"))?;
+    if !output_dir.starts_with(&output_root_dir) {
+        return Err("输出目录必须位于输出根目录内".to_string());
+    }
+
+    let output_path = output_dir.join(sanitize_processed_image_file_name(&file_name)?);
     fs::write(&output_path, image_bytes).map_err(|error| format!("保存裁剪图片失败: {error}"))?;
 
     Ok(output_path.to_string_lossy().into_owned())
@@ -2766,12 +2783,12 @@ mod tests {
         open_state_db_path, read_dropped_image_file, read_local_image_file,
         resolve_douban_login_cookie_status, resolve_sidecar_entry_arg,
         resolve_sidecar_event_task_id, resolve_sidecar_node, rotate_corrupted_state_db,
-        run_blocking_job, save_processed_image, save_snapshot_to_sqlite_path_with_recovery,
-        validate_task_id, TaskControlRegistry,
+        run_blocking_job, save_custom_cropped_image, save_processed_image,
+        save_snapshot_to_sqlite_path_with_recovery, validate_task_id, TaskControlRegistry,
     };
     use std::{
         fs,
-        path::PathBuf,
+        path::{Path, PathBuf},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -2789,6 +2806,16 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[cfg(unix)]
+    fn create_directory_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_directory_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
     }
 
     #[test]
@@ -3443,6 +3470,68 @@ mod tests {
         assert!(output_path.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn save_custom_cropped_image_rejects_relative_output_dir() {
+        let error = save_custom_cropped_image(
+            "relative-output".to_string(),
+            "custom.png".to_string(),
+            vec![1, 2, 3],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("绝对路径"));
+    }
+
+    #[test]
+    fn save_custom_cropped_image_sanitizes_reserved_file_name() {
+        let temp_dir = test_temp_dir("save-custom-crop");
+
+        let output_path = save_custom_cropped_image(
+            temp_dir.to_string_lossy().into_owned(),
+            "../CON .png".to_string(),
+            vec![1, 2, 3],
+        )
+        .unwrap();
+
+        let output_path = PathBuf::from(output_path);
+        assert_eq!(
+            output_path.file_name().and_then(|value| value.to_str()),
+            Some("processed-image.png")
+        );
+        assert_eq!(
+            output_path
+                .parent()
+                .and_then(|value| value.file_name())
+                .and_then(|value| value.to_str()),
+            Some("custom-crop-photo")
+        );
+        assert!(output_path.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn save_custom_cropped_image_rejects_canonical_output_escape() {
+        let root_dir = test_temp_dir("save-custom-crop-root-boundary");
+        let outside_dir = test_temp_dir("save-custom-crop-outside-boundary");
+        let custom_crop_dir = root_dir.join("custom-crop-photo");
+
+        if create_directory_symlink(&outside_dir, &custom_crop_dir).is_ok() {
+            let error = save_custom_cropped_image(
+                root_dir.to_string_lossy().into_owned(),
+                "custom.png".to_string(),
+                vec![1, 2, 3],
+            )
+            .unwrap_err();
+
+            assert!(error.contains("输出根目录内"));
+            assert!(!outside_dir.join("custom.png").exists());
+        }
+
+        let _ = fs::remove_dir_all(root_dir);
+        let _ = fs::remove_dir_all(outside_dir);
     }
 
     #[test]

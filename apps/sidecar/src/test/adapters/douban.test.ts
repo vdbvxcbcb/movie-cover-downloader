@@ -5,7 +5,7 @@ import test from "node:test";
 
 import type { SidecarTask } from "../../shared/contracts.js";
 import type { SidecarLogger } from "../../shared/logger.js";
-import { buildOutputFolderName, sanitizeNameSegment } from "../../utils/output-folder.js";
+import { buildOutputFolderName, buildSelectedOutputDir, sanitizeNameSegment } from "../../utils/output-folder.js";
 import { fetchText, resolveRequestIntervalMs } from "../../adapters/base.js";
 import { classifyDoubanPhotoPage, DoubanAdapter } from "../../adapters/douban.js";
 
@@ -65,6 +65,13 @@ test("输出目录片名会拒绝路径特殊片段和 Windows 保留名", () =>
   assert.equal(buildOutputFolderName("CON"), "Untitled");
   assert.equal(buildOutputFolderName("海报."), "海报");
   assert.equal(sanitizeNameSegment("///"), "Untitled");
+});
+
+test("选图下载输出目录会按分类和比例分开", () => {
+  assert.equal(
+    buildSelectedOutputDir("D:/cover", "示例电影", "poster", "9:16"),
+    path.join("D:/cover", "示例电影", "selected", "poster", "poster-9x16"),
+  );
 });
 
 test("selected photo batch discovery stops before fetching the next page", async () => {
@@ -617,6 +624,63 @@ test("选图发现会保留大图下载地址并附带可预览 data URL", async
       "https://movie.douban.com/subject/34780991/photos?type=W",
       "https://img1.doubanio.com/view/photo/m/public/p1.webp",
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("预览图片重定向到非豆瓣图片域名时不会读取 body", async () => {
+  const adapter = new DoubanAdapter();
+  const context = { ...createContext(), includePreviewDataUrl: true };
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const photoHtml = '<html><img src="https://img1.doubanio.com/view/photo/m/public/p1.webp"></html>';
+  let bodyRead = false;
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/subject/34780991/")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/",
+        html: '<html><span property="v:itemreviewed">示例电影</span></html>',
+      });
+    }
+    if (url.includes("/photos?type=W")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=W",
+        html: photoHtml,
+      });
+    }
+
+    return {
+      ok: true,
+      url: "https://example.com/redirected.webp",
+      headers: {
+        get(name: string) {
+          return name.toLowerCase() === "content-type" ? "image/webp" : null;
+        },
+      },
+      arrayBuffer: async () => {
+        bodyRead = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const result = await adapter.discover(createTask({ doubanAssetType: "wallpaper" }), context);
+    assert.equal(result.images[0]?.previewDataUrl, undefined);
+    assert.equal(bodyRead, false);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;

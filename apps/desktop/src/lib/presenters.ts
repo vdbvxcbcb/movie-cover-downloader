@@ -38,9 +38,31 @@ export function formatSourceSite(site: SourceSite) {
   return sourceSiteLabels[site];
 }
 
-// 任务标题兜底：片名未解析前显示详情页链接。
+function buildTaskDisplayTitle(title: string, assetLabel: string, modeLabel: string) {
+  let baseTitle = title.trim();
+  let removedModeSuffix = false;
+  for (const suffix of [" 选图下载", " 自动下载"]) {
+    if (baseTitle.endsWith(suffix)) {
+      baseTitle = baseTitle.slice(0, -suffix.length);
+      removedModeSuffix = true;
+    }
+  }
+  const assetSuffix = ` ${assetLabel}`;
+  if (removedModeSuffix && baseTitle.endsWith(assetSuffix)) {
+    baseTitle = baseTitle.slice(0, -assetSuffix.length);
+  }
+
+  return `${baseTitle || title} ${assetLabel} ${modeLabel}`;
+}
+
+// 下载列表标题按片名、分类和任务模式组合展示。
 export function formatTaskTitle(task: TaskItem) {
-  return `${task.title} ${formatDoubanAssetTypeLabel(task.target.doubanAssetType)}`;
+  const assetLabel = formatDoubanAssetTypeLabel(task.target.doubanAssetType);
+  if (task.target.selectedImages?.length) {
+    return buildTaskDisplayTitle(task.title, assetLabel, "选图下载");
+  }
+
+  return buildTaskDisplayTitle(task.title, assetLabel, "自动下载");
 }
 
 // 判断下载数量是否已经达到目标数量，用于进度显示和完成态兜底。

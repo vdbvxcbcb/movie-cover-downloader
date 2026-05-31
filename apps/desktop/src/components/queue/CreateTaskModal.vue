@@ -819,7 +819,7 @@ async function stopSelectedPhotoDiscovery(markDone = false) {
   }
 }
 
-function buildSelectedPhotoDraft(): TaskDraft | null {
+function buildSelectedPhotoDrafts(): TaskDraft[] | null {
   let detailUrl = "";
   try {
     detailUrl = normalizeSelectedPhotoUrl(selectedPhotoLink.value);
@@ -842,39 +842,50 @@ function buildSelectedPhotoDraft(): TaskDraft | null {
     return null;
   }
 
-  return {
-    detailUrl,
-    outputRootDir: form.outputRootDir.trim(),
-    sourceHint: "auto",
-    doubanAssetType: selectedPhotoAssetType,
-    imageCountMode: "limited",
-    maxImages: selectedImages.length,
-    outputImageFormat: form.outputImageFormat,
-    imageAspectRatio: form.imageAspectRatio,
-    requestIntervalSeconds: Number(form.requestIntervalSeconds) as RequestIntervalSeconds,
-    coverUrl: (props.selectedPhotoSeed?.coverUrl ?? selectedPhotoCoverUrl.value) || undefined,
-    coverDataUrl: (props.selectedPhotoSeed?.coverDataUrl ?? selectedPhotoCoverDataUrl.value) || undefined,
-    selectedImages,
-    selectedPhotoTitle: selectedPhotoTitle.value || undefined,
-  };
+  const selectedImagesByAssetType = selectedImages.reduce(
+    (groups, image) => {
+      const assetType = image.doubanAssetType ?? selectedPhotoAssetType;
+      groups[assetType].push(image);
+      return groups;
+    },
+    { still: [], poster: [], wallpaper: [] } as Record<DoubanAssetType, SelectedDoubanPhoto[]>,
+  );
+
+  return selectedPhotoAssetTypes
+    .filter((assetType) => selectedImagesByAssetType[assetType].length > 0)
+    .map((assetType) => ({
+      detailUrl,
+      outputRootDir: form.outputRootDir.trim(),
+      sourceHint: "auto",
+      doubanAssetType: assetType,
+      imageCountMode: "limited",
+      maxImages: selectedImagesByAssetType[assetType].length,
+      outputImageFormat: form.outputImageFormat,
+      imageAspectRatio: form.imageAspectRatio,
+      requestIntervalSeconds: Number(form.requestIntervalSeconds) as RequestIntervalSeconds,
+      coverUrl: (props.selectedPhotoSeed?.coverUrl ?? selectedPhotoCoverUrl.value) || undefined,
+      coverDataUrl: (props.selectedPhotoSeed?.coverDataUrl ?? selectedPhotoCoverDataUrl.value) || undefined,
+      selectedImages: selectedImagesByAssetType[assetType],
+      selectedPhotoTitle: selectedPhotoTitle.value || undefined,
+    }));
 }
 
 async function prepareSelectedPhotoDownload() {
-  const draft = buildSelectedPhotoDraft();
-  if (!draft) {
+  const drafts = buildSelectedPhotoDrafts();
+  if (!drafts) {
     return false;
   }
 
-  const duplicateTasks = appStore.findDuplicateTasksForDrafts([draft]);
+  const duplicateTasks = appStore.findDuplicateTasksForDrafts(drafts);
   if (duplicateTasks.length === 0) {
     clearAlert();
     void stopSelectedPhotoDiscovery(true);
-    emit("submit", [draft]);
+    emit("submit", drafts);
     return false;
   }
 
   replacementConfirmTitle.value = "列表中任务已存在，是否覆盖目录并替换图片？";
-  pendingReplacementDrafts.value = [draft];
+  pendingReplacementDrafts.value = drafts;
   pendingReplacementTaskIds.value = Array.from(new Set(duplicateTasks.map((task) => task.id)));
   clearAlert();
   return true;

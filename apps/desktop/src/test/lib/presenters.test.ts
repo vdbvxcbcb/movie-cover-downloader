@@ -38,9 +38,33 @@ test("空分类任务状态显示为暂无内容而不是失败待重试", () =>
   assert.equal(descriptor.tone, "neutral");
 });
 
-test("任务标题会显示片名和抓取分类", () => {
-  assert.equal(formatTaskTitle(createTask()), "示例电影 壁纸");
-  assert.equal(formatTaskTitle(createTask({ target: { ...createTask().target, doubanAssetType: "poster" } })), "示例电影 海报");
+test("自动下载任务标题会显示片名分类和任务模式", () => {
+  assert.equal(formatTaskTitle(createTask()), "示例电影 壁纸 自动下载");
+  assert.equal(formatTaskTitle(createTask({ target: { ...createTask().target, doubanAssetType: "poster" } })), "示例电影 海报 自动下载");
+});
+
+test("选图下载任务标题会显示片名分类和任务模式", () => {
+  assert.equal(
+    formatTaskTitle(createTask({
+      title: "示例电影 选图下载",
+      target: {
+        ...createTask().target,
+        doubanAssetType: "poster",
+        selectedImages: [
+          {
+            id: "selected-1",
+            source: "douban",
+            title: "selected",
+            imageUrl: "https://img1.doubanio.com/view/photo/l/public/p1.jpg",
+            category: "poster",
+            doubanAssetType: "poster",
+            orientation: "vertical",
+          },
+        ],
+      },
+    })),
+    "示例电影 海报 选图下载",
+  );
 });
 
 test("任务已完成时操作列显示完成按钮", () => {

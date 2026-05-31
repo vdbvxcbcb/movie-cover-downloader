@@ -108,6 +108,10 @@ async function fetchPreviewDataUrl(imageUrl: string, pageUrl: string, context: A
     if (!response.ok) {
       return undefined;
     }
+    const finalImageUrl = normalizeDoubanImageUrl(response.url || safeImageUrl);
+    if (!finalImageUrl) {
+      return undefined;
+    }
 
     const contentLength = Number(response.headers.get("content-length") ?? 0);
     if (contentLength > maxPreviewImageBytes) {
@@ -119,7 +123,7 @@ async function fetchPreviewDataUrl(imageUrl: string, pageUrl: string, context: A
       return undefined;
     }
 
-    const contentType = inferPreviewContentType(response.url || safeImageUrl, response.headers.get("content-type"));
+    const contentType = inferPreviewContentType(finalImageUrl, response.headers.get("content-type"));
     return `data:${contentType};base64,${bytes.toString("base64")}`;
   } catch {
     return undefined;
@@ -325,7 +329,7 @@ export class DoubanAdapter implements SourceAdapter {
       if (detailPageAccess === "risk") throw new Error("douban risk page detected");
       if (detailPageAccess === "auth") throw new Error("douban login required");
       title = extractDoubanPrimaryTitle(detailPage.html);
-      context.logger.info(`ç‰‡åå·²è§£æž: ${title}`, task.id);
+      context.logger.info(`片名已解析: ${title}`, task.id);
     }
 
     const images: DiscoveredImage[] = [];

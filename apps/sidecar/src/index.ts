@@ -1,6 +1,5 @@
 // sidecar 入口：读取环境变量创建一次性下载任务，并驱动调度器执行。
 import fs from "node:fs";
-import path from "node:path";
 import { CookiePoolService } from "./services/cookie-pool.js";
 import { DownloaderService } from "./services/downloader.js";
 import { MatcherService } from "./services/matcher.js";
@@ -16,7 +15,7 @@ import type {
   DoubanPhotoDiscoveryCursor,
   SidecarTask,
 } from "./shared/contracts.js";
-import { buildOutputDir, buildOutputFolderName, formatDirectoryImageAspectRatio } from "./utils/output-folder.js";
+import { buildOutputFolderName, buildSelectedOutputDir } from "./utils/output-folder.js";
 
 // sidecar 参数全部来自环境变量，入口层先做白名单解析，避免非法值进入下载流程。
 // 解析输出图片格式环境变量；未传时使用 jpg，传入非法值时立即失败，避免下载阶段才暴露配置错误。
@@ -123,14 +122,6 @@ function createRequiredBootstrapTask(configOutputDir: string): SidecarTask {
   return task;
 }
 
-function buildSelectedOutputDir(rootDir: string, outputFolderName: string, imageAspectRatio: SidecarTask["imageAspectRatio"]) {
-  return path.join(
-    buildOutputDir(rootDir, outputFolderName),
-    "selected",
-    `selected-${formatDirectoryImageAspectRatio(imageAspectRatio)}`,
-  );
-}
-
 function normalizeDoubanSubjectUrl(value: string) {
   const match = value.match(/(https:\/\/movie\.douban\.com\/subject\/\d+)/i);
   return match ? `${match[1]}/` : value;
@@ -224,7 +215,7 @@ async function runDoubanSelectedDownloadCommand(
     imagePageUrl: `${detailUrl}all_photos`,
     normalizedTitle: selectedTitle,
     outputFolderName,
-    outputDir: buildSelectedOutputDir(task.outputRootDir, outputFolderName, task.imageAspectRatio),
+    outputDir: buildSelectedOutputDir(task.outputRootDir, outputFolderName, task.doubanAssetType, task.imageAspectRatio),
     images: selectedImages,
   };
   const cookieHeader = cookiePool.getCookieHeader("douban");

@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPinia, setActivePinia } from "pinia";
-import { formatTaskProgress, getTaskProgressPercent } from "../../lib/presenters";
+import { formatTaskProgress, formatTaskTitle, getTaskProgressPercent } from "../../lib/presenters";
 import type { AppSeedState, RuntimeDownloadTaskResult, RuntimeTaskProgressEvent, TaskDraft } from "../../types/app";
 
 // 创建测试用 window/localStorage/prompt stub，避免 Pinia store 测试依赖真实浏览器环境。
@@ -626,6 +626,76 @@ test("selected photo tasks can replace older task with same link output category
   assert.notEqual(appStore.tasks[0]?.id, oldTaskId);
   assert.notEqual(appStore.tasks[0]?.id, secondOldTaskId);
   assert.equal(appStore.tasks[0]?.target.selectedPhotoTitle, "Short Title Full (2026)");
+});
+
+test("selected photo tasks keep the same base title and show category across categories", async () => {
+  const { appStore, runtimeBridge } = await setupStore();
+  const selectedStill = {
+    id: "selected-still",
+    source: "douban" as const,
+    title: "selected still",
+    imageUrl: "https://img.example.com/selected-still.jpg",
+    category: "still" as const,
+    doubanAssetType: "still" as const,
+    orientation: "horizontal" as const,
+  };
+  const selectedPoster = {
+    id: "selected-poster",
+    source: "douban" as const,
+    title: "selected poster",
+    imageUrl: "https://img.example.com/selected-poster.jpg",
+    category: "poster" as const,
+    doubanAssetType: "poster" as const,
+    orientation: "vertical" as const,
+  };
+
+  runtimeBridge.runSelectedPhotoDownload = async (payload) => {
+    const result = createSuccessResult(payload.selectedImages.length);
+    const outputDir = `${payload.outputRootDir}/Shared Title/selected/${payload.doubanAssetType}/${payload.doubanAssetType}-original`;
+    return {
+      ...result,
+      discovery: {
+        ...result.discovery,
+        detailUrl: payload.detailUrl,
+        imagePageUrl: `${payload.detailUrl}all_photos`,
+        normalizedTitle: payload.selectedPhotoTitle ?? result.discovery.normalizedTitle,
+        outputDir,
+        images: payload.selectedImages,
+      },
+      download: {
+        ...result.download,
+        outputDir,
+      },
+    };
+  };
+
+  await appStore.createTasks([
+    createDraft({
+      doubanAssetType: "still",
+      selectedImages: [selectedStill],
+      selectedPhotoTitle: "Shared Title",
+    }),
+    createDraft({
+      doubanAssetType: "poster",
+      selectedImages: [selectedPoster],
+      selectedPhotoTitle: "Shared Title",
+    }),
+  ]);
+  await waitFor(() => appStore.tasks.length === 2 && appStore.tasks.every((task) => task.lifecycle.phase === "completed"));
+
+  assert.deepEqual(appStore.tasks.map((task) => task.title), ["Shared Title 选图下载", "Shared Title 选图下载"]);
+  assert.deepEqual(appStore.tasks.map((task) => formatTaskTitle(task)), ["Shared Title 剧照 选图下载", "Shared Title 海报 选图下载"]);
+  assert.deepEqual(appStore.tasks.map((task) => task.target.doubanAssetType), ["still", "poster"]);
+  assert.deepEqual(
+    appStore.findDuplicateTasksForDrafts([
+      createDraft({
+        doubanAssetType: "still",
+        selectedImages: [selectedStill],
+        selectedPhotoTitle: "Shared Title",
+      }),
+    ]).map((task) => task.target.doubanAssetType),
+    ["still"],
+  );
 });
 
 test("selected photo tasks replace active older task after replacement confirmation", async () => {

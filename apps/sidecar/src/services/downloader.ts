@@ -18,6 +18,7 @@ import {
 import { PauseRequestedError, type FileTaskControl } from "./task-control.js";
 
 const maxSourceImageBytes = 80 * 1024 * 1024;
+const doubanImageHostPattern = /^img\d+\.doubanio\.com$/i;
 
 class SourceImageSizeLimitError extends Error {
   constructor(bytes: number) {
@@ -28,6 +29,13 @@ class SourceImageSizeLimitError extends Error {
 function assertSourceImageSize(bytes: number) {
   if (bytes > maxSourceImageBytes) {
     throw new SourceImageSizeLimitError(bytes);
+  }
+}
+
+function assertDoubanImageResponseUrl(imageUrl: string) {
+  const url = new URL(imageUrl);
+  if (!doubanImageHostPattern.test(url.hostname) || !url.pathname.includes("/view/photo/")) {
+    throw new Error("image redirect target is not a douban image");
   }
 }
 
@@ -414,6 +422,7 @@ export class DownloaderService {
     if (!response.ok) {
       throw new Error(`image request failed: ${response.status} ${response.statusText}`);
     }
+    assertDoubanImageResponseUrl(response.url || image.imageUrl);
 
     if (prepared.metadata?.downloadedBytes && response.status !== 206) {
       await clearResumeArtifacts(discovery.outputDir, task.id, imageIndex);

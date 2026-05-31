@@ -22,9 +22,24 @@ export function buildOutputDir(rootDir: string, folderName: string) {
 }
 
 export type FileNameImageAspectRatio = "original" | "9:16" | "3:4";
+export type OutputFolderAssetType = "still" | "poster" | "wallpaper";
 
 export function formatDirectoryImageAspectRatio(imageAspectRatio: FileNameImageAspectRatio) {
   return imageAspectRatio === "original" ? "original" : imageAspectRatio.replace(":", "x");
+}
+
+export function buildSelectedOutputDir(
+  rootDir: string,
+  outputFolderName: string,
+  doubanAssetType: OutputFolderAssetType,
+  imageAspectRatio: FileNameImageAspectRatio,
+) {
+  return path.join(
+    buildOutputDir(rootDir, outputFolderName),
+    "selected",
+    doubanAssetType,
+    `${doubanAssetType}-${formatDirectoryImageAspectRatio(imageAspectRatio)}`,
+  );
 }
 
 // 把比例策略转换成文件名后缀；original 用“原图”，固定比例用 9x16/3x4。
