@@ -117,8 +117,10 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
   max-width: 100%;
   flex-wrap: nowrap;
   justify-content: flex-start;
+  margin-top: -1px;
   margin-bottom: 18px;
   overflow-x: auto;
+  padding-top: 1px;
 }
 
 .control-center-actions :deep(.action-btn) {
