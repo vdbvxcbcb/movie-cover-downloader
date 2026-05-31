@@ -284,6 +284,7 @@ export interface RuntimeDiscoverDoubanPhotosPayload {
   doubanCookie?: string;
   cursor?: RuntimeDoubanPhotoDiscoveryCursor | null;
   batchSize?: number;
+  knownTitle?: string;
 }
 
 export interface RuntimeDoubanPhotoDiscoveryCursor {

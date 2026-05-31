@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 
-import type { SidecarTask } from "../../shared/contracts.js";
+import type { DiscoveredImage, SidecarTask } from "../../shared/contracts.js";
 import type { SidecarLogger } from "../../shared/logger.js";
 import { buildOutputFolderName, buildSelectedOutputDir, sanitizeNameSegment } from "../../utils/output-folder.js";
 import { fetchText, resolveRequestIntervalMs } from "../../adapters/base.js";
@@ -125,6 +125,119 @@ test("selected photo batch discovery stops before fetching the next page", async
     assert.equal(result.nextCursor?.pageIndex, 0);
     assert.equal(result.nextCursor?.withinPageOffset, 1);
     assert.equal(calls.some((url) => url.includes("start=30")), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("selected photo batch discovery reuses known title and skips detail page", async () => {
+  const adapter = new DoubanAdapter();
+  const task = createTask({ doubanAssetType: "still" });
+  const context = { ...createContext(), knownTitle: "Known Batch Movie" };
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const calls: string[] = [];
+
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const requestUrl = String(url);
+    calls.push(requestUrl);
+    return createFetchResponse({
+      finalUrl: "https://movie.douban.com/subject/34780991/photos?type=S",
+      html: `
+        <html>
+          <title>图片</title>
+          <div class="article"></div>
+          <span>共1张</span>
+          <img src="https://img1.doubanio.com/view/photo/m/public/p1.jpg">
+        </html>
+      `,
+    });
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const result = await adapter.discoverBatch(task, context, null, 1);
+    assert.equal(result.normalizedTitle, "Known Batch Movie");
+    assert.equal(result.images[0]?.title, "Known Batch Movie Still 1");
+    assert.deepEqual(calls, ["https://movie.douban.com/subject/34780991/photos?type=S"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("selected photo batch discovery emits images before preview data urls finish", async () => {
+  const adapter = new DoubanAdapter();
+  const task = createTask({ doubanAssetType: "wallpaper" });
+  const imageBytes = new Uint8Array([1, 2, 3]);
+  const progressImages: DiscoveredImage[][] = [];
+  const context = {
+    ...createContext(),
+    includePreviewDataUrl: true,
+    onImagesDiscovered(images: DiscoveredImage[]) {
+      progressImages.push(images);
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/subject/34780991/")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/",
+        html: '<html><span property="v:itemreviewed">示例电影</span></html>',
+      });
+    }
+    if (url.includes("/photos?type=W")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=W",
+        html: `
+          <html>
+            <title>图片</title>
+            <div class="article"></div>
+            <span>共1张</span>
+            <img src="https://img1.doubanio.com/view/photo/m/public/p1.webp">
+          </html>
+        `,
+      });
+    }
+
+    return {
+      ok: true,
+      url,
+      headers: {
+        get(name: string) {
+          return name.toLowerCase() === "content-type" ? "image/webp" : null;
+        },
+      },
+      arrayBuffer: async () => imageBytes.buffer,
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const result = await adapter.discoverBatch(task, context, null, 1);
+    assert.equal(progressImages.length, 1);
+    assert.equal(progressImages[0]?.[0]?.previewDataUrl, undefined);
+    assert.equal(result.images[0]?.previewDataUrl, "data:image/webp;base64,AQID");
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;

@@ -136,6 +136,7 @@ struct DiscoverDoubanPhotosPayload {
     douban_cookie: Option<String>,
     cursor: Option<Value>,
     batch_size: Option<u32>,
+    known_title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2086,12 +2087,21 @@ fn discover_douban_photos_blocking(
         )
         .env("MCD_REQUEST_INTERVAL_MS", request_interval_ms.to_string())
         .env("MCD_BOOTSTRAP_REQUEST_INTERVAL_MS", request_interval_ms.to_string())
+        .env("MCD_CONCURRENCY", "4")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     if let Some(cookie) = payload.douban_cookie.as_ref() {
         command.env("MCD_DOUBAN_COOKIE", cookie);
+    }
+    if let Some(known_title) = payload
+        .known_title
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        command.env("MCD_DISCOVERY_TITLE", known_title);
     }
     if let Some(cursor) = payload.cursor.as_ref() {
         command.env("MCD_DISCOVERY_CURSOR", cursor.to_string());

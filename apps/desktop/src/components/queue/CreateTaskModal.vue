@@ -97,6 +97,8 @@ const selectedPhotoGridLoadingRequested = shallowRef(false);
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
 let selectedPhotoAutoDiscoverTimer: number | null = null;
+let unsubscribeDoubanPhotoDiscoveryProgress: (() => void) | null = null;
+let isCreateTaskModalMounted = false;
 const stoppedSelectedDiscoveryTaskIds = new Set<string>();
 
 function resetSelectedPhotoDiscoveryState() {
@@ -247,16 +249,29 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  isCreateTaskModalMounted = false;
   if (titleResolveTimer !== null) {
     window.clearTimeout(titleResolveTimer);
   }
   clearSelectedPhotoAutoDiscoverTimer();
+  unsubscribeDoubanPhotoDiscoveryProgress?.();
+  unsubscribeDoubanPhotoDiscoveryProgress = null;
   void stopSelectedPhotoDiscovery();
   document.removeEventListener("keydown", handleSelectedPhotoPreviewKeydown);
 });
 
 onMounted(() => {
+  isCreateTaskModalMounted = true;
   document.addEventListener("keydown", handleSelectedPhotoPreviewKeydown);
+  void runtimeBridge.onDoubanPhotoDiscoveryProgress((event) => {
+    handleSelectedPhotoDiscoveryProgress(event);
+  }).then((unlisten) => {
+    if (!isCreateTaskModalMounted) {
+      unlisten();
+      return;
+    }
+    unsubscribeDoubanPhotoDiscoveryProgress = unlisten;
+  });
 });
 
 watch(
@@ -586,6 +601,28 @@ function mergeSelectedDiscoveredPhotos(images: RuntimeDiscoveredAsset[]) {
   selectedPhotos.value = nextPhotos;
 }
 
+function handleSelectedPhotoDiscoveryProgress(event: {
+  taskId: string;
+  normalizedTitle?: string;
+  images: RuntimeDiscoveredAsset[];
+}) {
+  if (event.taskId !== selectedDiscoveryTaskId.value) return;
+  if (stoppedSelectedDiscoveryTaskIds.has(event.taskId)) return;
+
+  if (event.normalizedTitle) {
+    selectedPhotoTitle.value = pickMoreCompleteTitle(selectedPhotoTitle.value, event.normalizedTitle);
+    try {
+      appStore.upsertCreateTaskMoviePreview(getSelectedPhotoSubjectUrl(normalizeSelectedPhotoUrl(selectedPhotoLink.value)), {
+        title: selectedPhotoTitle.value,
+      });
+    } catch {
+      // 用户可能正在编辑链接；进度图片按 taskId 合并即可。
+    }
+  }
+
+  mergeSelectedDiscoveredPhotos(event.images);
+}
+
 function handleSelectedPhotoLinkInput() {
   clearAlert();
   clearSelectedPhotoAutoDiscoverTimer();
@@ -745,7 +782,9 @@ async function loadNextSelectedPhotoBatch() {
       doubanCookie: getUsableDoubanCookie(),
       cursor: selectedPhotoDiscoveryByAsset.value[doubanAssetType].cursor,
       batchSize: selectedPhotoRenderBatchSize,
+      knownTitle: selectedPhotoTitle.value || undefined,
     });
+    if (stoppedSelectedDiscoveryTaskIds.has(taskId) || selectedDiscoveryTaskId.value !== taskId) return;
     selectedPhotoTitle.value = pickMoreCompleteTitle(selectedPhotoTitle.value, discovery.normalizedTitle);
     appStore.upsertCreateTaskMoviePreview(subjectUrl, { title: selectedPhotoTitle.value });
     mergeSelectedDiscoveredPhotos(discovery.images);

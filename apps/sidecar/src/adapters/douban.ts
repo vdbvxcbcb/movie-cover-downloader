@@ -320,7 +320,7 @@ export class DoubanAdapter implements SourceAdapter {
     const protectedContext: AdapterContext = { ...context, minRequestIntervalMs: 3000 };
     const safeBatchSize = Math.max(1, batchSize);
     const detailSkeleton = createResolvedSkeleton(task);
-    let title = cursor?.normalizedTitle;
+    let title = cursor?.normalizedTitle || context.knownTitle?.trim();
 
     if (!title) {
       context.logger.info(`fetching douban detail page: ${detailSkeleton.detailUrl}`, task.id);
@@ -402,6 +402,14 @@ export class DoubanAdapter implements SourceAdapter {
         );
         const remaining = safeBatchSize - images.length;
         const pickedWithoutPreview = pageImages.slice(withinPageOffset, withinPageOffset + remaining);
+        if (pickedWithoutPreview.length > 0) {
+          context.onImagesDiscovered?.(pickedWithoutPreview, {
+            taskId: task.id,
+            doubanAssetType,
+            pageUrl,
+            normalizedTitle: title,
+          });
+        }
         const picked = await attachPreviewDataUrls(pickedWithoutPreview, pageUrl, protectedContext);
         images.push(...picked);
         withinPageOffset += pickedWithoutPreview.length;

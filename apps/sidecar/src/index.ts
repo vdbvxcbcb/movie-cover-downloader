@@ -190,7 +190,23 @@ async function runDoubanPhotosDiscoverCommand(
     task,
     parseDiscoveryCursor(),
     Number(process.env.MCD_DISCOVERY_BATCH_SIZE ?? 28),
-    { includePreviewDataUrl: true },
+    {
+      includePreviewDataUrl: true,
+      knownTitle: process.env.MCD_DISCOVERY_TITLE,
+      onImagesDiscovered: (images, meta) => {
+        process.stdout.write(`${JSON.stringify({
+          kind: "douban-photos-discover-progress",
+          payload: {
+            taskId: meta.taskId,
+            doubanAssetType: meta.doubanAssetType,
+            pageUrl: meta.pageUrl,
+            normalizedTitle: meta.normalizedTitle,
+            images,
+            timestamp: Date.now(),
+          },
+        })}\n`);
+      },
+    },
   );
   process.stdout.write(`${JSON.stringify({
     kind: "douban-photos-discover-result",

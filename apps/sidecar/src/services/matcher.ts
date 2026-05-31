@@ -13,6 +13,7 @@ import type { CookiePoolService } from "./cookie-pool.js";
 export interface DiscoverOptions {
   onImagesDiscovered?: Parameters<DoubanAdapter["discover"]>[1]["onImagesDiscovered"];
   includePreviewDataUrl?: boolean;
+  knownTitle?: string;
 }
 
 // 匹配服务只负责选适配器和输出目录，不直接下载图片，保持职责边界清晰。
@@ -42,6 +43,7 @@ constructor(
       logger: this.logger,
       cookieHeader,
       includePreviewDataUrl: options.includePreviewDataUrl,
+      knownTitle: options.knownTitle,
       onImagesDiscovered: options.onImagesDiscovered,
     });
 
@@ -69,6 +71,7 @@ constructor(
       logger: this.logger,
       cookieHeader,
       includePreviewDataUrl: options.includePreviewDataUrl,
+      knownTitle: options.knownTitle,
       onImagesDiscovered: options.onImagesDiscovered,
     }, cursor, batchSize);
   }

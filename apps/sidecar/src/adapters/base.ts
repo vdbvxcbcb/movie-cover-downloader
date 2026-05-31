@@ -11,6 +11,7 @@ export interface AdapterContext {
   cookieHeader?: string | null;
   minRequestIntervalMs?: number;
   includePreviewDataUrl?: boolean;
+  knownTitle?: string;
   onImagesDiscovered?: (
     images: DiscoveredImage[],
     meta: { taskId: string; doubanAssetType: DoubanAssetType; pageUrl: string; normalizedTitle: string },
