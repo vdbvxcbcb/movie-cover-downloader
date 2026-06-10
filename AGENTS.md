@@ -2,6 +2,8 @@
 
 本文件给接手 `movie-cover-downloader` 的 agent 使用。先读本文件，再读 `README.md`、`docs/usage-guide.md` 和相关代码。所有回复默认使用简体中文。
 
+为降低 AI 编程场景下的重复扫描成本，处理复杂问题时先读 `docs/ai-context/project-map.md`，再按任务类型读取 `docs/ai-context/runtime-flows.md` 和 `docs/ai-context/module-index.md` 中对应部分。`docs/ai-context` 是导航图谱，不替代当前代码和测试；如果不一致，以代码为准并同步更新图谱。
+
 ## 项目概览
 
 `Movie Cover Downloader` 是面向 Windows 的豆瓣影视图片下载器桌面应用，用于下载影视剧照、海报、壁纸，并辅助制作视频封面。
@@ -52,7 +54,7 @@ movie-cover-downloader/
 │  │  └─ src-tauri/             # Rust/Tauri 命令层、SQLite、文件系统、sidecar 进程管理
 │  └─ sidecar/                  # Node.js 抓取执行层
 │     └─ src/                   # 豆瓣适配、下载、裁剪、续传、进度事件
-├─ docs/                        # 架构、数据库草案、MVP、使用说明
+├─ docs/                        # 使用说明、AI 项目图谱、早期规划文档
 ├─ scripts/                     # sidecar 打包资源准备脚本
 ├─ package.json                 # pnpm workspace 脚本入口
 └─ README.md                    # 当前项目说明
