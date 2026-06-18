@@ -7,14 +7,32 @@ import PanelSection from "../components/common/PanelSection.vue";
 import PopConfirmAction from "../components/common/PopConfirmAction.vue";
 import StatusPill from "../components/common/StatusPill.vue";
 import TaskTable from "../components/queue/TaskTable.vue";
-import { describeCookieStatus, formatCookieExpiry, formatSourceSite } from "../lib/presenters";
+import QueueFilterBar from "../components/queue/QueueFilterBar.vue";
+import { describeCookieStatus, formatCookieExpiry, formatSourceSite, formatTaskTitle } from "../lib/presenters";
 import { useAppStore } from "../stores/app";
-import { compareTaskAddedOrder } from "../lib/task-order";
+import { sortTasksByAddedTime } from "../lib/task-order";
 
 const appStore = useAppStore();
-const { tasks, cookies, queueRunning, activeTaskIds, queueHasActiveDownloads } = storeToRefs(appStore);
-// 控制中心界面按任务添加时间正序展示：旧任务在上，新任务在下。
-const orderedTasks = computed(() => [...tasks.value].sort(compareTaskAddedOrder));
+const { tasks, cookies, queueRunning, activeTaskIds, queueHasActiveDownloads, queueSortOrder, queueSearchQuery } = storeToRefs(appStore);
+
+// 根据排序方向和搜索关键词筛选任务
+const orderedTasks = computed(() => {
+  let filtered = tasks.value;
+
+  // 应用搜索筛选
+  if (queueSearchQuery.value.trim()) {
+    const query = queueSearchQuery.value.trim().toLowerCase();
+    filtered = filtered.filter((task) => {
+      const title = formatTaskTitle(task).toLowerCase();
+      const url = task.target.detailUrl.toLowerCase();
+      return title.includes(query) || url.includes(query);
+    });
+  }
+
+  // 应用排序
+  return sortTasksByAddedTime(filtered, queueSortOrder.value);
+});
+
 // Cookie 列表至少存在一条记录时，才允许使用后续业务操作。
 const hasCookieProfiles = computed(() => cookies.value.length > 0);
 // 清空队列任务还需要队列里确实有任务。
@@ -70,6 +88,14 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
     </PanelSection>
 
     <PanelSection eyebrow="Queue" title="下载队列">
+      <template #aside>
+        <QueueFilterBar
+          :sort-order="queueSortOrder"
+          :search-query="queueSearchQuery"
+          @update:sort-order="queueSortOrder = $event"
+          @update:search-query="queueSearchQuery = $event"
+        />
+      </template>
       <TaskTable
         :tasks="orderedTasks"
         :active-task-ids="activeTaskIds"

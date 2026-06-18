@@ -1,6 +1,8 @@
 // 任务排序工具：统一按添加顺序展示和执行队列。
 import type { TaskItem } from "../types/app";
 
+export type TaskSortOrder = "desc" | "asc";
+
 // 队列展示和后台执行都按任务 id 数字部分升序排序，实现旧任务优先。
 export function compareTaskAddedOrder(left: TaskItem, right: TaskItem) {
   const leftMatch = /^task-(\d+)-(\d+)$/.exec(left.id);
@@ -20,4 +22,10 @@ export function compareTaskAddedOrder(left: TaskItem, right: TaskItem) {
   }
 
   return left.id.localeCompare(right.id);
+}
+
+// 根据排序方向对任务排序，默认降序（新任务在前）
+export function sortTasksByAddedTime(tasks: TaskItem[], order: TaskSortOrder = "desc"): TaskItem[] {
+  const sorted = [...tasks].sort(compareTaskAddedOrder);
+  return order === "desc" ? sorted.reverse() : sorted;
 }

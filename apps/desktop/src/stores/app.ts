@@ -335,6 +335,8 @@ export const useAppStore = defineStore("app", () => {
   const notice = ref<NoticePayload | null>(null);
   const pendingActionIds = ref<string[]>([]);
   const activeTaskIds = ref<string[]>([]);
+  const queueSortOrder = ref<"desc" | "asc">("desc");
+  const queueSearchQuery = ref("");
   // 自定义裁剪默认保存到最近任务的输出根目录；没有任务时回退 D:/cover。
   const customCropOutputRootDir = computed(() => createTaskOutputRootDir.value || "D:/cover");
   const taskLookup = computed(() => {
@@ -1633,6 +1635,8 @@ export const useAppStore = defineStore("app", () => {
     cookies,
     logs,
     queueConfig,
+    queueSortOrder,
+    queueSearchQuery,
     visibleLogs,
     customCropOutputRootDir,
     notice,
