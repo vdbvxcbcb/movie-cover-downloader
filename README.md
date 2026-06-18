@@ -7,8 +7,12 @@
 - 使用说明：[docs/usage-guide.md](./docs/usage-guide.md)
 - sidecar 说明：[apps/sidecar/README.md](./apps/sidecar/README.md)
 - 安装包下载：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
+- **Windows 开发环境配置**：[docs/windows-setup.md](./docs/windows-setup.md)
+- **构建检查清单**：[docs/build-checklist.md](./docs/build-checklist.md)
 
 ## 视频演示
+
+项目会持续更新，演示效果仅供参考，最新功能都会放进安装包：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
 
 https://github.com/user-attachments/assets/908c6e0d-6f0f-4608-9224-5a001f564801
 
@@ -259,22 +263,77 @@ D:/cover/custom-crop-photo
 
 ## 开发与构建脚本
 
+### 环境检查
+
+首次构建前，运行环境检查脚本：
+
+```powershell
+.\scripts\check-build-env.ps1
+```
+
+该脚本会检查：Rust 工具链、C++ 编译器、Node.js、pnpm、WebView2、项目依赖、sidecar 构建状态等。
+
+详细的环境配置指南请参考：[docs/windows-setup.md](./docs/windows-setup.md)
+
+### 常用脚本
+
 根目录常用脚本：
 
 ```bash
 pnpm dev:web              # 启动前端网页预览
 pnpm dev:desktop          # 启动 Tauri 桌面开发模式
-pnpm build:web            # 构建前端，同时准备 sidecar bundle
+pnpm build:web            # 构建前端
 pnpm build:desktop        # 构建 Windows 桌面安装包
 pnpm dev:sidecar          # 启动 sidecar 开发模式
 pnpm build:sidecar        # 单独构建 sidecar
+pnpm prepare:sidecar-bundle # 打包 sidecar bundle 到 Tauri resources
 pnpm test                 # 运行 desktop 和 sidecar 测试
 pnpm typecheck            # 前端类型检查
 pnpm typecheck:sidecar    # sidecar 类型检查
-pnpm prepare:sidecar-bundle
 ```
 
-`build:web` 和 `build:desktop` 会先构建 sidecar，并通过 `scripts/prepare-sidecar-bundle.ps1` 把 sidecar 运行所需的 `dist`、依赖和打包资源准备到 Tauri resources 中。
+### 完整构建流程
+
+**一键构建（推荐）**：
+
+```powershell
+.\scripts\build-with-msvc.ps1
+```
+
+该脚本会自动设置 MSVC 环境并按正确顺序执行所有构建步骤。
+
+**详细构建指南**：[docs/build-guide.md](./docs/build-guide.md)  
+包含环境安装、打包原理、增量构建、常见问题排查和构建检查清单。
+
+**手动分步构建**：
+
+```powershell
+# 1. 检查环境
+.\scripts\check-build-env.ps1
+
+# 2. 安装依赖
+pnpm install
+
+# 3. 初始化 MSVC 环境（必须先执行）
+& "C:\Program Files (x86)\Microsoft Visual Studio\2026\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+
+# 4. 构建 sidecar
+pnpm run build:sidecar
+
+# 5. 打包 sidecar bundle
+pnpm run prepare:sidecar-bundle
+
+# 6. 构建桌面应用和安装包
+pnpm run build:desktop
+```
+
+**构建输出**：
+
+```text
+apps/desktop/src-tauri/target/release/bundle/
+├── msi/Movie Cover Downloader_0.1.0_x64_en-US.msi     (~226 MB)
+└── nsis/Movie Cover Downloader_0.1.0_x64-setup.exe    (~226 MB)
+```
 
 ## 安装包打包说明
 
@@ -285,6 +344,7 @@ Windows 安装包不能只打包 Tauri 前端壳，否则用户机器上没有 N
 - sidecar 的 `dist/index.js` 已构建；
 - sidecar 运行依赖已复制到 Tauri resources；
 - 打包内包含运行 sidecar 所需的 Node 可执行文件；
+- **依赖必须使用 hoisted（扁平化）结构，不能使用符号链接**（详见 [docs/sidecar-symlink-fix.md](./docs/sidecar-symlink-fix.md)）；
 - 不包含开发机已有的用户数据、下载图片、SQLite 状态库或本地输出目录。
 
 构建完成后的 NSIS 安装包通常位于：
@@ -292,6 +352,20 @@ Windows 安装包不能只打包 Tauri 前端壳，否则用户机器上没有 N
 ```text
 apps/desktop/src-tauri/target/release/bundle/nsis/Movie Cover Downloader_0.1.0_x64-setup.exe
 ```
+
+### ⚠️ 重要：Sidecar 依赖打包问题
+
+pnpm 默认使用**符号链接（symlink）**管理依赖。这些符号链接指向开发机器的绝对路径，在用户机器上会失效，导致 `Cannot find package 'sharp'` 错误。
+
+**解决方案**：`prepare-sidecar-bundle.ps1` 脚本已配置使用 `node-linker=hoisted` 模式，会创建扁平化的真实文件结构。验证方法：
+
+```powershell
+# 检查 sharp 是否为符号链接（应该返回 "真实目录"）
+$sharp = Get-Item "apps\desktop\src-tauri\resources\sidecar\node_modules\sharp"
+if ($sharp.LinkType) { "❌ 符号链接" } else { "✅ 真实目录" }
+```
+
+详细说明请参考：[docs/sidecar-symlink-fix.md](./docs/sidecar-symlink-fix.md)
 
 ## 设计边界
 
