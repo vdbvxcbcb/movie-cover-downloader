@@ -435,8 +435,11 @@ async function renderCanvas(format: OutputFormat) {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("无法创建导出画布。");
 
-  context.fillStyle = settings.backgroundColor;
-  context.fillRect(0, 0, width, height);
+  // PNG 格式默认透明背景，JPG 格式填充背景色
+  if (format === "jpg") {
+    context.fillStyle = settings.backgroundColor;
+    context.fillRect(0, 0, width, height);
+  }
 
   const backgroundImage = settings.backgroundUrl ? await loadImage(settings.backgroundUrl) : null;
   if (backgroundImage && !settings.backgroundOverlay) {
