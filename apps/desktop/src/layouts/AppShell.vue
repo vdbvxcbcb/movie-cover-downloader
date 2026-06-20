@@ -5,6 +5,7 @@ import { RouterView, useRoute } from "vue-router";
 import AppSidebar from "../components/chrome/AppSidebar.vue";
 import AppTopbar from "../components/chrome/AppTopbar.vue";
 import ImportCookieModal from "../components/cookies/ImportCookieModal.vue";
+import ExpiredCookiePromptModal from "../components/cookies/ExpiredCookiePromptModal.vue";
 import ToastNotice from "../components/common/ToastNotice.vue";
 import CreateTaskModal from "../components/queue/CreateTaskModal.vue";
 import CustomCropModal from "../components/queue/CustomCropModal.vue";
@@ -123,5 +124,13 @@ watch(
     @close="appStore.closeImportCookie"
     @submit-manual="handleImportCookieManual"
     @start-login-import="handleStartLoginImport"
+  />
+
+  <ExpiredCookiePromptModal
+    v-if="appStore.expiredCookiePromptOpen"
+    :count="appStore.expiredCookieCount"
+    :latest-expires-at="appStore.expiredCookieExpiresAt"
+    @close="appStore.closeExpiredCookiePrompt"
+    @open-login="appStore.openLoginFromExpiredPrompt"
   />
 </template>

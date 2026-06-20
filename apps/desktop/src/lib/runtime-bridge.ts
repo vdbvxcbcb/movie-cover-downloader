@@ -33,6 +33,7 @@ interface RuntimeLogPayload {
 interface NativeLoginWindowCookieStatus {
   status: "pending" | "ready" | "closed";
   cookie?: string;
+  dbcl2ExpiresAt?: string;
 }
 
 interface RuntimeTaskProgressPayload {
@@ -402,6 +403,7 @@ class RuntimeBridge {
     return {
       state: status.status,
       cookieValue: status.cookie,
+      dbcl2ExpiresAt: status.dbcl2ExpiresAt,
     } satisfies DoubanLoginImportStatus;
   }
 

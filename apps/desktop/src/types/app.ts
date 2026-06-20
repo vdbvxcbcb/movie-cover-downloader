@@ -172,6 +172,7 @@ export interface CookieDraft {
 export interface DoubanLoginImportStatus {
   state: "pending" | "ready" | "closed";
   cookieValue?: string;
+  dbcl2ExpiresAt?: string;
 }
 
 export interface DoubanSearchResultItem {

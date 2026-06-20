@@ -1,5 +1,5 @@
 // Pinia 核心状态仓库：集中管理任务队列、Cookie、日志、持久化和下载调度。
-import { computed, ref, shallowRef } from "vue";
+import { computed, nextTick, ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 import { createInitialAppSeed, createTaskFromDraft } from "../data/mock";
 import { extractDoubanEmptyCategoryTitle, formatDoubanAssetTypeLabel } from "../lib/douban-empty-category";
@@ -271,6 +271,7 @@ function createCookieLifetime(baseTime = Date.now()) {
 function normalizeCookieProfiles(rawCookies: CookieProfile[], now = Date.now()) {
   let changed = false;
   let removedCount = 0;
+  let latestExpiresAt: string | undefined;
 
   const cookies = rawCookies.flatMap((cookie) => {
     const expiresAt = Number.isFinite(new Date(cookie.expiresAt ?? "").getTime())
@@ -281,6 +282,10 @@ function normalizeCookieProfiles(rawCookies: CookieProfile[], now = Date.now()) 
     if (expiresTime <= now) {
       changed = true;
       removedCount += 1;
+      // 记录最晚的过期时间
+      if (!latestExpiresAt || expiresTime > new Date(latestExpiresAt).getTime()) {
+        latestExpiresAt = expiresAt;
+      }
       return [];
     }
 
@@ -305,6 +310,7 @@ function normalizeCookieProfiles(rawCookies: CookieProfile[], now = Date.now()) 
     cookies,
     changed,
     removedCount,
+    latestExpiresAt,
   };
 }
 
@@ -326,6 +332,9 @@ export const useAppStore = defineStore("app", () => {
   const customCropOpen = shallowRef(false);
   const imageProcessOpen = shallowRef(false);
   const imageProcessOutputRootDir = shallowRef("");
+  const expiredCookiePromptOpen = shallowRef(false);
+  const expiredCookieCount = shallowRef(0);
+  const expiredCookieExpiresAt = shallowRef<string | undefined>(undefined);
   const logOnlyErrors = shallowRef(false);
   const progressTick = shallowRef(0);
   const tasks = ref<TaskItem[]>(seed.tasks);
@@ -765,6 +774,19 @@ export const useAppStore = defineStore("app", () => {
     imageProcessOpen.value = false;
   }
 
+  // 关闭过期 Cookie 提示弹窗。
+  function closeExpiredCookiePrompt() {
+    expiredCookiePromptOpen.value = false;
+    expiredCookieCount.value = 0;
+    expiredCookieExpiresAt.value = undefined;
+  }
+
+  // 从过期提示弹窗点击"打开登录窗口"，关闭提示并打开登录导入。
+  function openLoginFromExpiredPrompt() {
+    closeExpiredCookiePrompt();
+    openImportCookie();
+  }
+
   // 判断某个异步动作是否执行中，用于按钮 loading/disabled 状态。
   function isActionPending(actionId: string) {
     return pendingActionIdSet.value.has(actionId);
@@ -1013,7 +1035,9 @@ export const useAppStore = defineStore("app", () => {
           logs.value = snapshot.logs;
           queueConfig.value = snapshot.queueConfig ?? seed.queueConfig;
           if (normalizedCookies.removedCount > 0) {
-            showNotice(`已自动清理 ${normalizedCookies.removedCount} 个过期 Cookie`, "info");
+            // 记录过期 Cookie 信息，启动完成后显示弹窗
+            expiredCookieCount.value = normalizedCookies.removedCount;
+            expiredCookieExpiresAt.value = normalizedCookies.latestExpiresAt;
           }
         }
       } catch (error) {
@@ -1025,6 +1049,13 @@ export const useAppStore = defineStore("app", () => {
       hydrated.value = true;
       if (cookiesChanged) {
         schedulePersist();
+      }
+
+      // 启动完成后，检查是否有过期 Cookie 需要提示用户
+      if (expiredCookieCount.value > 0) {
+        // 等待 DOM 更新完成，确保 AppShell 已挂载
+        await nextTick();
+        expiredCookiePromptOpen.value = true;
       }
     } finally {
       bootstrapping.value = false;
@@ -1544,6 +1575,15 @@ export const useAppStore = defineStore("app", () => {
 
           if (status.state === "ready" && status.cookieValue) {
             const id = nextCookieId();
+            const baseTime = Date.now();
+            // 如果有真实过期时间，使用它；否则使用 30 天估算值
+            const cookieLifetime = status.dbcl2ExpiresAt
+              ? {
+                  importedAt: new Date(baseTime).toISOString(),
+                  expiresAt: status.dbcl2ExpiresAt,
+                }
+              : createCookieLifetime(baseTime);
+
             cookies.value.unshift({
               id,
               status: "active",
@@ -1552,7 +1592,7 @@ export const useAppStore = defineStore("app", () => {
               note: buildAutoImportedCookieNote(),
               source: "douban",
               value: status.cookieValue,
-              ...createCookieLifetime(),
+              ...cookieLifetime,
             });
             schedulePersist();
             importCookieOpen.value = false;
@@ -1629,6 +1669,9 @@ export const useAppStore = defineStore("app", () => {
     customCropOpen,
     imageProcessOpen,
     imageProcessOutputRootDir,
+    expiredCookiePromptOpen,
+    expiredCookieCount,
+    expiredCookieExpiresAt,
     logOnlyErrors,
     progressTick,
     tasks,
@@ -1666,6 +1709,8 @@ export const useAppStore = defineStore("app", () => {
     closeCustomCrop,
     openImageProcess,
     closeImageProcess,
+    closeExpiredCookiePrompt,
+    openLoginFromExpiredPrompt,
     createTasks,
     importCookie,
     startDoubanLoginImport,
