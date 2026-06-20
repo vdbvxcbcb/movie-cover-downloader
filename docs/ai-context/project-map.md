@@ -65,8 +65,16 @@ flowchart TB
 | 层级 | 主要路径 | 职责 | 不应该做 |
 | --- | --- | --- | --- |
 | 前端 UI/状态 | `apps/desktop/src` | 表单、弹窗、队列状态、Cookie 状态、日志展示、图片处理交互 | 绕过 Tauri 直接读写本地敏感文件；直接执行真实下载 |
-| Tauri/Rust | `apps/desktop/src-tauri/src/lib.rs` | SQLite、文件系统边界校验、sidecar 启动、stdout/stderr 解析、事件转发 | 在外部输入上 panic；把 Cookie 写进命令行或日志 |
+| Tauri/Rust | `apps/desktop/src-tauri/src` (模块化) | SQLite、文件系统边界校验、sidecar 启动、stdout/stderr 解析、事件转发 | 在外部输入上 panic；把 Cookie 写进命令行或日志 |
 | sidecar | `apps/sidecar/src` | 豆瓣搜索/解析/下载、断点续传、sharp 转换裁剪、结构化事件输出 | 直接操作前端状态；调用 Tauri API |
+
+**Rust 模块化架构**（2026年6月重构）：
+
+- **lib.rs** (857行) - Tauri 应用入口
+- **基础模块**: constants, types, utils, crypto, task_control
+- **sqlite/**: connection, state, migration
+- **sidecar/**: runtime, parser, download, douban
+- **commands/**: state, login, task, fs, image
 
 ## AI 任务定位速查
 

@@ -2,6 +2,17 @@
 
 本文按业务链路描述跨层调用。AI 排查问题时优先按链路读文件，避免从全仓库目录扫描开始。
 
+## Rust 后端模块化架构
+
+**2026年6月完成重构**，lib.rs 从 3562 行减少到 857 行，按功能分离成独立模块：
+
+- **commands/** - Tauri 命令入口（state, login, task, fs, image）
+- **sidecar/** - Sidecar 进程管理（runtime, parser, download, douban）
+- **sqlite/** - 数据库操作（connection, state, migration）
+- **基础模块** - constants, types, utils, crypto, task_control
+
+各链路中提到的 `lib.rs` 命令现在位于对应的 commands 模块文件中。
+
 ## 搜索影视链路
 
 ```mermaid
@@ -33,7 +44,8 @@ sequenceDiagram
 
 - `apps/desktop/src/components/queue/SearchMovieModal.vue`：搜索输入、页级缓存、结果按钮、可用 Cookie 判断。
 - `apps/desktop/src/lib/runtime-bridge.ts`：`searchDoubanMovies`。
-- `apps/desktop/src-tauri/src/lib.rs`：`search_douban_movies` 和 `search_douban_movies_blocking`。
+- `apps/desktop/src-tauri/src/commands/task.rs`：`search_douban_movies` 命令。
+- `apps/desktop/src-tauri/src/sidecar/douban.rs`：`search_douban_movies_blocking` 实现。
 - `apps/sidecar/src/index.ts`：`MCD_COMMAND=douban-search`。
 - `apps/sidecar/src/services/douban-search.ts`：豆瓣搜索页解析。
 
@@ -75,7 +87,9 @@ sequenceDiagram
 
 - `apps/desktop/src/components/queue/CreateTaskModal.vue`：自动下载表单和 draft 校验。
 - `apps/desktop/src/stores/app.ts`：`createTasks`、`drainQueue`、`runNativeTask`、`buildCompletedTask`。
-- `apps/desktop/src-tauri/src/lib.rs`：`run_download_task`、sidecar 环境变量、stdout/stderr 解析。
+- `apps/desktop/src-tauri/src/commands/task.rs`：`run_download_task` 命令。
+- `apps/desktop/src-tauri/src/sidecar/download.rs`：`run_download_task_blocking` 实现。
+- `apps/desktop/src-tauri/src/sidecar/parser.rs`：stdout/stderr 解析。
 - `apps/sidecar/src/services/scheduler.ts`：任务编排。
 - `apps/sidecar/src/services/matcher.ts`：选择站点适配器。
 - `apps/sidecar/src/adapters/douban.ts`：豆瓣详情页和图片页解析。

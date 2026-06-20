@@ -26,6 +26,16 @@
 
 ## 最近几次提交后的重要状态
 
+**Rust 后端模块化重构**（2026年6月完成）：
+
+- lib.rs 从 **3562 行减少到 857 行**（减少 76%）
+- 新增 **20 个模块文件**，清晰的职责分离
+- 所有 **40 个单元测试**保持通过
+- **Clippy 零警告**，符合 Rust 最佳实践
+- 修改 Rust 代码时，定位到对应模块文件，而非全部在 lib.rs 中查找
+
+**选图下载状态**：
+
 - `3、添加下载任务` 是下载入口，不要在首页继续增加选图下载按钮。
 - `CreateTaskModal.vue` 的选图下载只保留 `剧照 / 海报 / 壁纸` 三个分类，已经移除 `全部` 分类和 `解析当前分类` 按钮。
 - 手动粘贴豆瓣链接进入选图下载时，会自动解析影片标题/封面，并默认先解析剧照分类。
@@ -77,9 +87,39 @@ movie-cover-downloader/
 
 关键 Rust/Tauri 文件：
 
-- `apps/desktop/src-tauri/src/lib.rs`：主要 Tauri command，实现 SQLite、文件读写、目录安全校验、启动 sidecar、转发日志/进度、保存图片等。
-- `apps/desktop/src-tauri/src/main.rs`：Tauri 应用入口。
+**模块化架构**（2026年6月重构完成，lib.rs 从 3562 行减少到 857 行）：
+
+- `apps/desktop/src-tauri/src/lib.rs`：Tauri 应用入口，注册命令和状态管理。
+- `apps/desktop/src-tauri/src/main.rs`：Tauri 主程序入口。
+
+**基础模块**：
+- `constants.rs`：应用常量（日志种子、请求间隔、状态版本）
+- `types.rs`：类型定义（TableName enum、任务 payload、事件类型）
+- `utils.rs`：工具函数（校验、编码、文件名清理）
+- `crypto.rs`：Windows DPAPI Cookie 加密
+- `task_control.rs`：任务控制注册表（暂停/继续/取消）
+
+**SQLite 模块** (`sqlite/`)：
+- `connection.rs`：数据库连接、初始化、损坏检测
+- `state.rs`：状态读写、快照管理
+- `migration.rs`：JSON 到 SQLite 迁移
+
+**Sidecar 模块** (`sidecar/`)：
+- `runtime.rs`：sidecar 路径解析、请求间隔控制
+- `parser.rs`：stdout/stderr 解析、事件转发
+- `download.rs`：下载任务执行、豆瓣图片发现
+- `douban.rs`：豆瓣搜索、标题解析、预览解析
+
+**Commands 模块** (`commands/`)：
+- `state.rs`：状态持久化命令
+- `login.rs`：登录窗口管理
+- `task.rs`：任务控制和执行命令
+- `fs.rs`：文件系统操作命令
+- `image.rs`：图片处理命令
+
+配置文件：
 - `apps/desktop/src-tauri/tauri.conf.json`：窗口、CSP、bundle resources 配置。
+- `apps/desktop/src-tauri/Cargo.toml`：Rust 依赖。
 
 关键 sidecar 文件：
 
@@ -260,11 +300,14 @@ CreateTaskModal
 Tauri/Rust 规范：
 
 - 前端需要系统能力时，通过 `runtime-bridge.ts` 调用 Tauri command，不在前端绕过。
+- **模块化开发**：新增功能时，找到对应的模块文件（commands/、sidecar/、sqlite/ 等），不要全部堆在 lib.rs。
+- **新增命令**：在 commands/ 模块中添加，然后在 lib.rs 的 `generate_handler!` 中注册。
 - Rust 文件系统操作必须做路径规范化和边界校验。
 - 不要在 Rust 里 panic 处理外部输入；损坏数据应返回普通错误。
 - sidecar stdout/stderr 解析要容错，错误信息要能转成用户可理解日志。
 - Windows 路径、中文目录、空格路径都是正常场景。
 - Windows 下启动 sidecar/下载进程应避免弹出命令行窗口，注意 `CREATE_NO_WINDOW` / `creation_flags`。
+- **代码风格**：遵循 Apollo Rust Best Practices，借用优先于克隆，使用类型安全的 enum。
 
 sidecar 规范：
 
@@ -302,16 +345,19 @@ Rust：
 
 ```bash
 cd apps/desktop/src-tauri
-cargo test
-cargo check
+cargo test      # 运行所有 40 个单元测试
+cargo check     # 快速类型检查
+cargo clippy --all-targets  # Lint 检查，确保零警告
+cargo build     # 完整构建
 ```
 
 修改建议：
 
 - 只改前端 SFC/CSS：至少跑 `pnpm --dir apps/desktop exec vue-tsc --noEmit`。
 - 改 sidecar：跑 `pnpm --dir apps/sidecar typecheck` 和相关测试。
-- 改 Rust/Tauri：跑 `cargo check` 或 `cargo test`。
-- 打包前建议跑 `pnpm test`、`pnpm typecheck`、`pnpm typecheck:sidecar`。
+- 改 Rust/Tauri：跑 `cargo check` 和 `cargo test`，确保 40 个测试全部通过。
+- 改 Rust 模块：运行 `cargo clippy --all-targets` 确保零警告。
+- 打包前建议跑 `pnpm test`、`pnpm typecheck`、`pnpm typecheck:sidecar`、`cargo test`。
 
 ## 禁止事项
 

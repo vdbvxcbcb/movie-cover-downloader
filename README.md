@@ -191,22 +191,61 @@ sidecar 只下载用户选中的图片列表，并沿用现有进度事件进入
 
 ### Tauri 层：`apps/desktop/src-tauri`
 
-- `main.rs`：Tauri 应用入口。
-- `lib.rs`：桌面能力核心，注册前端可调用命令，负责：
-  - 读取/保存 SQLite 状态库；
-  - 从旧 JSON 状态迁移到 SQLite；
-  - 检测和恢复损坏状态库；
-  - 启动 sidecar 子进程；
-  - 解析 sidecar stdout/stderr；
-  - 转发日志、任务进度和选图发现进度；
-  - 打开目录、定位文件、删除输出目录；
-  - 读取本地图片和保存图片处理结果；
-  - 管理任务控制文件和 pid 文件。
+**模块化架构**（2026年6月重构完成，lib.rs 从 3562 行减少到 857 行）：
 
-新增的选图下载相关命令包括：
+**核心入口**：
+- `lib.rs`：Tauri 应用入口，注册命令和状态管理
 
-- `discover_douban_photos`：只解析豆瓣图片，不保存文件，按分类和游标返回一批已发现图片。
-- `run_selected_photo_download`：接收用户选择的图片列表，只下载选中的图片。
+**基础模块**：
+- `constants.rs`：应用常量（日志种子、请求间隔、状态版本）
+- `types.rs`：类型定义（TableName enum、任务 payload、事件类型）
+- `utils.rs`：工具函数（校验、编码、文件名清理、阻塞任务）
+- `crypto.rs`：Windows DPAPI Cookie 加密保护
+- `task_control.rs`：任务控制注册表（暂停/继续/取消）
+
+**SQLite 模块** (`sqlite/`)：
+- `connection.rs`：数据库连接、初始化、损坏检测和备份
+- `state.rs`：状态读写、快照管理、日志种子恢复
+- `migration.rs`：JSON 到 SQLite 自动迁移
+
+**Sidecar 模块** (`sidecar/`)：
+- `runtime.rs`：sidecar 路径解析、请求间隔控制、错误格式化
+- `parser.rs`：stdout/stderr 解析、日志/进度事件转发
+- `download.rs`：下载任务执行、豆瓣图片发现
+- `douban.rs`：豆瓣搜索、标题解析、预览解析
+
+**Commands 模块** (`commands/`)：
+- `state.rs`：状态持久化命令（load/save/emit_log）
+- `login.rs`：登录窗口管理（check_cookie_status/close_window）
+- `task.rs`：任务命令（暂停/继续/清理/下载/搜索）
+- `fs.rs`：文件系统操作（删除/清空/选择/打开目录）
+- `image.rs`：图片处理（读取/保存裁剪结果）
+
+**核心职责**：
+- 读取/保存 SQLite 状态库
+- 从旧 JSON 状态迁移到 SQLite
+- 检测和恢复损坏状态库
+- 启动 sidecar 子进程
+- 解析 sidecar stdout/stderr
+- 转发日志、任务进度和选图发现进度
+- 打开目录、定位文件、删除输出目录
+- 读取本地图片和保存图片处理结果
+- 管理任务控制文件和 pid 文件
+- Windows DPAPI Cookie 加密
+
+**命令列表**：
+- `load_persisted_state` / `save_persisted_state`：状态持久化
+- `check_login_window_cookie_status` / `close_login_window`：登录窗口
+- `run_download_task`：自动下载任务
+- `run_selected_photo_download`：选图下载任务
+- `discover_douban_photos`：图片发现（不下载，返回列表）
+- `search_douban_movies`：豆瓣影视搜索
+- `resolve_douban_movie_title` / `resolve_douban_movie_preview`：标题/封面解析
+- `pause_download_task` / `resume_download_task` / `clear_download_tasks`：任务控制
+- `delete_directory_path` / `clear_directory_contents`：目录管理
+- `pick_output_directory` / `open_directory_path` / `reveal_file_path`：目录操作
+- `read_dropped_image_file` / `read_local_image_file`：图片读取
+- `save_custom_cropped_image` / `save_processed_image`：图片保存
 
 ### sidecar 层：`apps/sidecar/src`
 
