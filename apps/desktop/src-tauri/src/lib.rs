@@ -39,12 +39,42 @@ use windows_sys::Win32::{
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 // 日志 id 在 Rust 侧生成，避免前端批量接收时出现重复 key。
-static LOG_ID_SEED: AtomicU64 = AtomicU64::new(10_000);
+const LOG_ID_SEED_INITIAL: u64 = 10_000;
+static LOG_ID_SEED: AtomicU64 = AtomicU64::new(LOG_ID_SEED_INITIAL);
 
 // 持久化快照版本号和前端 AppSeedState.schemaVersion 对齐，用来丢弃不兼容的旧状态。
 const APP_STATE_SCHEMA_VERSION: i64 = 2;
 const MAX_TASK_ID_LEN: usize = 96;
 const PROTECTED_COOKIE_PAYLOAD_SCHEME: &str = "win32-dpapi";
+
+// 队列配置常量
+const MIN_REQUEST_INTERVAL_MS: u32 = 1000;
+const MAX_REQUEST_INTERVAL_MS: u32 = 5000;
+const DEFAULT_REQUEST_INTERVAL_MS: u32 = 1000;
+const MAX_DROPPABLE_IMAGE_SIZE_BYTES: u64 = 100 * 1024 * 1024; // 100 MB
+const MIN_DISCOVERY_BATCH_SIZE: u32 = 1;
+const MAX_DISCOVERY_BATCH_SIZE: u32 = 60;
+const DEFAULT_DISCOVERY_BATCH_SIZE: u32 = 28;
+
+// SQLite 表名枚举，防止 SQL 注入
+#[derive(Debug, Clone, Copy)]
+enum TableName {
+    Tasks,
+    Cookies,
+    AppLogs,
+    AppMeta,
+}
+
+impl TableName {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Tasks => "tasks",
+            Self::Cookies => "cookies",
+            Self::AppLogs => "app_logs",
+            Self::AppMeta => "app_meta",
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -276,9 +306,9 @@ fn resolve_request_interval_ms(payload: &DownloadTaskPayload) -> u32 {
     let interval_ms = payload
         .request_interval_seconds
         .map(|seconds| seconds.saturating_mul(1000))
-        .unwrap_or(1000);
+        .unwrap_or(DEFAULT_REQUEST_INTERVAL_MS);
 
-    interval_ms.clamp(1000, 5000)
+    interval_ms.clamp(MIN_REQUEST_INTERVAL_MS, MAX_REQUEST_INTERVAL_MS)
 }
 
 fn validate_task_id(task_id: &str) -> Result<&str, String> {
@@ -314,7 +344,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 fn hex_decode(value: &str) -> Result<Vec<u8>, String> {
     let bytes = value.as_bytes();
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err("受保护 Cookie 数据格式无效".to_string());
     }
 
@@ -339,7 +369,7 @@ fn hex_nibble(byte: u8) -> Result<u8, String> {
 
 #[cfg(target_os = "windows")]
 fn protect_bytes(plain: &[u8]) -> Result<Vec<u8>, String> {
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: plain.len() as u32,
         pbData: plain.as_ptr() as *mut u8,
     };
@@ -350,7 +380,7 @@ fn protect_bytes(plain: &[u8]) -> Result<Vec<u8>, String> {
 
     let ok = unsafe {
         CryptProtectData(
-            &mut input,
+            &input,
             std::ptr::null(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -373,7 +403,7 @@ fn protect_bytes(plain: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(target_os = "windows")]
 fn unprotect_bytes(protected: &[u8]) -> Result<Vec<u8>, String> {
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: protected.len() as u32,
         pbData: protected.as_ptr() as *mut u8,
     };
@@ -384,7 +414,7 @@ fn unprotect_bytes(protected: &[u8]) -> Result<Vec<u8>, String> {
 
     let ok = unsafe {
         CryptUnprotectData(
-            &mut input,
+            &input,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -487,7 +517,7 @@ fn open_state_db_path(db_path: &Path) -> Result<Connection, String> {
     }
 
     let connection =
-        Connection::open(&db_path).map_err(|error| format!("打开 SQLite 状态库失败: {error}"))?;
+        Connection::open(db_path).map_err(|error| format!("打开 SQLite 状态库失败: {error}"))?;
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(|error| format!("设置 SQLite busy_timeout 失败: {error}"))?;
@@ -582,7 +612,8 @@ fn rotate_corrupted_state_db(db_path: &Path) -> Result<PathBuf, String> {
 }
 
 // 只对固定表名调用该函数，避免把用户输入拼进 SQL。
-fn count_rows(connection: &Connection, table_name: &str) -> Result<i64, String> {
+fn count_rows(connection: &Connection, table: TableName) -> Result<i64, String> {
+    let table_name = table.as_str();
     let sql = format!("SELECT COUNT(*) FROM {table_name}");
     connection
         .query_row(&sql, [], |row| row.get::<_, i64>(0))
@@ -591,10 +622,10 @@ fn count_rows(connection: &Connection, table_name: &str) -> Result<i64, String> 
 
 // 判断是否已有真实状态，用来决定是否需要从旧 JSON 迁移。
 fn sqlite_has_any_state(connection: &Connection) -> Result<bool, String> {
-    let tasks = count_rows(connection, "tasks")?;
-    let cookies = count_rows(connection, "cookies")?;
-    let logs = count_rows(connection, "app_logs")?;
-    let meta = count_rows(connection, "app_meta")?;
+    let tasks = count_rows(connection, TableName::Tasks)?;
+    let cookies = count_rows(connection, TableName::Cookies)?;
+    let logs = count_rows(connection, TableName::AppLogs)?;
+    let meta = count_rows(connection, TableName::AppMeta)?;
 
     Ok(tasks > 0 || cookies > 0 || logs > 0 || meta > 0)
 }
@@ -942,7 +973,7 @@ fn emit_runtime_log_event(
     level: &str,
     scope: &str,
     message: String,
-    task_id: Option<String>,
+    task_id: Option<&str>,
     timestamp: Option<String>,
 ) -> Result<(), String> {
     let event = RuntimeLogEvent {
@@ -951,7 +982,7 @@ fn emit_runtime_log_event(
         scope: scope.to_string(),
         timestamp: timestamp.unwrap_or_else(timestamp_now),
         message,
-        task_id,
+        task_id: task_id.map(|s| s.to_string()),
     };
 
     app.emit("runtime-log", event)
@@ -1054,7 +1085,7 @@ fn parse_sidecar_stdout_line(
                 "INFO",
                 "sidecar",
                 trimmed.to_string(),
-                Some(fallback_task_id.to_string()),
+                Some(fallback_task_id),
                 None,
             );
             return;
@@ -1096,22 +1127,19 @@ fn parse_sidecar_stdout_line(
             _ => timestamp_now(),
         });
 
-        let runtime_log_task_id = task_id.clone();
-        let runtime_log_phase = phase.clone();
-        let runtime_log_timestamp = timestamp.clone();
-        let _ = emit_task_progress_event(app, task_id, phase, target_count, saved_count, timestamp);
+        let _ = emit_task_progress_event(app, task_id.clone(), phase.clone(), target_count, saved_count, timestamp.clone());
         let _ = emit_runtime_log_event(
             app,
             "INFO",
             "task-progress",
             serde_json::json!({
-                "phase": runtime_log_phase,
+                "phase": phase,
                 "targetCount": target_count,
                 "savedCount": saved_count
             })
             .to_string(),
-            Some(runtime_log_task_id),
-            runtime_log_timestamp,
+            Some(&task_id),
+            timestamp,
         );
         return;
     }
@@ -1143,10 +1171,10 @@ fn parse_sidecar_stdout_line(
         .and_then(Value::as_str)
         .unwrap_or(trimmed)
         .to_string();
-    let task_id = Some(resolve_sidecar_event_task_id(
+    let task_id = resolve_sidecar_event_task_id(
         parsed.get("taskId").and_then(Value::as_str),
         fallback_task_id,
-    ));
+    );
     let timestamp = parsed.get("timestamp").map(|value| match value {
         Value::String(text) => text.clone(),
         Value::Number(number) => number.to_string(),
@@ -1157,7 +1185,7 @@ fn parse_sidecar_stdout_line(
         remember_sidecar_error_message(error_holder, &message);
     }
 
-    let _ = emit_runtime_log_event(app, level, scope, message, task_id, timestamp);
+    let _ = emit_runtime_log_event(app, level, scope, message, Some(&task_id), timestamp);
 }
 
 // stderr 一律按错误日志处理，并记住最后一条错误，供 sidecar 异常退出时返回给前端。
@@ -1179,7 +1207,7 @@ fn parse_sidecar_stderr_line(
         "ERROR",
         "sidecar.stderr",
         trimmed.to_string(),
-        Some(fallback_task_id.to_string()),
+        Some(fallback_task_id),
         None,
     );
 }
@@ -1205,7 +1233,7 @@ fn parse_douban_photos_discover_stdout_line(
                 "INFO",
                 "sidecar",
                 trimmed.to_string(),
-                Some(fallback_task_id.to_string()),
+                Some(fallback_task_id),
                 None,
             );
             return;
@@ -1241,10 +1269,10 @@ fn parse_douban_photos_discover_stdout_line(
         .and_then(Value::as_str)
         .unwrap_or(trimmed)
         .to_string();
-    let task_id = Some(resolve_sidecar_event_task_id(
+    let task_id = resolve_sidecar_event_task_id(
         parsed.get("taskId").and_then(Value::as_str),
         fallback_task_id,
-    ));
+    );
     let timestamp = parsed.get("timestamp").map(|value| match value {
         Value::String(text) => text.clone(),
         Value::Number(number) => number.to_string(),
@@ -1255,7 +1283,7 @@ fn parse_douban_photos_discover_stdout_line(
         remember_sidecar_error_message(error_holder, &message);
     }
 
-    let _ = emit_runtime_log_event(app, level, scope, message, task_id, timestamp);
+    let _ = emit_runtime_log_event(app, level, scope, message, Some(&task_id), timestamp);
 }
 
 fn escape_powershell_single_quote(input: &str) -> String {
@@ -1515,7 +1543,7 @@ fn emit_runtime_log(app: AppHandle, payload: RuntimeLogPayload) -> Result<(), St
         &payload.level,
         &payload.scope,
         payload.message,
-        payload.task_id,
+        payload.task_id.as_deref(),
         payload.timestamp,
     )
 }
@@ -1534,7 +1562,7 @@ fn pause_download_task(
         "WARN",
         "queue-control",
         format!("pause requested: {task_id}"),
-        Some(task_id.clone()),
+        Some(&task_id),
         None,
     );
     Ok(true)
@@ -1554,7 +1582,7 @@ fn resume_download_task(
         "INFO",
         "queue-control",
         format!("resume requested: {task_id}"),
-        Some(task_id.clone()),
+        Some(&task_id),
         None,
     );
     Ok(true)
@@ -1581,7 +1609,7 @@ fn clear_download_tasks(
             "WARN",
             "queue-control",
             format!("clear requested: {task_id}"),
-            Some(task_id.clone()),
+            Some(&task_id),
             None,
         );
         cleared += 1;
@@ -1805,7 +1833,7 @@ fn run_download_task_blocking(
         "INFO",
         "desktop",
         format!("开始执行真实下载任务: {}", payload.detail_url),
-        Some(payload.task_id.clone()),
+        Some(&payload.task_id),
         None,
     )?;
 
@@ -1819,7 +1847,7 @@ fn run_download_task_blocking(
             sidecar_root.display(),
             sidecar_entry_arg
         ),
-        Some(payload.task_id.clone()),
+        Some(&payload.task_id),
         None,
     )?;
 
@@ -2079,7 +2107,7 @@ fn discover_douban_photos_blocking(
         .env("MCD_IMAGE_ASPECT_RATIO", &payload.image_aspect_ratio)
         .env(
             "MCD_DISCOVERY_BATCH_SIZE",
-            payload.batch_size.unwrap_or(28).clamp(1, 60).to_string(),
+            payload.batch_size.unwrap_or(DEFAULT_DISCOVERY_BATCH_SIZE).clamp(MIN_DISCOVERY_BATCH_SIZE, MAX_DISCOVERY_BATCH_SIZE).to_string(),
         )
         .env(
             "MCD_TASK_CONTROL_FILE",
@@ -2193,8 +2221,7 @@ fn discover_douban_photos_blocking(
         }
     };
 
-    return serde_json::to_string(&result).map_err(|error| format!("序列化豆瓣图片解析结果失败: {error}"));
-
+    serde_json::to_string(&result).map_err(|error| format!("序列化豆瓣图片解析结果失败: {error}"))
 }
 
 #[tauri::command]
@@ -2209,6 +2236,59 @@ async fn discover_douban_photos(
     let result = run_blocking_job(move || discover_douban_photos_blocking(app, payload, control_file_path)).await;
     registry.unregister_task(&task_id);
     result
+}
+
+// 通用 sidecar JSON 结果解析函数，统一处理错误提取和结果返回
+fn parse_sidecar_json_result<T, F>(
+    output: &std::process::Output,
+    result_kind: &str,
+    extract_payload: F,
+) -> Result<T, String>
+where
+    F: Fn(&Value) -> Option<T>,
+{
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        let last_error_line = stderr
+            .lines()
+            .rfind(|line| !line.trim().is_empty())
+            .unwrap_or("sidecar 进程异常退出");
+
+        let parsed_error = serde_json::from_str::<Value>(last_error_line)
+            .ok()
+            .and_then(|value| {
+                if value.get("level")?.as_str()? == "ERROR" {
+                    Some(value.get("message")?.as_str()?.to_string())
+                } else {
+                    None
+                }
+            });
+
+        return Err(parsed_error.unwrap_or_else(|| {
+            format!("{}执行失败: {}", result_kind, last_error_line)
+        }));
+    }
+
+    let last_line = stdout
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .ok_or_else(|| format!("sidecar 未返回{}", result_kind))?;
+
+    let parsed: Value = serde_json::from_str(last_line)
+        .map_err(|_| format!("解析 sidecar {} JSON 失败", result_kind))?;
+
+    if parsed.get("kind").and_then(Value::as_str) == Some("error") {
+        let sidecar_message = parsed
+            .get("message")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("读取{}错误失败", result_kind))?
+            .to_string();
+        return Err(sidecar_message);
+    }
+
+    extract_payload(&parsed).ok_or_else(|| format!("sidecar 未返回{}", result_kind))
 }
 
 fn search_douban_movies_blocking(
@@ -2252,50 +2332,16 @@ fn search_douban_movies_blocking(
     let output = command
         .output()
         .map_err(|error| format!("启动豆瓣搜索失败: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let mut sidecar_error: Option<String> = None;
 
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-
+    let result = parse_sidecar_json_result(&output, "豆瓣搜索结果", |parsed| {
         if parsed.get("kind").and_then(Value::as_str) == Some("douban-search-result") {
-            if let Some(payload) = parsed.get("payload") {
-                return serde_json::to_string(payload)
-                    .map_err(|error| format!("序列化豆瓣搜索结果失败: {error}"));
-            }
+            parsed.get("payload").cloned()
+        } else {
+            None
         }
+    })?;
 
-        if parsed
-            .get("level")
-            .and_then(Value::as_str)
-            .is_some_and(|level| level.eq_ignore_ascii_case("ERROR"))
-        {
-            if let Some(message) = parsed.get("message").and_then(Value::as_str) {
-                sidecar_error = Some(message.to_string());
-            }
-        }
-    }
-
-    if !output.status.success() {
-        return Err(sidecar_error
-            .as_deref()
-            .map(normalize_sidecar_error_message)
-            .or_else(|| (!stderr.is_empty()).then_some(stderr))
-            .unwrap_or_else(|| "豆瓣搜索进程异常退出".to_string()));
-    }
-
-    Err(sidecar_error
-        .as_deref()
-        .map(normalize_sidecar_error_message)
-        .unwrap_or_else(|| "sidecar 未返回豆瓣搜索结果".to_string()))
+    serde_json::to_string(&result).map_err(|error| format!("序列化豆瓣搜索结果失败: {error}"))
 }
 
 #[tauri::command]
@@ -2340,48 +2386,18 @@ fn resolve_douban_movie_title_blocking(
     let output = command
         .output()
         .map_err(|error| format!("启动豆瓣片名解析失败: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let mut sidecar_error: Option<String> = None;
 
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-
+    parse_sidecar_json_result(&output, "豆瓣片名结果", |parsed| {
         if parsed.get("kind").and_then(Value::as_str) == Some("douban-title-result") {
-            if let Some(title) = parsed
+            parsed
                 .get("payload")
                 .and_then(|payload| payload.get("title"))
                 .and_then(Value::as_str)
-            {
-                return Ok(title.to_string());
-            }
+                .map(|s| s.to_string())
+        } else {
+            None
         }
-
-        if parsed
-            .get("level")
-            .and_then(Value::as_str)
-            .is_some_and(|level| level.eq_ignore_ascii_case("ERROR"))
-        {
-            if let Some(message) = parsed.get("message").and_then(Value::as_str) {
-                sidecar_error = Some(message.to_string());
-            }
-        }
-    }
-
-    if !output.status.success() {
-        return Err(sidecar_error
-            .or_else(|| (!stderr.is_empty()).then_some(stderr))
-            .unwrap_or_else(|| "豆瓣片名解析进程异常退出".to_string()));
-    }
-
-    Err(sidecar_error.unwrap_or_else(|| "sidecar 未返回豆瓣片名".to_string()))
+    })
 }
 
 #[tauri::command]
@@ -2421,45 +2437,16 @@ fn resolve_douban_movie_preview_blocking(
     let output = command
         .output()
         .map_err(|error| format!("启动豆瓣影片预览解析失败: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let mut sidecar_error: Option<String> = None;
 
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-
+    let result = parse_sidecar_json_result(&output, "豆瓣影片预览结果", |parsed| {
         if parsed.get("kind").and_then(Value::as_str) == Some("douban-title-result") {
-            if let Some(payload) = parsed.get("payload") {
-                return serde_json::to_string(payload)
-                    .map_err(|error| format!("序列化豆瓣影片预览失败: {error}"));
-            }
+            parsed.get("payload").cloned()
+        } else {
+            None
         }
+    })?;
 
-        if parsed
-            .get("level")
-            .and_then(Value::as_str)
-            .is_some_and(|level| level.eq_ignore_ascii_case("ERROR"))
-        {
-            if let Some(message) = parsed.get("message").and_then(Value::as_str) {
-                sidecar_error = Some(message.to_string());
-            }
-        }
-    }
-
-    if !output.status.success() {
-        return Err(sidecar_error
-            .or_else(|| (!stderr.is_empty()).then_some(stderr))
-            .unwrap_or_else(|| "豆瓣影片预览解析进程异常退出".to_string()));
-    }
-
-    Err(sidecar_error.unwrap_or_else(|| "sidecar 未返回豆瓣影片预览".to_string()))
+    serde_json::to_string(&result).map_err(|error| format!("序列化豆瓣影片预览失败: {error}"))
 }
 
 #[tauri::command]
@@ -2512,8 +2499,8 @@ fn read_local_image_file(
     }
 
     let metadata = fs::metadata(&path).map_err(|error| format!("读取图片信息失败: {error}"))?;
-    if metadata.len() > 100 * 1024 * 1024 {
-        return Err("图片文件超过 100MB，暂不支持拖拽上传".to_string());
+    if metadata.len() > MAX_DROPPABLE_IMAGE_SIZE_BYTES {
+        return Err(format!("图片文件超过 {}MB，暂不支持拖拽上传", MAX_DROPPABLE_IMAGE_SIZE_BYTES / (1024 * 1024)));
     }
 
     fs::read(&path).map_err(|error| format!("读取拖拽图片失败: {error}"))
@@ -2532,8 +2519,8 @@ fn read_dropped_image_file(file_path: String) -> Result<Vec<u8>, String> {
     }
 
     let metadata = fs::metadata(&path).map_err(|error| format!("读取图片信息失败: {error}"))?;
-    if metadata.len() > 100 * 1024 * 1024 {
-        return Err("图片文件超过 100MB，暂不支持拖拽上传".to_string());
+    if metadata.len() > MAX_DROPPABLE_IMAGE_SIZE_BYTES {
+        return Err(format!("图片文件超过 {}MB，暂不支持拖拽上传", MAX_DROPPABLE_IMAGE_SIZE_BYTES / (1024 * 1024)));
     }
 
     fs::read(&path).map_err(|error| format!("读取拖拽图片失败: {error}"))
