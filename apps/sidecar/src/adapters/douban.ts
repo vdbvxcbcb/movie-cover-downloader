@@ -340,6 +340,7 @@ export class DoubanAdapter implements SourceAdapter {
     let pageIndex = canUseCursor ? Math.max(0, cursor.pageIndex) : 0;
     let withinPageOffset = canUseCursor ? Math.max(0, cursor.withinPageOffset ?? 0) : 0;
     let currentPageCount: number | undefined;
+    let currentTotalCount: number | undefined;
     let lastImagePageUrl = detailSkeleton.imagePageUrl;
 
     while (assetIndex < maxAssetIndex && images.length < safeBatchSize) {
@@ -353,6 +354,7 @@ export class DoubanAdapter implements SourceAdapter {
 
       let firstPhotoPage: FetchedHtmlPage | null = null;
       let pageCount = canUseCursor && cursor?.assetIndex === assetIndex ? cursor.pageCount : undefined;
+      let totalCount = canUseCursor && cursor?.assetIndex === assetIndex ? cursor.totalCount : undefined;
       if (!pageCount || pageIndex === 0) {
         context.logger.info(`fetching douban image page: ${resolved.imagePageUrl}`, task.id);
         firstPhotoPage = await fetchText(resolved.imagePageUrl, protectedContext);
@@ -366,9 +368,11 @@ export class DoubanAdapter implements SourceAdapter {
         if (firstPageClassification.kind !== "ok") {
           throwForClassification(firstPageClassification);
         }
+        totalCount = extractDoubanCategoryCount(firstPhotoPage.html) ?? undefined;
         pageCount = resolveDoubanCategoryPageCount(firstPhotoPage.html);
       }
       currentPageCount = pageCount;
+      currentTotalCount = totalCount;
 
       while (pageIndex < pageCount && images.length < safeBatchSize) {
         const pageUrl =
@@ -443,12 +447,21 @@ export class DoubanAdapter implements SourceAdapter {
       ),
       images,
       nextCursor: done
-        ? null
+        ? {
+            assetIndex,
+            pageIndex,
+            withinPageOffset,
+            pageCount: currentPageCount,
+            totalCount: currentTotalCount,
+            normalizedTitle: title,
+            outputFolderName,
+          }
         : {
             assetIndex,
             pageIndex,
             withinPageOffset,
             pageCount: currentPageCount,
+            totalCount: currentTotalCount,
             normalizedTitle: title,
             outputFolderName,
           },

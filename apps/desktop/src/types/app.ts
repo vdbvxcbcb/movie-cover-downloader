@@ -293,6 +293,7 @@ export interface RuntimeDoubanPhotoDiscoveryCursor {
   pageIndex: number;
   withinPageOffset: number;
   pageCount?: number;
+  totalCount?: number;
   normalizedTitle?: string;
   outputFolderName?: string;
 }
@@ -336,7 +337,7 @@ export interface RuntimeDoubanPhotoDiscoveryBatchResult {
   outputFolderName: string;
   outputDir: string;
   images: RuntimeDiscoveredAsset[];
-  nextCursor: RuntimeDoubanPhotoDiscoveryCursor | null;
+  nextCursor: RuntimeDoubanPhotoDiscoveryCursor;
   done: boolean;
 }
 

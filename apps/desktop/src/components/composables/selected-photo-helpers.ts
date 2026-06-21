@@ -23,10 +23,10 @@ export function pickMoreCompleteTitle(currentTitle: string, nextTitle?: string |
 export function createSelectedPhotoDiscoveryState() {
   return selectedPhotoAssetTypes.reduce(
     (state, assetType) => {
-      state[assetType] = { cursor: null, done: false };
+      state[assetType] = { cursor: null, done: false, totalCount: undefined };
       return state;
     },
-    {} as Record<DoubanAssetType, { cursor: RuntimeDoubanPhotoDiscoveryCursor | null; done: boolean }>,
+    {} as Record<DoubanAssetType, { cursor: RuntimeDoubanPhotoDiscoveryCursor | null; done: boolean; totalCount?: number }>,
   );
 }
 

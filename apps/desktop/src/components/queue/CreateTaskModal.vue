@@ -32,6 +32,7 @@ import { runtimeBridge } from "../../lib/runtime-bridge";
 import { useAppStore } from "../../stores/app";
 import {
   createSelectedPhotoDiscoveryState,
+  formatSelectedPhotoCategory,
   pickMoreCompleteTitle,
   selectedPhotoAssetTypes,
   selectedPhotoRenderBatchSize,
@@ -94,6 +95,11 @@ const selectedPhotoPreviewIndex = ref<number | null>(null);
 const selectedPhotoLargeFailedIds = ref(new Set<string>());
 const selectedPhotoVisibleLimit = ref(selectedPhotoRenderBatchSize);
 const selectedPhotoGridLoadingRequested = shallowRef(false);
+const selectedPhotoPendingBatch = ref<Record<DoubanAssetType, RuntimeDiscoveredAsset[]>>({
+  still: [],
+  poster: [],
+  wallpaper: [],
+});
 let titleResolveTimer: number | null = null;
 let titleResolveRevision = 0;
 let selectedPhotoAutoDiscoverTimer: number | null = null;
@@ -413,10 +419,15 @@ function handleSelectedPhotoGridRequestNextBatch() {
 }
 
 function requestNextSelectedPhotoBatch() {
+  const currentFilterState = selectedPhotoDiscoveryByAsset.value[selectedPhotoFilter.value];
+  const needsTotalCount = currentFilterState?.totalCount === undefined;
+
   if (
-    filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value &&
-    !selectedPhotoCurrentFilterDone.value &&
-    !discoveringSelectedPhotos.value
+    !discoveringSelectedPhotos.value &&
+    (
+      (filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value && !selectedPhotoCurrentFilterDone.value) ||
+      needsTotalCount
+    )
   ) {
     void loadNextSelectedPhotoBatch();
   }
@@ -431,7 +442,15 @@ async function setSelectedPhotoFilter(filter: DoubanAssetType) {
     if (discoveringSelectedPhotos.value) {
       await stopSelectedPhotoDiscovery();
     }
-    if (filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value && !selectedPhotoCurrentFilterDone.value) {
+
+    const currentFilterState = selectedPhotoDiscoveryByAsset.value[filter];
+    const needsDiscovery =
+      filteredSelectedPhotos.value.length <= selectedPhotoVisibleLimit.value && !selectedPhotoCurrentFilterDone.value;
+    // 只要没有 totalCount 就需要解析，即使分类已经完成（done = true）
+    const needsTotalCount = currentFilterState?.totalCount === undefined;
+
+    // 如果需要加载图片，或者需要获取总数（即使已有图片），都发起解析
+    if (needsDiscovery || needsTotalCount) {
       selectedPhotoGridLoadingRequested.value = true;
       requestNextSelectedPhotoBatch();
     }
@@ -525,13 +544,30 @@ function handleSelectedPhotoError(photo: SelectableDoubanPhoto) {
 }
 
 const selectedDiscoveryStatusLabel = computed(() => {
+  const currentAssetState = selectedPhotoDiscoveryByAsset.value[selectedPhotoFilter.value];
+  const totalCount = currentAssetState?.totalCount;
+  const cachedCount = filteredSelectedPhotos.value.length;
+  const categoryName = formatSelectedPhotoCategory({ doubanAssetType: selectedPhotoFilter.value } as SelectableDoubanPhoto);
+
   if (discoveringSelectedPhotos.value) {
-    return selectedPhotos.value.length > 0
-      ? `正在解析，已缓存 ${selectedPhotos.value.length} 张`
-      : "正在解析当前分类...";
+    // 解析中
+    if (totalCount !== undefined) {
+      return `正在解析，共${totalCount}张${categoryName}，已缓存${cachedCount}张`;
+    }
+    if (cachedCount > 0) {
+      return `正在解析，已缓存 ${cachedCount} 张${categoryName}`;
+    }
+    return "正在解析当前分类...";
   }
 
-  return selectedPhotos.value.length > 0 ? `已缓存 ${selectedPhotos.value.length} 张图片` : "";
+  // 解析完成或停止
+  if (totalCount !== undefined) {
+    return `共${totalCount}张${categoryName}，已缓存${cachedCount}张`;
+  }
+  if (cachedCount > 0) {
+    return `共${cachedCount}张${categoryName}，已缓存 ${cachedCount} 张${categoryName}`;
+  }
+  return "";
 });
 
 function getUsableDoubanCookie() {
@@ -549,7 +585,7 @@ function normalizeSelectedPhotoUrl(value: string) {
     throw new Error("只能填写 movie.douban.com 的影片链接。");
   }
 
-  if (!/^\/subject\/\d+\/(?:all_photos\/?|photos\/?)?$/i.test(parsed.pathname)) {
+  if (!/^\/subject\/\d+\/?(?:all_photos\/?|photos\/?)?$/i.test(parsed.pathname)) {
     throw new Error("只支持 subject、all_photos 或 photos?type= 链接。");
   }
 
@@ -579,10 +615,26 @@ function normalizeDiscoveredPhoto(photo: RuntimeDiscoveredAsset): SelectedDouban
 function mergeSelectedDiscoveredPhotos(images: RuntimeDiscoveredAsset[]) {
   if (images.length === 0) return;
 
+  // 将新图片添加到当前分类的待处理批次
+  const currentAssetType = selectedPhotoFilter.value;
+  selectedPhotoPendingBatch.value[currentAssetType].push(...images);
+
+  // 如果当前分类的待处理批次达到 14 张（一批），立即显示这一批
+  if (selectedPhotoPendingBatch.value[currentAssetType].length >= selectedPhotoRenderBatchSize) {
+    flushPendingPhotoBatch(currentAssetType);
+  }
+}
+
+function flushPendingPhotoBatch(assetType?: DoubanAssetType) {
+  const targetAssetType = assetType ?? selectedPhotoFilter.value;
+  const pendingImages = selectedPhotoPendingBatch.value[targetAssetType];
+
+  if (pendingImages.length === 0) return;
+
   const existingByUrl = new Map(selectedPhotos.value.map((photo) => [photo.imageUrl, photo]));
   const nextPhotos = [...selectedPhotos.value];
 
-  for (const image of images) {
+  for (const image of pendingImages) {
     const normalized = normalizeDiscoveredPhoto(image);
     const existing = existingByUrl.get(normalized.imageUrl);
     if (existing) {
@@ -599,6 +651,13 @@ function mergeSelectedDiscoveredPhotos(images: RuntimeDiscoveredAsset[]) {
   }
 
   selectedPhotos.value = nextPhotos;
+  selectedPhotoPendingBatch.value[targetAssetType] = [];
+}
+
+function flushAllPendingPhotoBatches() {
+  selectedPhotoAssetTypes.forEach((assetType) => {
+    flushPendingPhotoBatch(assetType);
+  });
 }
 
 function handleSelectedPhotoDiscoveryProgress(event: {
@@ -788,11 +847,18 @@ async function loadNextSelectedPhotoBatch() {
     selectedPhotoTitle.value = pickMoreCompleteTitle(selectedPhotoTitle.value, discovery.normalizedTitle);
     appStore.upsertCreateTaskMoviePreview(subjectUrl, { title: selectedPhotoTitle.value });
     mergeSelectedDiscoveredPhotos(discovery.images);
+
+    // 如果解析完成，立即显示剩余的待处理图片
+    if (discovery.done) {
+      flushPendingPhotoBatch();
+    }
+
     selectedPhotoDiscoveryByAsset.value = {
       ...selectedPhotoDiscoveryByAsset.value,
       [doubanAssetType]: {
         cursor: discovery.nextCursor,
         done: discovery.done,
+        totalCount: discovery.nextCursor.totalCount,
       },
     };
     if (selectedPhotos.value.length === 0) {
@@ -807,6 +873,7 @@ async function loadNextSelectedPhotoBatch() {
           [doubanAssetType]: {
             cursor: null,
             done: true,
+            totalCount: 0,
           },
         };
         showAlert("没有解析到可下载图片。");
@@ -848,6 +915,7 @@ async function stopSelectedPhotoDiscovery(markDone = false) {
 
   stoppedSelectedDiscoveryTaskIds.add(taskId);
   discoveringSelectedPhotos.value = false;
+
   if (markDone) {
     markAllSelectedPhotoDiscoveryDone();
   }
@@ -859,6 +927,9 @@ async function stopSelectedPhotoDiscovery(markDone = false) {
 }
 
 function buildSelectedPhotoDrafts(): TaskDraft[] | null {
+  // 在构建下载任务前，先显示所有待处理批次的图片
+  flushAllPendingPhotoBatches();
+
   let detailUrl = "";
   try {
     detailUrl = normalizeSelectedPhotoUrl(selectedPhotoLink.value);

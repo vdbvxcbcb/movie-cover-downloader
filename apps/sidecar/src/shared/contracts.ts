@@ -86,12 +86,13 @@ export interface DoubanPhotoDiscoveryCursor {
   pageIndex: number;
   withinPageOffset: number;
   pageCount?: number;
+  totalCount?: number;
   normalizedTitle?: string;
   outputFolderName?: string;
 }
 
 export interface DoubanPhotoDiscoveryBatchResult extends DiscoveryResult {
-  nextCursor: DoubanPhotoDiscoveryCursor | null;
+  nextCursor: DoubanPhotoDiscoveryCursor;
   done: boolean;
 }
 
