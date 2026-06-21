@@ -394,7 +394,7 @@ const showSelectedPhotoGridLoading = computed(
 const selectedPhotoGridEmptyText = computed(() =>
   selectedPhotoCurrentFilterDone.value ? "该分类暂无可下载图片" : "输入链接后解析当前分类图片",
 );
-const selectedPhotoPreviewItems = computed(() => selectedPhotos.value);
+const selectedPhotoPreviewItems = computed(() => filteredSelectedPhotos.value);
 const activeSelectedPhotoPreview = computed(() => {
   const index = selectedPhotoPreviewIndex.value;
   return index === null ? null : selectedPhotoPreviewItems.value[index] ?? null;
@@ -437,6 +437,8 @@ async function setSelectedPhotoFilter(filter: DoubanAssetType) {
   if (filter === selectedPhotoFilter.value) return;
   selectedPhotoFilter.value = filter;
   resetSelectedPhotoGridPaging();
+  // 切换分类时关闭预览窗口，因为索引在新分类中可能无效
+  selectedPhotoPreviewIndex.value = null;
   switchingSelectedPhotoFilter.value = true;
   try {
     if (discoveringSelectedPhotos.value) {
