@@ -28,6 +28,7 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 - 图片处理：`sharp`
 - 本地状态存储：`SQLite`
 - 目标平台：`Windows`
+- 最低支持系统：`Windows 10`；`Windows 7 / 8 / 8.1` 不受支持
 
 ## 主要功能
 

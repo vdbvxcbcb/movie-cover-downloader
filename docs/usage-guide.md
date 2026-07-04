@@ -64,6 +64,11 @@ runtime-state.sqlite
 - Rust stable
 - cargo
 
+说明：
+
+- 当前代码和安装包按 `Windows 10 / 11` 设计与验证，最低支持 `Windows 10`
+- `Windows 7 / 8 / 8.1` 不受支持
+
 可先检查：
 
 ```bash
