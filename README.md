@@ -4,11 +4,12 @@
 
 ## 快速入口
 
+- 安装包下载：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
 - 使用说明：[docs/usage-guide.md](./docs/usage-guide.md)
 - sidecar 说明：[apps/sidecar/README.md](./apps/sidecar/README.md)
-- 安装包下载：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
-- **Windows 开发环境配置**：[docs/windows-setup.md](./docs/windows-setup.md)
-- **构建检查清单**：[docs/build-checklist.md](./docs/build-checklist.md)
+- Windows 开发环境配置：[docs/windows-setup.md](./docs/windows-setup.md)
+- 构建检查清单：[docs/build-checklist.md](./docs/build-checklist.md)
+- 构建说明：[docs/build-guide.md](./docs/build-guide.md)
 
 ## 视频演示
 
@@ -34,12 +35,13 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 
 - 豆瓣影视搜索：按片名搜索豆瓣电影，展示封面、标题、简介、详情页链接和分页结果。
 - 搜索结果缓存：同一次搜索内切换分页会复用已请求过的结果，减少重复请求。
-- Cookie 管理：搜索影视、添加下载任务和图片处理等需要访问豆瓣资源的能力都依赖导入可用 Cookie。
+- Cookie 管理：搜索影视、添加下载任务和真实下载链路依赖可用豆瓣 Cookie，支持登录窗口自动导入和字符串导入。
 - 自动下载：在 `3、添加下载任务` 弹窗的 `自动下载` 模式中粘贴豆瓣 `subject` 链接，按配置批量下载剧照、海报、壁纸。
 - 选图下载：在 `选图下载` 模式中按 `剧照 / 海报 / 壁纸` 三个分类分页解析豆瓣图片，用户滚动到底部继续加载下一批，勾选后只下载选中的内容。
 - 双路径选图：既支持知道链接时手动粘贴解析，也支持从 `2、搜索影视` 的搜索结果直接进入选图下载。
 - 图片选择与预览：选图下载列表支持单击勾选、拖拽框选多张图片、双击预览大图，并可在预览组中左右切换。
 - 图片处理：支持 1 到 9 张图片拼版、单张图片透明度、背景图透明度、背景重叠、方框/圆圈/箭头标注和导出。
+- 自定义裁剪：支持点击上传和拖拽上传本地图片，裁剪结果保存到输出根目录下的 `custom-crop-photo`。
 - 任务队列：下载任务进入队列后按添加顺序执行，并实时展示进度、日志和输出目录；重复任务可在确认后覆盖旧输出并替换为新任务。
 
 ## 使用流程
@@ -52,9 +54,10 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 
 1. 点击 `2、搜索影视`。
 2. 输入片名并搜索。
-3. 搜索结果右侧提供两个操作：
+3. 搜索结果右侧提供三个操作：
    - `选图下载`：打开 `3、添加下载任务`，切到 `选图下载` 模式，自动填入链接、片名、封面并开始解析。
    - `添加链接`：把影片详情页加入添加下载任务弹窗的链接草稿，继续走自动下载流程。
+   - `删除链接`：从添加下载任务的链接草稿中移除已添加链接。
 
 ### 3. 自动下载
 
@@ -79,7 +82,15 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 
 如果相同链接、输出目录、分类和图片比例的任务已经在队列中存在，提交时会弹出覆盖确认；确认后会清理旧任务输出目录、移除旧任务行，并把新的选图任务重新加入队列。
 
-### 5. 图片处理
+### 5. 自定义裁剪
+
+自定义裁剪用于处理本地单张图片：
+
+- 点击上传使用浏览器文件选择。
+- 拖拽上传支持读取任意本地图片路径，不要求图片位于输出根目录。
+- 保存结果固定写入输出根目录下的 `custom-crop-photo`。
+
+### 6. 图片处理
 
 图片处理弹窗用于本地拼版和标注：
 
@@ -109,8 +120,8 @@ movie-cover-downloader/
 
 项目采用三层协作结构：
 
-1. `apps/desktop/src` 是用户界面层，负责搜索弹窗、添加下载任务弹窗、图片处理弹窗、任务队列、日志中心、Cookie 管理和本地状态展示。
-2. `apps/desktop/src-tauri/src/lib.rs` 是桌面能力层，负责 SQLite 持久化、文件系统操作、启动 Node sidecar、转发日志和进度事件。
+1. `apps/desktop/src` 是用户界面层，负责搜索弹窗、添加下载任务弹窗、自定义裁剪、图片处理弹窗、任务队列、日志中心、Cookie 管理和本地状态展示。
+2. `apps/desktop/src-tauri/src` 是桌面能力层，负责 SQLite 持久化、文件系统操作、启动 Node sidecar、转发日志和进度事件。
 3. `apps/sidecar/src` 是真实抓取执行层，负责解析豆瓣页面、发现图片、下载图片、裁剪/转格式，并通过 stdout 返回结构化事件给 Tauri。
 
 ### 搜索与添加下载任务联动
@@ -181,10 +192,14 @@ sidecar 只下载用户选中的图片列表，并沿用现有进度事件进入
 
 - `layouts/AppShell.vue`：应用主布局，挂载任务、搜索、Cookie、图片处理等弹窗。
 - `views/ControlCenterView.vue`：控制中心，展示任务队列、Cookie 列表和主要操作按钮。
-- `stores/app.ts`：核心状态仓库，管理任务队列、Cookie、日志、持久化、下载调度、选图 seed 和图片处理状态。
+- `stores/app.ts`：主 Pinia store 协调层，负责启动恢复、持久化调度、组合子 store 与任务动作。
+- `stores/taskQueue.ts`：任务队列、运行状态、排序/搜索、重复任务检测和队列配置。
+- `stores/taskActions.ts`：任务动作层，负责创建、暂停、继续、重试、删除、清空和打开输出目录。
+- `stores/cookies.ts` / `stores/logs.ts` / `stores/ui.ts`：分别管理 Cookie、日志和弹窗/输出目录等 UI 状态。
 - `lib/runtime-bridge.ts`：前端与 Tauri 的统一桥接层，封装搜索、自动下载、选图发现、选图下载和本地文件操作。
 - `components/queue/SearchMovieModal.vue`：豆瓣影视搜索弹窗，负责分页缓存、搜索结果展示、添加链接和选图下载入口。
 - `components/queue/CreateTaskModal.vue`：添加下载任务弹窗，包含 `自动下载 / 选图下载` 两种模式。
+- `components/queue/CustomCropModal.vue`：自定义裁剪弹窗，负责本地图片上传、拖拽读取、裁剪和保存。
 - `components/queue/ImageProcessModal.vue`：图片处理弹窗，负责拼版、透明度、背景重叠和标注导出。
 - `components/queue/TaskTable.vue`：任务队列表格，负责分页、进度展示、打开目录和删除确认。
 - `components/logs/LogConsole.vue`：日志列表组件。
@@ -271,7 +286,8 @@ sidecar 是独立 Node 进程，不直接操作前端状态，也不直接调用
 - 任务队列；
 - Cookie 列表；
 - 日志列表；
-- 队列配置。
+- 队列配置；
+- 最近使用的添加下载任务输出目录和图片处理输出目录。
 
 前端仍以完整快照保存状态，Rust 层把快照拆分写入 SQLite 表。这样可以保持前端状态结构简单，同时减少单个 JSON 文件变大或损坏后的恢复风险。
 
@@ -332,6 +348,8 @@ pnpm typecheck            # 前端类型检查
 pnpm typecheck:sidecar    # sidecar 类型检查
 ```
 
+`pnpm dev:web` 与 `pnpm dev:desktop` 使用同一个 Vite 固定端口 `5173`，不要同时启动。真实下载、Cookie 登录窗口、本地文件读写和 sidecar 子进程只在 `pnpm dev:desktop` 或安装包环境中可用。
+
 ### 完整构建流程
 
 **一键构建（推荐）**：
@@ -342,7 +360,7 @@ pnpm typecheck:sidecar    # sidecar 类型检查
 
 该脚本会自动设置 MSVC 环境并按正确顺序执行所有构建步骤。
 
-**详细构建指南**：[docs/build-guide.md](./docs/build-guide.md)  
+**详细构建指南**：[docs/build-guide.md](./docs/build-guide.md)
 包含环境安装、打包原理、增量构建、常见问题排查和构建检查清单。
 
 **手动分步构建**：
@@ -354,8 +372,8 @@ pnpm typecheck:sidecar    # sidecar 类型检查
 # 2. 安装依赖
 pnpm install
 
-# 3. 初始化 MSVC 环境（必须先执行）
-& "C:\Program Files (x86)\Microsoft Visual Studio\2026\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+# 3. 初始化 MSVC x64 环境
+# 可直接使用 “x64 Native Tools Command Prompt for VS”，或运行本机 VS Build Tools 的 vcvars64.bat
 
 # 4. 构建 sidecar
 pnpm run build:sidecar
@@ -384,7 +402,7 @@ Windows 安装包不能只打包 Tauri 前端壳，否则用户机器上没有 N
 - sidecar 的 `dist/index.js` 已构建；
 - sidecar 运行依赖已复制到 Tauri resources；
 - 打包内包含运行 sidecar 所需的 Node 可执行文件；
-- **依赖必须使用 hoisted（扁平化）结构，不能使用符号链接**（详见 [docs/sidecar-symlink-fix.md](./docs/sidecar-symlink-fix.md)）；
+- **依赖必须是真实目录，不能使用 pnpm workspace 的符号链接 / junction**（详见 [docs/build-guide.md](./docs/build-guide.md) 和 [docs/build-checklist.md](./docs/build-checklist.md)）；
 - 不包含开发机已有的用户数据、下载图片、SQLite 状态库或本地输出目录。
 
 构建完成后的 NSIS 安装包通常位于：
@@ -405,7 +423,7 @@ $sharp = Get-Item "apps\desktop\src-tauri\resources\sidecar\node_modules\sharp"
 if ($sharp.LinkType) { "❌ 符号链接" } else { "✅ 真实目录" }
 ```
 
-详细说明请参考：[docs/sidecar-symlink-fix.md](./docs/sidecar-symlink-fix.md)
+详细构建流程和检查项请参考：[docs/build-guide.md](./docs/build-guide.md) 和 [docs/build-checklist.md](./docs/build-checklist.md)。
 
 ## 设计边界
 

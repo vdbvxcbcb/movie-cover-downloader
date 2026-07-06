@@ -1,94 +1,45 @@
 # Movie Cover Downloader 使用说明
 
-本文档只覆盖当前仓库这版代码已经落地的内容，重点说明：
+本文档按当前仓库代码编写，只覆盖已经落地的功能。当前应用是面向 Windows 的豆瓣影视图片下载器，真实下载链路围绕豆瓣电影 `subject` 页面、图片分类页和豆瓣图片资源设计。
 
-- 如何安装依赖
-- 如何本地启动桌面版
-- 控制中心现在有哪些功能
-- 豆瓣 `Cookie` 该怎么提供
-- 如何构建安装包和发布 Release 安装包
+## 1. 支持范围
 
-## 1. 当前形态
+- 目标平台：Windows 桌面端。
+- 最低支持系统：Windows 10。
+- 不支持：Windows 7 / 8 / 8.1。
+- 当前站点：豆瓣电影。
+- 当前主页面：控制中心、日志中心。
+- 真实下载环境：Tauri 桌面端或安装包环境；网页预览只能看界面和部分交互。
 
-当前桌面端只有两个主页面：
+控制中心顶部按钮依次为：
 
-- 控制中心
-- 日志中心
+- `1、导入Cookie`
+- `2、搜索影视`
+- `3、添加下载任务`
+- `4、自定义裁剪`
+- `5、图片处理`
+- `6、清空队列任务`
 
-控制中心现在包含：
+除了导入 Cookie 外，搜索、添加任务、裁剪和图片处理入口都要求先存在可用 Cookie 记录。
 
-- 添加链接任务
-- 导入 Cookie
-- 清空队列任务
-- 下载队列表格
-- Cookie 列表
+## 2. 安装和启动
 
-下载队列表格现在还支持：
-
-- 任务处理中点击`暂停`
-- 任务已暂停后点击`继续`
-- 任务完成后显示`完成`
-- 任务失败后点击`重试`
-
-日志中心现在包含：
-
-- 实时日志列表
-- `清空全部日志`
-
-### 1.1 本地存储现状（2026-05-02）
-
-当前桌面端持久化已经切到 `SQLite`，数据库文件位于应用数据目录下的：
-
-```text
-runtime-state.sqlite
-```
-
-当前使用的核心表：
-
-- `tasks`：下载队列任务记录
-- `cookies`：Cookie 值与状态（含成功/失败计数、冷却时间、导入与过期时间）
-- `app_logs`：运行日志
-
-兼容说明：
-
-- 旧版 `runtime-state.json` 仅用于首次迁移读取
-- 新版本持续读写均使用 `SQLite`
-
-## 2. 环境要求
-
-建议环境：
+建议开发环境：
 
 - Windows 10 / 11
 - Node.js 18+
 - pnpm 10+
 - Rust stable
-- cargo
+- Visual Studio Build Tools + MSVC x64 工具链
+- WebView2 Runtime
 
-说明：
-
-- 当前代码和安装包按 `Windows 10 / 11` 设计与验证，最低支持 `Windows 10`
-- `Windows 7 / 8 / 8.1` 不受支持
-
-可先检查：
-
-```bash
-node -v
-pnpm -v
-rustc -V
-cargo -V
-```
-
-## 3. 安装依赖
-
-在项目根目录执行：
+安装依赖：
 
 ```bash
 pnpm install
 ```
 
-## 4. 常用命令
-
-当前根目录真实存在的脚本如下：
+常用命令：
 
 ```bash
 pnpm dev:web
@@ -97,266 +48,39 @@ pnpm dev:sidecar
 pnpm build:web
 pnpm build:desktop
 pnpm build:sidecar
+pnpm prepare:sidecar-bundle
 pnpm typecheck
 pnpm typecheck:sidecar
+pnpm test
 ```
 
-说明：
-
-- `pnpm dev:web`
-  只启动前端 Vite 页面
-- `pnpm dev:desktop`
-  启动 Tauri 桌面应用
-- `pnpm dev:sidecar`
-  启动 sidecar 开发模式
-- `pnpm build:sidecar`
-  构建 `apps/sidecar/dist/index.js`
-- `pnpm typecheck`
-  执行桌面端 `vue-tsc`
-- `pnpm typecheck:sidecar`
-  执行 sidecar TypeScript 类型检查
-
-## 5. 本地运行
-
-### 5.1 网页端启动命令
-
-在项目根目录执行：
-
-```bash
-pnpm dev:web
-```
-
-等价写法：
-
-```bash
-cd apps/desktop
-pnpm dev
-```
-
-当前网页端开发服务固定端口为：
+`pnpm dev:web` 会启动 Vite 网页预览，固定端口为：
 
 ```text
-http://127.0.0.1:8467
+http://127.0.0.1:5173
 ```
 
-这个模式下：
+网页预览适合检查界面，不会执行真实 Tauri command、登录窗口、本地文件读写或 sidecar 下载。
 
-- 可以查看界面和交互
-- 不会真的走 Tauri Rust 命令
-- 不会执行真实下载链路
+`pnpm dev:desktop` 会启动 Tauri 桌面开发模式。它会先通过 `apps/desktop/package.json` 的 `predev` 构建 sidecar，再启动桌面窗口。真实下载、Cookie 登录导入、目录选择、拖拽本地图片读取和 sidecar 子进程都要用这个模式验证。
 
-### 5.2 桌面端启动命令
+注意：`pnpm dev:web` 和 `pnpm dev:desktop` 都使用 Vite `5173` 端口，不建议同时启动。
 
-在项目根目录执行：
+## 3. 导入 Cookie
 
-```bash
-pnpm dev:desktop
-```
+点击 `1、导入Cookie` 后，有两种方式：
 
-等价写法：
+- `豆瓣登录自动导入`：打开独立豆瓣登录窗口，完成密码、二维码或短信登录后，应用自动读取 Cookie。
+- `Cookie字符串导入`：把浏览器请求头中的 Cookie 整段粘贴进弹窗。
 
-```bash
-cd apps/desktop
-pnpm tauri dev
-```
+导入成功后：
 
-当前桌面端启动链路会自动完成这些前置动作：
+- Cookie 会保存到本地 SQLite 状态库。
+- 默认保留 30 天，到期后会在启动或使用前清理并提示。
+- Cookie 顺序会持久化，重启后仍按原顺序使用。
+- 下载、搜索和解析时优先使用可用且未冷却的豆瓣 Cookie。
 
-- 自动执行 `apps/desktop/package.json` 里的 `predev`
-- 自动构建 `apps/sidecar/dist`
-- 自动启动桌面端内部使用的 Vite 页面
-- 自动拉起 Tauri 桌面窗口
-
-所以现在不需要再手工先执行一次 `pnpm build:sidecar` 才能启动桌面端。
-
-### 5.3 推荐启动顺序
-
-首次启动或更新依赖后，推荐顺序：
-
-```bash
-pnpm install
-pnpm typecheck
-pnpm typecheck:sidecar
-pnpm dev:desktop
-```
-
-如果是第一次跑 Tauri，建议额外检查一次：
-
-```bash
-cd apps/desktop/src-tauri
-cargo check
-```
-
-### 5.4 注意事项
-
-- `pnpm dev:web` 和 `pnpm dev:desktop` 底层都会使用 `8467` 端口，不建议同时启动
-- 如果你只想看界面，用 `pnpm dev:web`
-- 如果你要测试真实下载、Cookie 导入、Tauri 命令桥接，用 `pnpm dev:desktop`
-
-## 6. 控制中心使用方式
-
-### 6.1 新增链接任务
-
-点击“添加链接任务”后：
-
-- 支持批量添加
-- 一行一个详情页链接
-- 支持豆瓣详情页
-
-示例：
-
-```text
-https://movie.douban.com/subject/35010610/
-```
-
-当前弹窗支持这些任务级选项：
-
-- 输出目录
-- 豆瓣抓图类型：`剧照 / 海报 / 壁纸`
-- 数量模式：`限制 / 无限制`
-- 输出格式：`JPG / PNG`
-- 请求间隔：`1-5 秒`
-
-默认值：
-
-- 豆瓣抓图类型：`剧照`
-- 数量模式：`限制`
-- 限制数量：`10`
-- 输出格式：`JPG`
-- 请求间隔：`1 秒`
-
-豆瓣抓图类型规则：
-
-- `剧照` 对应 `photos?type=S`
-- `海报` 对应 `photos?type=R`
-- `壁纸` 对应 `photos?type=W`
-- 如果填的是 `subject`、`all_photos` 或已经带 `photos?type=...` 的豆瓣链接，程序仍然会以弹窗里的抓图类型为准
-
-数量模式规则：
-
-- `限制` 模式下只能输入 `1-100`
-- `无限制` 模式下会抓取当前分类页中的全部图片
-
-### 6.2 输出目录
-
-输出目录支持两种方式：
-
-- 手工输入，例如 `D:/cover`
-- 点击“浏览”选择本地文件夹
-
-任务加入队列后，程序会在输出目录下自动创建：
-
-```text
-片名
-```
-
-其中：
-
-- 会根据豆瓣创建 `片名`，再按抓图类型进入对应子目录：
-  `still / poster / wallpaper`
-
-例如豆瓣剧照：
-
-```text
-D:\cover\示例电影\still
-```
-
-例如豆瓣海报：
-
-```text
-D:\cover\示例电影\poster
-```
-
-例如豆瓣壁纸：
-
-```text
-D:\cover\示例电影\wallpaper
-```
-
-任务完成后，下载队列里“输出目录”这一列可以直接点击，打开的是该任务最终子目录，而不是根目录。
-
-### 6.3 输出格式
-
-当前支持：
-
-- `JPG`
-- `PNG`
-
-处理规则：
-
-- 如果源图本来就是目标格式，直接保存
-- 如果源图是 `WEBP` 等其他格式，sidecar 会自动转码成目标 `JPG / PNG`
-
-### 6.4 请求间隔
-
-当前请求间隔是任务级参数：
-
-- 可选 `1-5 秒`
-- 默认 `1 秒`
-
-当前实现方式是：
-
-- 真实 HTML 请求受控
-- 真实图片下载请求受控
-- 下载中的单张图片支持断点续传
-- 用户暂停后会保留当前图片的 `.part` 临时分片
-- 用户继续后会优先带 `Range` 续传当前图片
-- 如果源站不支持 `Range`，只会重下当前图片，不会重下整个任务
-
-也就是说，这个值不是只停留在界面上，而是会进入真实抓图链路。
-
-豆瓣真实抓图还会额外启用保护模式：
-
-- 豆瓣请求间隔最低会提升到 `3 秒`
-- 豆瓣任务在桌面端会按串行执行
-
-这样做是为了降低连续请求触发豆瓣风控的概率。
-
-### 6.5 导入 Cookie
-
-点击“导入 Cookie”后，当前支持两种方式：
-
-- 豆瓣登录自动导入
-- `Cookie` 字符串导入
-
-其中“豆瓣登录自动导入”会打开独立的豆瓣登录窗口。
-
-在这个窗口里，支持使用：
-
-- 密码登录
-- 二维码登录
-- 短信登录
-
-如果豆瓣页面要求图形验证码，需要由用户直接在豆瓣页面内完成。
-
-只有在登录成功并拿到有效登录态后，程序才会写入 Cookie。
-
-如果未成功登录，或者用户手动关闭登录窗口，不会写入无效 Cookie。
-
-导入后：
-
-- Cookie 会保存在本地状态里
-- 默认保留 30 天
-- 到期后会在应用启动或再次使用前自动清理
-- 用户手动删除后，需要重新登录或重新导入
-- 豆瓣真实下载会优先使用它
-
-### 6.6 清空队列任务
-
-点击后会：
-
-- 清空当前任务列表
-- 停止当前队列流转
-- 取消这些任务可能仍在运行的后台进程
-- 清理这些任务所属输出根目录里的文件和子目录，但保留输出根目录本身
-
-## 7. 豆瓣 Cookie 需要什么
-
-如果使用 `Cookie` 字符串导入，最稳妥的做法仍然是：
-
-- 直接提供浏览器导出的整份 `.douban.com / movie.douban.com` Cookie
-
-当前验证里至少能确认这些字段有帮助：
+如果使用字符串导入，建议至少包含：
 
 ```text
 dbcl2
@@ -366,150 +90,307 @@ ll
 ap_v
 ```
 
-其中最关键的是：
+其中 `dbcl2` 和 `ck` 最关键。Cookie 不会写进命令行参数或日志；Windows 下持久化 payload 会通过 DPAPI 保护。
+
+## 4. 搜索影视
+
+点击 `2、搜索影视` 后输入片名并搜索。搜索弹窗会请求豆瓣搜索页，展示封面、片名、简介和分页结果。
+
+搜索结果提供三个操作：
+
+- `选图下载`：打开 `3、添加下载任务`，自动切到选图下载模式，带入影片链接、片名、封面，并默认开始解析剧照。
+- `添加链接`：把影片详情页加入添加下载任务弹窗的自动下载链接草稿。
+- `删除链接`：从自动下载链接草稿中移除已添加链接。
+
+同一次搜索内，已访问过的页会做内存缓存；切换页码不会重复请求已缓存页面。搜索要求存在可用豆瓣 Cookie，否则会提示先导入。
+
+## 5. 添加下载任务
+
+点击 `3、添加下载任务` 后，弹窗包含两个模式：
+
+- `自动下载`
+- `选图下载`
+
+### 5.1 自动下载
+
+自动下载适合批量处理一个或多个豆瓣 `subject` 链接。每行填写一个链接，例如：
 
 ```text
-dbcl2
-ck
+https://movie.douban.com/subject/35010610/
+https://movie.douban.com/subject/1292064/
 ```
 
-示例：
+可配置项：
+
+- 输出目录：手动输入或点击 `浏览` 选择目录。
+- 豆瓣抓图类型：`剧照`、`海报`、`壁纸`。
+- 数量：`限制` 或 `无限制`，限制模式范围为 1-100，默认 10。
+- 图片尺寸：`原图尺寸`、`9:16`、`3:4`。
+- 输出格式：`JPG`、`PNG`。
+- 请求间隔：1-5 秒。
+
+豆瓣抓图类型对应关系：
+
+- `剧照` -> `photos?type=S`
+- `海报` -> `photos?type=R`
+- `壁纸` -> `photos?type=W`
+
+即使粘贴的是 `subject`、`all_photos` 或带 `photos?type=` 的链接，自动下载仍以弹窗里选择的抓图类型为准。
+
+提交前会检查重复任务。重复判定包含链接、输出根目录、分类和图片比例；确认覆盖后会清理旧输出、移除旧任务并重新加入新任务。
+
+### 5.2 选图下载
+
+选图下载适合先看图再下载。支持粘贴豆瓣 `subject`、`all_photos` 和 `photos?type=S/R/W` 链接，也支持从搜索结果直接进入。
+
+当前只保留三个分类：
+
+- `剧照`
+- `海报`
+- `壁纸`
+
+选图下载行为：
+
+- 粘贴链接后会解析影片标题和封面，并默认先解析剧照分类。
+- 切换分类会停止旧分类正在进行的解析，再优先解析新分类。
+- 图片发现是分页/游标式，滚动到底部才继续请求下一批。
+- 已解析结果按分类缓存，切回已加载分类会复用当前结果。
+- 单击图片勾选或取消勾选。
+- 拖拽图片网格区域可以框选多张图片。
+- `全选` 和 `取消全选` 只作用于当前分类。
+- 双击图片打开大图预览，预览内支持左右切换。
+- 点击 `下载选中 N 张` 并确认后，会停止继续解析后续图片，只下载已选图片。
+
+选图下载同样会做重复任务检测。重复判定包含链接、输出根目录、分类和图片比例；确认覆盖后替换旧任务。
+
+## 6. 下载队列
+
+任务加入队列后会按添加时间 FIFO 执行。界面排序和搜索只影响展示，不改变后台调度顺序。
+
+下载队列表格包含：
+
+- 任务标题和详情页链接，点击链接区域可复制。
+- 豆瓣封面，优先使用缓存封面，失败时显示占位。
+- 状态：排队、解析、下载、暂停、完成、失败等。
+- 下载进度：每保存一张图片都会更新。
+- 输出目录：任务完成后可点击打开最终输出目录。
+- 结果摘要：显示下载数量和图片比例。
+- 操作：暂停、继续、重试、删除。
+
+队列表格支持：
+
+- 按添加时间升序/降序展示。
+- 按影片名或链接搜索。
+- 分页、首页、上一页、下一页、末页和跳页。
+
+删除单个任务会删除该任务生成的输出目录；下载中的任务不能删除，已暂停任务可以删除。清空队列会取消后台任务并清理相关输出目录内容，但会保留用户选择的输出根目录本身。
+
+## 7. 输出目录
+
+用户选择的是输出根目录，例如：
 
 ```text
-dbcl2="177473297:xxxxxx"; ck=hb-J; bid=DYDcN1_PDPs; ll="118289"; ap_v=0,6.0
+D:\cover
 ```
 
-## 8. 当前真实链路状态
+自动下载会按影片和分类生成目录，例如：
 
-### 8.1 豆瓣
+```text
+D:\cover\示例电影\still
+D:\cover\示例电影\poster
+D:\cover\示例电影\wallpaper
+```
 
-当前已经做到：
+选图下载会写入单独的 selected 目录，按分类和比例区分，避免和自动下载混在一起。
 
-- 使用导入的 Cookie
-- 访问详情页
-- 根据任务选项自动改写到 `photos?type=S/R/W`
-- 进入图片抓取链路
-- 自动创建 `片名\still|poster|wallpaper` 子目录
-- 真实下载到本地目录
-- 默认启用保护模式
-- 豆瓣任务串行执行，避免同一时间并发打多个豆瓣任务
+自定义裁剪结果固定保存到：
 
-实际是否能拿到高质量图片，仍取决于 Cookie 的可用性。
+```text
+D:\cover\custom-crop-photo
+```
 
-如果抓图失败，当前会优先给出更明确的提示：
+所有删除和清空都会通过 Rust 层做路径规范化和边界校验，避免删除输出根目录之外的文件。
 
-- `该分类下暂无可抓取图片`
-- `豆瓣登录状态失效，请重新导入 Cookie`
-- `触发豆瓣风控，请稍后重试`
-- `豆瓣页面结构异常，暂时无法解析`
+## 8. 自定义裁剪
 
-其中：
+点击 `4、自定义裁剪` 后，可以处理本地单张图片。
 
-- 空分类页不会让 Cookie 进入冷却
-- 登录失效、风控页和典型反爬错误会触发 Cookie 冷却
+支持方式：
 
-## 9. 当前已知限制
+- 点击上传本地图片。
+- 拖拽本地图片到弹窗。
 
-当前还有这些现实限制：
+当前拖拽读取走 `readDroppedImageFile(filePath)`，不要求图片必须位于输出根目录。保存时仍会写入输出根目录下的 `custom-crop-photo`。
 
-- 豆瓣是否返回高清图，仍受登录态影响
-- 大量图片任务会明显更慢，这是请求间隔和真实下载共同作用的结果
-- 开发环境下 sidecar 仍通过本机 `node` 运行
-- `sharp` 是当前图片转码链路依赖
-- 还没有做浏览器 Cookie 自动同步
+## 9. 图片处理
 
-## 10. 构建安装包和 Release 安装包说明
+点击 `5、图片处理` 后，可以制作本地拼版和标注图。
 
-当前安装包已经不是只打包 Tauri 前端壳。`pnpm build:desktop` 会先构建 sidecar，再把真实下载所需资源一起放进安装包：
+当前支持：
 
-- `apps/sidecar/dist/index.js`
-- Node 运行时
-- `sharp` 运行时依赖
-- Tauri 桌面端程序
-- WebView2 离线安装器
+- 上传或拖拽 1-9 张图片。
+- 选择拼版布局。
+- 拖拽换格。
+- 上传背景图。
+- 调整背景图透明度。
+- 开启背景重叠效果。
+- 调整当前选中图片透明度。
+- 添加方框、圆圈、箭头标注。
+- 导出 JPG 或 PNG。
 
-安装后的应用会从用户本机应用数据目录初始化状态，不会把开发机已有的任务、日志、Cookie 或输出图片打包进去。
+标注拖拽完成后会隐藏拖拽点；再次点击标注区域后显示点位和设置。箭头保持 2D 平面旋转效果。
 
-### 10.1 构建安装包
+## 10. 日志中心
 
-在项目根目录执行：
+日志中心包含：
+
+- 实时日志列表。
+- `仅看错误` / `显示全部日志` 切换。
+- `清空全部日志`。
+
+sidecar 的结构化 stdout 会由 Rust 解析成日志、进度事件、搜索结果、标题/封面结果或选图发现结果。stderr 会作为错误日志进入日志中心。
+
+## 11. 本地持久化
+
+应用状态保存在 Tauri 应用数据目录下：
+
+```text
+runtime-state.sqlite
+```
+
+主要保存：
+
+- 下载队列任务。
+- Cookie 列表和值。
+- 运行日志。
+- 队列配置。
+- 添加下载任务输出目录。
+- 图片处理输出目录。
+
+旧版 `runtime-state.json` 只在首次迁移时读取；新版本持续读写 SQLite。如果 SQLite 损坏，应用会备份主库和 WAL/SHM 文件，再创建干净状态库继续运行。
+
+## 12. 构建安装包
+
+首次构建前建议运行环境检查：
+
+```powershell
+.\scripts\check-build-env.ps1
+```
+
+推荐一键构建：
+
+```powershell
+.\scripts\build-with-msvc.ps1
+```
+
+该脚本会设置 MSVC x64 环境，并按项目当前脚本准备 sidecar、前端和 Tauri 安装包。
+
+也可以手动执行：
 
 ```bash
+pnpm build:sidecar
+pnpm prepare:sidecar-bundle
 pnpm build:desktop
 ```
 
-构建成功后，Windows 安装包默认输出到：
+`pnpm build:desktop` 会触发桌面端构建链路，确保前端类型检查、Vite build、sidecar resources 和 Tauri bundle 参与构建。
+
+NSIS 安装包默认输出：
 
 ```text
 apps/desktop/src-tauri/target/release/bundle/nsis/Movie Cover Downloader_0.1.0_x64-setup.exe
+```
+
+MSI 默认输出：
+
+```text
 apps/desktop/src-tauri/target/release/bundle/msi/Movie Cover Downloader_0.1.0_x64_en-US.msi
 ```
 
-推荐优先发布和安装 NSIS 版本：
+发布时推荐优先使用 NSIS 安装包。
+
+### 12.1 sidecar resources
+
+安装包不能只包含 Tauri 前端壳。真实下载需要同时打包：
+
+- `apps/sidecar/dist/index.js`
+- Node.js 运行时 `node.exe`
+- sidecar 生产依赖
+- `sharp` 原生依赖
+- Tauri 桌面程序和前端静态资源
+
+`scripts/prepare-sidecar-bundle.ps1` 会把 sidecar 资源准备到：
 
 ```text
-Movie Cover Downloader_0.1.0_x64-setup.exe
+apps/desktop/src-tauri/resources/sidecar
 ```
 
-每次打包后建议确认文件真实存在，例如：
+脚本会在 resources 目录内使用 `npm install --omit=dev` 创建真实目录，避免直接复制 pnpm workspace `node_modules` 的 symlink/junction。打包后如果出现 `Cannot find package 'sharp'`，优先检查 resources 内的 `node_modules\sharp` 是否是真实目录。
 
-```powershell
-Test-Path "apps/desktop/src-tauri/target/release/bundle/nsis/Movie Cover Downloader_0.1.0_x64-setup.exe"
-```
+## 13. 常见排查
 
-### 10.2 Release 安装包说明
+### 13.1 桌面端启动失败
 
-GitHub Release 建议使用当前版本号作为 tag，例如：
-
-```text
-v0.1.0
-```
-
-Release 资产上传：
-
-```text
-Movie Cover Downloader_0.1.0_x64-setup.exe
-```
-
-发布前检查：
-
-- `pnpm typecheck` 通过
-- `pnpm typecheck:sidecar` 通过
-- `pnpm build:desktop` 通过
-- Release 里的安装包文件大小不是 `0`
-- 安装后首次启动是干净初始状态
-
-## 11. 排查建议
-
-### 11.1 桌面版启动失败
-
-先执行：
+建议依次检查：
 
 ```bash
 pnpm build:sidecar
 pnpm typecheck
 pnpm typecheck:sidecar
+```
+
+再检查 Rust：
+
+```bash
 cd apps/desktop/src-tauri
 cargo check
 ```
 
-### 11.2 豆瓣下载失败
+### 13.2 搜索或下载失败
 
 优先检查：
 
-- Cookie 是否过期
-- 是否包含 `dbcl2`、`ck`
-- 导入的是不是豆瓣影视站登录态
-- 日志中心里是否出现 `403`、`418`、`登录受限`、`触发豆瓣风控，请稍后重试` 之类提示
+- 是否已经导入豆瓣 Cookie。
+- Cookie 是否包含 `dbcl2` 和 `ck`。
+- Cookie 是否过期或处于冷却状态。
+- 日志中心是否出现 `403`、`418`、`登录状态失效`、`触发豆瓣风控` 等提示。
+- 当前分类是否本身没有图片。
 
-如果界面直接提示：
+常见提示含义：
 
-- `该分类下暂无可抓取图片`
-  说明当前分类页本身没有可抓的图片，不是 Cookie 失效
-- `豆瓣登录状态失效，请重新导入 Cookie`
-  说明当前登录态不可用，建议重新走一次登录导入或手动导入
-- `触发豆瓣风控，请稍后重试`
-  说明当前请求被豆瓣保护机制拦截，建议等待一段时间后再试
-- `豆瓣页面结构异常，暂时无法解析`
-  说明当前页面结构和程序预期不一致，需要结合日志进一步排查
+- `该分类下暂无可抓取图片`：当前豆瓣分类页为空，不代表 Cookie 失效。
+- `豆瓣登录状态失效，请重新导入 Cookie`：登录态不可用，需要重新导入。
+- `触发豆瓣风控，请稍后重试`：请求被豆瓣保护机制拦截，建议稍后再试。
+- `豆瓣页面结构异常，暂时无法解析`：页面结构和当前解析逻辑不一致，需要结合日志排查。
 
+### 13.3 打包后下载失败
+
+重点检查：
+
+- `apps/sidecar/dist/index.js` 是否存在。
+- `apps/desktop/src-tauri/resources/sidecar/node.exe` 是否存在。
+- `apps/desktop/src-tauri/resources/sidecar/node_modules/sharp` 是否是真实目录。
+- resources 中是否存在 sharp 的 `.node` 原生二进制。
+- 安装包是否为最近一次构建生成。
+
+## 14. 验证建议
+
+文档和代码改动分开验证。常用命令：
+
+```bash
+pnpm --dir apps/desktop exec vue-tsc --noEmit
+pnpm --dir apps/sidecar typecheck
+pnpm --dir apps/desktop test
+pnpm --dir apps/sidecar test
+```
+
+Rust：
+
+```bash
+cd apps/desktop/src-tauri
+cargo check
+cargo test
+cargo clippy --all-targets
+```
+
+如果只修改 README 或本文档，通常不需要运行代码测试，但至少应检查 Markdown 链接、路径和过时术语。
