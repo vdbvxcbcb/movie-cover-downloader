@@ -4,9 +4,19 @@ import ActionButton from "../components/common/ActionButton.vue";
 import LogConsole from "../components/logs/LogConsole.vue";
 import PanelSection from "../components/common/PanelSection.vue";
 import PopConfirmAction from "../components/common/PopConfirmAction.vue";
+import { useLogs } from "../stores/logs";
+import { useUI } from "../stores/ui";
 import { useAppStore } from "../stores/app";
+import { storeToRefs } from "pinia";
 
+const logsStore = useLogs();
+const uiStore = useUI();
 const appStore = useAppStore();
+
+const { logs, visibleLogs, logOnlyErrors } = storeToRefs(logsStore);
+const { toggleLogOnlyErrors } = logsStore;
+const { isActionPending } = uiStore;
+const { clearAllLogs } = appStore;
 </script>
 
 <template>
@@ -15,8 +25,8 @@ const appStore = useAppStore();
       <template #aside>
         <div class="topbar__actions">
           <ActionButton
-            :label="appStore.logOnlyErrors ? '显示全部日志' : '仅看错误'"
-            @click="appStore.toggleLogOnlyErrors()"
+            :label="logOnlyErrors ? '显示全部日志' : '仅看错误'"
+            @click="toggleLogOnlyErrors()"
           />
           <PopConfirmAction
             label="清空全部日志"
@@ -24,8 +34,8 @@ const appStore = useAppStore();
             description="日志记录会被清空。"
             confirm-label="清空"
             bubble-size="normal"
-            :disabled="appStore.isActionPending('logs.clear-all')"
-            @confirm="void appStore.clearAllLogs()"
+            :disabled="isActionPending('logs.clear-all')"
+            @confirm="void clearAllLogs()"
           />
         </div>
       </template>
@@ -33,11 +43,11 @@ const appStore = useAppStore();
       <div class="control-toolbar">
         <div class="control-pill">
           <span>日志数</span>
-          <strong>{{ appStore.logs.length }}</strong>
+          <strong>{{ logs.length }}</strong>
         </div>
         <div class="control-pill">
           <span>显示模式</span>
-          <strong>{{ appStore.logOnlyErrors ? "仅错误" : "全部" }}</strong>
+          <strong>{{ logOnlyErrors ? "仅错误" : "全部" }}</strong>
         </div>
         <div class="control-pill">
           <span>同步状态</span>
@@ -47,7 +57,7 @@ const appStore = useAppStore();
     </PanelSection>
 
     <PanelSection eyebrow="Realtime" title="实时日志">
-      <LogConsole :entries="appStore.visibleLogs" scrollable />
+      <LogConsole :entries="visibleLogs" scrollable />
     </PanelSection>
   </div>
 </template>

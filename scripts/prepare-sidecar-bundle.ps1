@@ -34,15 +34,6 @@ try {
   Write-Host "`n[1/5] Copying package.json..." -ForegroundColor Yellow
   Copy-Item -Path (Join-Path $sidecarSource "package.json") -Destination $sidecarResources -Force
 
-  # Create .npmrc to use hoisted node_modules (no symlinks)
-  Write-Host "[1.5/5] Creating .npmrc for hoisted installation..." -ForegroundColor Yellow
-  $npmrcContent = @"
-enable-pre-post-scripts=true
-node-linker=hoisted
-shamefully-hoist=true
-"@
-  Set-Content -Path (Join-Path $sidecarResources ".npmrc") -Value $npmrcContent -Force
-
   # Copy built dist directory
   Write-Host "[2/5] Copying dist..." -ForegroundColor Yellow
   $distSource = Join-Path $sidecarSource "dist"
@@ -55,18 +46,18 @@ shamefully-hoist=true
   # Remove test files
   Get-ChildItem -Path $distTarget -Recurse -Filter "*.test.js" | Remove-Item -Force
 
-  # Install production dependencies with hoisted structure (no symlinks)
+  # Install production dependencies as real directories (no symlinks)
   Write-Host "[3/5] Installing production dependencies with flat structure..." -ForegroundColor Yellow
   Push-Location $sidecarResources
 
-  # Install with hoisted linker to avoid symlinks pointing to dev machine paths
+  # npm creates real directories here; pnpm links can point back to dev paths.
   Write-Host "  Installing dependencies (this will create real files, not symlinks)..." -ForegroundColor Gray
-  pnpm install --prod --no-lockfile --ignore-workspace
+  npm install --omit=dev --package-lock=false --ignore-scripts=false --no-audit --no-fund
   $installExitCode = $LASTEXITCODE
 
   if ($installExitCode -ne 0) {
     Pop-Location
-    throw "pnpm install failed"
+    throw "npm install failed"
   }
 
   Pop-Location
@@ -76,7 +67,7 @@ shamefully-hoist=true
   $nodeCommand = Get-Command node -ErrorAction Stop
   Copy-Item -LiteralPath $nodeCommand.Source -Destination (Join-Path $sidecarResources "node.exe") -Force
 
-  # Verify sharp is installed with hoisted structure (no symlinks)
+  # Verify sharp is installed as a real directory (no symlinks)
   Write-Host "[5/5] Verifying sharp installation..." -ForegroundColor Yellow
   $sharpPath = Join-Path $sidecarResources "node_modules\sharp"
   if (-not (Test-Path $sharpPath)) {

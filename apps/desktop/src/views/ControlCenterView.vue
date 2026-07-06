@@ -10,10 +10,20 @@ import TaskTable from "../components/queue/TaskTable.vue";
 import QueueFilterBar from "../components/queue/QueueFilterBar.vue";
 import { describeCookieStatus, formatCookieExpiry, formatSourceSite, formatTaskTitle } from "../lib/presenters";
 import { useAppStore } from "../stores/app";
+import { useTaskQueue } from "../stores/taskQueue";
+import { useCookies } from "../stores/cookies";
+import { useUI } from "../stores/ui";
 import { sortTasksByAddedTime } from "../lib/task-order";
 
 const appStore = useAppStore();
-const { tasks, cookies, queueRunning, activeTaskIds, queueHasActiveDownloads, queueSortOrder, queueSearchQuery } = storeToRefs(appStore);
+const taskQueueStore = useTaskQueue();
+const cookiesStore = useCookies();
+const uiStore = useUI();
+
+const { tasks, queueRunning, queueSortOrder, queueSearchQuery, queueHasActiveDownloads, activeTaskIds } = storeToRefs(taskQueueStore);
+const { cookies } = storeToRefs(cookiesStore);
+const { isActionPending } = uiStore;
+const { importCookie, openSearchMovie, openCreateTask, openCustomCrop, openImageProcess, clearQueueTasks, retryTask, pauseTask, resumeTask, deleteTask, openTaskOutputDirectory, deleteCookie } = appStore;
 
 // 根据排序方向和搜索关键词筛选任务
 const orderedTasks = computed(() => {
@@ -38,7 +48,7 @@ const hasCookieProfiles = computed(() => cookies.value.length > 0);
 // 清空队列任务还需要队列里确实有任务。
 const hasQueueTasks = computed(() => tasks.value.length > 0);
 const disableCookieRequiredActions = computed(() => !hasCookieProfiles.value);
-const disableClearQueue = computed(() => disableCookieRequiredActions.value || queueHasActiveDownloads.value || !hasQueueTasks.value || appStore.isActionPending("queue.clear-all"));
+const disableClearQueue = computed(() => disableCookieRequiredActions.value || queueHasActiveDownloads.value || !hasQueueTasks.value || isActionPending("queue.clear-all"));
 </script>
 
 <template>
@@ -48,18 +58,18 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
           <ActionButton
             class="control-center-actions__import"
             label="1、导入Cookie"
-            :disabled="appStore.isActionPending('cookies.import')"
-            @click="void appStore.importCookie()"
+            :disabled="isActionPending('cookies.import')"
+            @click="void importCookie()"
           />
           <ActionButton
             class="control-center-actions__search"
             label="2、搜索影视"
             :disabled="disableCookieRequiredActions"
-            @click="appStore.openSearchMovie()"
+            @click="openSearchMovie()"
           />
-          <ActionButton label="3、添加下载任务" :disabled="disableCookieRequiredActions" @click="appStore.openCreateTask()" />
-          <ActionButton label="4、自定义裁剪" :disabled="disableCookieRequiredActions" @click="appStore.openCustomCrop()" />
-          <ActionButton label="5、图片处理" :disabled="disableCookieRequiredActions" @click="appStore.openImageProcess()" />
+          <ActionButton label="3、添加下载任务" :disabled="disableCookieRequiredActions" @click="openCreateTask()" />
+          <ActionButton label="4、自定义裁剪" :disabled="disableCookieRequiredActions" @click="openCustomCrop()" />
+          <ActionButton label="5、图片处理" :disabled="disableCookieRequiredActions" @click="openImageProcess()" />
           <PopConfirmAction
             label="6、清空队列任务"
             title="清空全部任务？"
@@ -67,7 +77,7 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
             confirm-label="清空"
             bubble-size="normal"
             :disabled="disableClearQueue"
-            @confirm="void appStore.clearQueueTasks()"
+            @confirm="void clearQueueTasks()"
           />
       </div>
 
@@ -99,11 +109,11 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
       <TaskTable
         :tasks="orderedTasks"
         :active-task-ids="activeTaskIds"
-        @retry="void appStore.retryTask($event)"
-        @pause="void appStore.pauseTask($event)"
-        @resume="void appStore.resumeTask($event)"
-        @remove="void appStore.deleteTask($event)"
-        @open-output="void appStore.openTaskOutputDirectory($event)"
+        @retry="void retryTask($event)"
+        @pause="void pauseTask($event)"
+        @resume="void resumeTask($event)"
+        @remove="void deleteTask($event)"
+        @open-output="void openTaskOutputDirectory($event)"
       />
     </PanelSection>
 
@@ -127,7 +137,7 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
               title="删除这个 Cookie？"
               description="Cookie 记录会被删除。"
               confirm-label="删除"
-              @confirm="void appStore.deleteCookie(cookie.id)"
+              @confirm="void deleteCookie(cookie.id)"
             />
           </div>
         </article>

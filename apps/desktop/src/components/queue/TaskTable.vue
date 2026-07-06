@@ -13,7 +13,7 @@ import {
 } from "../../lib/presenters";
 import { clampTaskPage, paginateItems } from "../../lib/task-pagination";
 import { runtimeBridge } from "../../lib/runtime-bridge";
-import { useAppStore } from "../../stores/app";
+import { useUI } from "../../stores/ui";
 import type { TaskItem } from "../../types/app";
 
 const props = defineProps<{
@@ -30,7 +30,8 @@ const emit = defineEmits<{
 }>();
 
 const isNativeRuntime = runtimeBridge.isNativeRuntime();
-const appStore = useAppStore();
+const uiStore = useUI();
+const { showNotice } = uiStore;
 const nativeBackgroundPhases = new Set(["resolving", "discovering", "downloading"]);
 const currentPage = shallowRef(1);
 const jumpPageInput = ref("1");
@@ -206,7 +207,7 @@ function handleQueueAction(taskId: string, action: ReturnType<typeof getQueueAct
 async function copyTaskDetailUrl(task: TaskItem) {
   await navigator.clipboard.writeText(task.target.detailUrl);
   copiedTaskId.value = task.id;
-  appStore.showNotice("已复制链接", "success");
+  showNotice("已复制链接", "success");
 
   if (copiedIconTimer) {
     clearTimeout(copiedIconTimer);

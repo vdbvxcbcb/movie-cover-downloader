@@ -1,6 +1,6 @@
 # 构建检查清单
 
-在执行 `pnpm build:desktop` 前，请按照此清单逐项检查。
+在执行 `.\scripts\build-with-msvc.ps1` 或手动 `pnpm run build:desktop` 前，请按照此清单逐项检查。
 
 ## ✅ 环境检查
 
@@ -45,9 +45,11 @@ Test-Path "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Aux
 ### 3. Node.js 环境
 ```powershell
 node --version
+npm --version
 pnpm --version
 ```
 - [ ] Node.js ≥ 20.x
+- [ ] npm 可正常运行（sidecar bundle 会用 npm 安装生产依赖）
 - [ ] pnpm 已安装
 
 ### 4. WebView2
@@ -65,6 +67,7 @@ pnpm install
 - [ ] 所有依赖安装成功
 - [ ] 没有 WARN 或 ERROR
 - [ ] `node_modules` 目录存在
+- [ ] `pnpm-workspace.yaml` 已允许 `esbuild` 和 `sharp` 的 build scripts
 
 ### 6. 构建 Sidecar
 ```powershell
@@ -84,6 +87,9 @@ pnpm run prepare:sidecar-bundle
   - [ ] `package.json`
   - [ ] `dist/` 目录
   - [ ] `node_modules/` 目录（包含 sharp 等依赖）
+- [ ] `node_modules/sharp` 是真实目录，不是符号链接 / junction
+- [ ] `@img/sharp-win32-x64/lib/sharp-win32-x64.node` 存在
+- [ ] `resources/sidecar` 下符号链接 / junction 数量为 0
 
 ### 8. 构建前端资源
 ```powershell
@@ -108,7 +114,7 @@ pnpm run build:web
 这些脚本会自动：
 1. 设置 MSVC 环境变量
 2. 构建 sidecar
-3. 准备 sidecar bundle
+3. 准备 sidecar bundle（使用 npm 安装生产依赖，避免 pnpm 链接进入安装包）
 4. 构建桌面应用
 
 **手动方式 - 在开发者命令提示符中**：
@@ -133,9 +139,12 @@ pnpm run build:desktop
 ### 10. 检查构建产物
 ```powershell
 ls "apps/desktop/src-tauri/target/release/bundle/msi/"
+ls "apps/desktop/src-tauri/target/release/bundle/nsis/"
 ```
 - [ ] `.msi` 安装包已生成
-- [ ] 文件大小合理（通常 > 100 MB）
+- [ ] `.exe` NSIS 安装包已生成
+- [ ] 文件大小合理（NSIS 约 228 MB，MSI 约 239 MB，随依赖版本小幅波动正常）
+- [ ] 记录 `LastWriteTime` 和 SHA256，确认是本次新产物
 
 ### 11. 测试安装包（可选）
 - [ ] 双击安装包可正常安装
@@ -149,7 +158,8 @@ ls "apps/desktop/src-tauri/target/release/bundle/msi/"
 | `cargo metadata: program not found` | 安装 Rust 并重启终端 |
 | `cl.exe not found` | 安装 Visual Studio Build Tools |
 | `resource not found: resources/sidecar` | 执行 `pnpm run prepare:sidecar-bundle` |
-| `sharp build failed` | 重新安装 Build Tools，执行 `pnpm clean && pnpm install` |
+| `sharp build failed` | 确认 npm 可用、网络可访问 npm registry，然后重新执行 `pnpm run prepare:sidecar-bundle` |
+| `Sharp is a symlink` | 确认 `prepare-sidecar-bundle.ps1` 使用 npm 安装生产依赖，不要把 pnpm 链接结构打进安装包 |
 | `WebView2 missing` | 安装 WebView2 Runtime |
 
 ## 🔄 完整构建流程（一键执行）
@@ -168,6 +178,12 @@ pnpm run build:sidecar
 pnpm run prepare:sidecar-bundle
 pnpm run build:web
 pnpm run build:desktop
+```
+
+推荐日常直接使用：
+
+```powershell
+.\scripts\build-with-msvc.ps1
 ```
 
 ## 📝 注意事项

@@ -6,14 +6,21 @@ import MessageNotice from "../common/MessageNotice.vue";
 import PopConfirmAction from "../common/PopConfirmAction.vue";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 import { normalizeComparableDetailUrl } from "../../lib/task-draft-input";
-import { useAppStore } from "../../stores/app";
+import { useUI } from "../../stores/ui";
+import { useCookies } from "../../stores/cookies";
+import { storeToRefs } from "pinia";
 import type { DoubanSearchResultItem, DoubanSearchResultPage } from "../../types/app";
 
 const emit = defineEmits<{
   close: [];
 }>();
 
-const appStore = useAppStore();
+const uiStore = useUI();
+const cookiesStore = useCookies();
+
+const { createTaskDetailUrls } = storeToRefs(uiStore);
+const { addCreateTaskDetailUrl, removeCreateTaskDetailUrl, openSelectedPhotoDownload } = uiStore;
+const { cookies } = storeToRefs(cookiesStore);
 const queryInput = shallowRef("");
 const currentPage = shallowRef(1);
 const loading = shallowRef(false);
@@ -25,7 +32,7 @@ const searchPage = ref<DoubanSearchResultPage | null>(null);
 const searchPageCache = new Map<string, DoubanSearchResultPage>();
 const addedDetailUrlSet = computed(() =>
   new Set(
-    appStore.createTaskDetailUrls
+    createTaskDetailUrls.value
       .split(/\r?\n/)
       .map((line) => normalizeComparableDetailUrl(line))
       .filter(Boolean),
@@ -79,7 +86,7 @@ function isLinkAdded(item: DoubanSearchResultItem) {
 
 function getUsableDoubanCookie() {
   const now = Date.now();
-  return appStore.cookies.find((cookie) => {
+  return cookies.value.find((cookie) => {
     const coolingUntil = cookie.coolingUntil ? Date.parse(cookie.coolingUntil) : 0;
     const expiresAt = cookie.expiresAt ? Date.parse(cookie.expiresAt) : Number.POSITIVE_INFINITY;
     return (
@@ -97,7 +104,7 @@ function addDetailUrl(item: DoubanSearchResultItem) {
     return;
   }
 
-  const added = appStore.addCreateTaskDetailUrl(item.detailUrl, item.title, {
+  const added = addCreateTaskDetailUrl(item.detailUrl, item.title, {
     detailUrl: item.detailUrl,
     title: item.title,
     coverUrl: item.coverUrl,
@@ -108,8 +115,8 @@ function addDetailUrl(item: DoubanSearchResultItem) {
   }
 }
 
-function openSelectedPhotoDownload(item: DoubanSearchResultItem) {
-  appStore.openSelectedPhotoDownload({
+function openSelectedPhotoDownloadHandler(item: DoubanSearchResultItem) {
+  openSelectedPhotoDownload({
     detailUrl: item.detailUrl,
     title: item.title,
     coverUrl: item.coverUrl,
@@ -120,7 +127,7 @@ function openSelectedPhotoDownload(item: DoubanSearchResultItem) {
 }
 
 function removeDetailUrl(item: DoubanSearchResultItem) {
-  appStore.removeCreateTaskDetailUrl(item.detailUrl);
+  removeCreateTaskDetailUrl(item.detailUrl);
   showAlert("已从添加下载任务自动下载中删除。", "success");
 }
 
@@ -241,7 +248,7 @@ function resultKey(item: DoubanSearchResultItem) {
               <div class="search-result-row__head">
                 <strong>{{ item.title }}</strong>
                 <div class="search-result-row__actions">
-                  <ActionButton label="选图下载" size="sm" @click="openSelectedPhotoDownload(item)" />
+                  <ActionButton label="选图下载" size="sm" @click="openSelectedPhotoDownloadHandler(item)" />
                   <ActionButton :label="isLinkAdded(item) ? '完成添加' : '添加链接'" size="sm" :disabled="isLinkAdded(item)" @click="addDetailUrl(item)" />
                   <PopConfirmAction
                     label="删除链接"

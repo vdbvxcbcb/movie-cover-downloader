@@ -29,7 +29,10 @@ import {
 } from "../../lib/task-draft-input";
 import { isDoubanEmptyCategoryMessage } from "../../lib/douban-empty-category";
 import { runtimeBridge } from "../../lib/runtime-bridge";
-import { useAppStore } from "../../stores/app";
+import { useUI } from "../../stores/ui";
+import { useTaskQueue } from "../../stores/taskQueue";
+import { useCookies } from "../../stores/cookies";
+import { storeToRefs } from "pinia";
 import {
   createSelectedPhotoDiscoveryState,
   formatSelectedPhotoCategory,
@@ -55,12 +58,23 @@ const emit = defineEmits<{
   updateDetailUrls: [value: string];
 }>();
 
-const appStore = useAppStore();
+const uiStore = useUI();
+const taskQueueStore = useTaskQueue();
+const cookiesStore = useCookies();
+
+const { createTaskOutputRootDir } = storeToRefs(uiStore);
+const {
+  getCreateTaskMoviePreview,
+  upsertCreateTaskMoviePreview,
+  syncCreateTaskOutputRootDir,
+} = uiStore;
+const { findDuplicateTasksForDrafts } = taskQueueStore;
+const { cookies } = storeToRefs(cookiesStore);
 
 // 表单状态保持字符串输入，提交前再统一校验和转换，便于给出明确的用户错误提示。
 const form = reactive({
   detailUrls: props.detailUrls,
-  outputRootDir: appStore.createTaskOutputRootDir,
+  outputRootDir: createTaskOutputRootDir.value,
   doubanAssetType: "still" as DoubanAssetType,
   imageCountMode: "limited" as ImageCountMode,
   maxImagesInput: "10",
@@ -167,7 +181,7 @@ async function resolveMissingDetailUrlTitles() {
   for (const entry of getDetailUrlDisplayEntries(form.detailUrls)) {
     if (!entry.detailUrl) continue;
     const comparableUrl = normalizeComparableDetailUrl(entry.detailUrl);
-    const preview = appStore.getCreateTaskMoviePreview(entry.detailUrl);
+    const preview = getCreateTaskMoviePreview(entry.detailUrl);
     const hasPreviewCover = Boolean(preview?.coverDataUrl || preview?.coverUrl);
     const hasTitle = entry.hasTitle || resolvedTitleCache.has(comparableUrl);
     if (!comparableUrl || (hasTitle && hasPreviewCover)) continue;
@@ -197,7 +211,7 @@ async function resolveMissingDetailUrlTitles() {
 
   for (const [comparableUrl, detailUrl, preview] of resolvedPairs) {
     if (!preview) continue;
-    appStore.upsertCreateTaskMoviePreview(detailUrl, preview);
+    upsertCreateTaskMoviePreview(detailUrl, preview);
     if (preview.title) {
       resolvedTitleCache.set(comparableUrl, preview.title);
     }
@@ -251,7 +265,7 @@ function scheduleSelectedPhotoAutoDiscover(delay = 400) {
 
 watch(
   () => form.outputRootDir,
-  (value) => appStore.syncCreateTaskOutputRootDir(value),
+  (value) => syncCreateTaskOutputRootDir(value),
 );
 
 onBeforeUnmount(() => {
@@ -573,7 +587,7 @@ const selectedDiscoveryStatusLabel = computed(() => {
 });
 
 function getUsableDoubanCookie() {
-  return appStore.cookies.find((cookie) => cookie.source === "douban" && cookie.status !== "cooling" && cookie.value)?.value;
+  return cookies.value.find((cookie) => cookie.source === "douban" && cookie.status !== "cooling" && cookie.value)?.value;
 }
 
 function normalizeSelectedPhotoUrl(value: string) {
@@ -673,7 +687,7 @@ function handleSelectedPhotoDiscoveryProgress(event: {
   if (event.normalizedTitle) {
     selectedPhotoTitle.value = pickMoreCompleteTitle(selectedPhotoTitle.value, event.normalizedTitle);
     try {
-      appStore.upsertCreateTaskMoviePreview(getSelectedPhotoSubjectUrl(normalizeSelectedPhotoUrl(selectedPhotoLink.value)), {
+      upsertCreateTaskMoviePreview(getSelectedPhotoSubjectUrl(normalizeSelectedPhotoUrl(selectedPhotoLink.value)), {
         title: selectedPhotoTitle.value,
       });
     } catch {
@@ -718,7 +732,7 @@ function applySelectedPhotoPreview(preview: { title?: string; coverUrl?: string;
 
 async function resolveSelectedPhotoPreview(detailUrl: string) {
   const subjectUrl = getSelectedPhotoSubjectUrl(detailUrl);
-  const cachedPreview = appStore.getCreateTaskMoviePreview(subjectUrl);
+  const cachedPreview = getCreateTaskMoviePreview(subjectUrl);
   if (cachedPreview && isCurrentSelectedPhotoSubject(subjectUrl)) {
     selectedPhotoPreviewSubjectUrl.value = subjectUrl;
     applySelectedPhotoPreview(cachedPreview);
@@ -728,7 +742,7 @@ async function resolveSelectedPhotoPreview(detailUrl: string) {
   try {
     const preview = await runtimeBridge.resolveDoubanMoviePreview(subjectUrl);
     if (!preview) return;
-    appStore.upsertCreateTaskMoviePreview(subjectUrl, preview);
+    upsertCreateTaskMoviePreview(subjectUrl, preview);
     if (getSelectedPhotoSubjectUrl(normalizeSelectedPhotoUrl(selectedPhotoLink.value)) !== subjectUrl) return;
     selectedPhotoPreviewSubjectUrl.value = subjectUrl;
     applySelectedPhotoPreview(preview);
@@ -847,7 +861,7 @@ async function loadNextSelectedPhotoBatch() {
     });
     if (stoppedSelectedDiscoveryTaskIds.has(taskId) || selectedDiscoveryTaskId.value !== taskId) return;
     selectedPhotoTitle.value = pickMoreCompleteTitle(selectedPhotoTitle.value, discovery.normalizedTitle);
-    appStore.upsertCreateTaskMoviePreview(subjectUrl, { title: selectedPhotoTitle.value });
+    upsertCreateTaskMoviePreview(subjectUrl, { title: selectedPhotoTitle.value });
     mergeSelectedDiscoveredPhotos(discovery.images);
 
     // 如果解析完成，立即显示剩余的待处理图片
@@ -988,7 +1002,7 @@ async function prepareSelectedPhotoDownload() {
     return false;
   }
 
-  const duplicateTasks = appStore.findDuplicateTasksForDrafts(drafts);
+  const duplicateTasks = findDuplicateTasksForDrafts(drafts);
   if (duplicateTasks.length === 0) {
     clearAlert();
     void stopSelectedPhotoDiscovery(true);
@@ -1103,7 +1117,7 @@ async function prepareSubmit() {
     return false;
   }
 
-  const duplicateTasks = appStore.findDuplicateTasksForDrafts(drafts);
+  const duplicateTasks = findDuplicateTasksForDrafts(drafts);
   if (duplicateTasks.length === 0) {
     clearAlert();
     emit("submit", drafts);

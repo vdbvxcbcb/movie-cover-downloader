@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 桌面端主框架：侧边栏、顶栏、弹窗和页面内容在这里组合。
 import { computed, watch, shallowRef } from "vue";
+import { storeToRefs } from "pinia";
 import { RouterView, useRoute } from "vue-router";
 import AppSidebar from "../components/chrome/AppSidebar.vue";
 import AppTopbar from "../components/chrome/AppTopbar.vue";
@@ -12,11 +13,45 @@ import CustomCropModal from "../components/queue/CustomCropModal.vue";
 import ImageProcessModal from "../components/queue/ImageProcessModal.vue";
 import SearchMovieModal from "../components/queue/SearchMovieModal.vue";
 import { useAppStore } from "../stores/app";
+import { useUI } from "../stores/ui";
 import type { CookieDraft, TaskDraft, TopAction } from "../types/app";
 
 const route = useRoute();
 const appStore = useAppStore();
+const uiStore = useUI();
 const noticeRevision = shallowRef(0);
+
+const {
+  notice,
+  pendingActionIds,
+  createTaskOpen,
+  createTaskDetailUrls,
+  selectedPhotoDownloadSeed,
+  importCookieOpen,
+  searchMovieOpen,
+  customCropOpen,
+  customCropOutputRootDir,
+  imageProcessOpen,
+  imageProcessOutputRootDir,
+  expiredCookiePromptOpen,
+  expiredCookieCount,
+  expiredCookieExpiresAt,
+} = storeToRefs(uiStore);
+
+const {
+  clearNotice,
+  closeCreateTask,
+  closeImportCookie,
+  closeSearchMovie,
+  closeCustomCrop,
+  closeImageProcess,
+  closeExpiredCookiePrompt,
+  openLoginFromExpiredPrompt,
+  syncCreateTaskDetailUrls,
+  syncImageProcessOutputRootDir,
+} = uiStore;
+
+const { triggerAction, createTasks, importCookie, startDoubanLoginImport } = appStore;
 
 // 根据当前路由 meta 计算页面标题、副标题和顶栏操作按钮。
 const pageMeta = computed(() => {
@@ -37,32 +72,29 @@ const pageMeta = computed(() => {
 
 // 顶栏按钮统一入口：不同 actionId 会打开对应弹窗或交给 store 处理。
 function handleAction(actionId: string) {
-  void appStore.triggerAction(actionId);
+  void triggerAction(actionId);
 }
 
 // 新增链接任务弹窗提交后，把校验完成的草稿交给队列 store 创建任务。
 function handleCreateTask(drafts: TaskDraft[], replacementTaskIds?: string[]) {
-  void appStore.createTasks(drafts, { replacementTaskIds });
+  void createTasks(drafts, { replacementTaskIds });
 }
 
 // 手动 Cookie 导入弹窗提交后，交给 store 保存 Cookie 并写日志。
 function handleImportCookieManual(draft: CookieDraft) {
-  void appStore.importCookie(draft);
+  void importCookie(draft);
 }
 
 // 自动登录导入入口：打开豆瓣登录窗口并等待 Cookie 可用。
 function handleStartLoginImport() {
-  void appStore.startDoubanLoginImport();
+  void startDoubanLoginImport();
 }
 
-watch(
-  () => appStore.notice,
-  (value) => {
-    if (value) {
-      noticeRevision.value += 1;
-    }
-  },
-);
+watch(notice, (value) => {
+  if (value) {
+    noticeRevision.value += 1;
+  }
+});
 </script>
 
 <template>
@@ -75,7 +107,7 @@ watch(
         :title="pageMeta.title"
         :description="pageMeta.description"
         :actions="pageMeta.actions"
-        :pending-action-ids="appStore.pendingActionIds"
+        :pending-action-ids="pendingActionIds"
         @action="handleAction"
       />
 
@@ -84,53 +116,53 @@ watch(
       </section>
 
       <ToastNotice
-        v-if="appStore.notice"
+        v-if="notice"
         :key="noticeRevision"
-        :message="appStore.notice.message"
-        :tone="appStore.notice.tone"
-        @close="appStore.clearNotice"
+        :message="notice.message"
+        :tone="notice.tone"
+        @close="clearNotice"
       />
     </main>
   </div>
 
   <CreateTaskModal
-    v-if="appStore.createTaskOpen"
-    :detail-urls="appStore.createTaskDetailUrls"
-    :selected-photo-seed="appStore.selectedPhotoDownloadSeed"
-    @close="appStore.closeCreateTask"
+    v-if="createTaskOpen"
+    :detail-urls="createTaskDetailUrls"
+    :selected-photo-seed="selectedPhotoDownloadSeed"
+    @close="closeCreateTask"
     @submit="handleCreateTask"
-    @update-detail-urls="appStore.syncCreateTaskDetailUrls"
+    @update-detail-urls="syncCreateTaskDetailUrls"
   />
 
 
   <SearchMovieModal
-    v-if="appStore.searchMovieOpen"
-    @close="appStore.closeSearchMovie"
+    v-if="searchMovieOpen"
+    @close="closeSearchMovie"
   />
 
   <CustomCropModal
-    v-if="appStore.customCropOpen"
-    :output-root-dir="appStore.customCropOutputRootDir"
-    @close="appStore.closeCustomCrop"
+    v-if="customCropOpen"
+    :output-root-dir="customCropOutputRootDir"
+    @close="closeCustomCrop"
   />
   <ImageProcessModal
-    v-if="appStore.imageProcessOpen"
-    :output-root-dir="appStore.imageProcessOutputRootDir"
-    @close="appStore.closeImageProcess"
-    @update-output-root-dir="appStore.syncImageProcessOutputRootDir"
+    v-if="imageProcessOpen"
+    :output-root-dir="imageProcessOutputRootDir"
+    @close="closeImageProcess"
+    @update-output-root-dir="syncImageProcessOutputRootDir"
   />
   <ImportCookieModal
-    v-if="appStore.importCookieOpen"
-    @close="appStore.closeImportCookie"
+    v-if="importCookieOpen"
+    @close="closeImportCookie"
     @submit-manual="handleImportCookieManual"
     @start-login-import="handleStartLoginImport"
   />
 
   <ExpiredCookiePromptModal
-    v-if="appStore.expiredCookiePromptOpen"
-    :count="appStore.expiredCookieCount"
-    :latest-expires-at="appStore.expiredCookieExpiresAt"
-    @close="appStore.closeExpiredCookiePrompt"
-    @open-login="appStore.openLoginFromExpiredPrompt"
+    v-if="expiredCookiePromptOpen"
+    :count="expiredCookieCount"
+    :latest-expires-at="expiredCookieExpiresAt"
+    @close="closeExpiredCookiePrompt"
+    @open-login="openLoginFromExpiredPrompt"
   />
 </template>

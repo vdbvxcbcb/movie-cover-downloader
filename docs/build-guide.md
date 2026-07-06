@@ -21,7 +21,8 @@
 |------|----------|------|
 | **Rust** | 最新稳定版 | Tauri 桌面应用编译 |
 | **Node.js** | v18+ | 前端和 sidecar 开发 |
-| **pnpm** | v8+ | 依赖管理 |
+| **pnpm** | v10+ | workspace 依赖管理 |
+| **npm** | 随 Node.js 安装 | sidecar bundle 生产依赖打包 |
 | **Visual Studio Build Tools** | 2022/2026 | C++ 编译器（MSVC），Rust 编译需要 |
 | **WebView2 Runtime** | 最新版 | Tauri 桌面应用运行时（通常系统已有） |
 | **Git** | 任意版本 | 版本控制 |
@@ -101,7 +102,8 @@ iwr https://get.pnpm.io/install.ps1 -useb | iex
 
 验证安装：
 ```powershell
-pnpm --version  # 应该显示 v8 或更高版本
+pnpm --version  # 建议显示 v10 或更高版本
+npm --version   # sidecar bundle 会用 npm 安装生产依赖
 ```
 
 ### 5. 克隆项目并安装依赖
@@ -164,8 +166,8 @@ All checks passed! Ready to build.
 **该脚本会自动执行以下步骤**：
 
 1. **设置 MSVC 环境**
-   - 自动查找 Visual Studio 安装路径
-   - 调用 `vcvarsall.bat` 初始化 x64 编译环境
+   - 使用脚本中配置的 Visual Studio Build Tools 路径
+   - 调用 `vcvars64.bat` 初始化 x64 编译环境
    - 将 MSVC 编译器（cl.exe）和链接器添加到当前会话的 PATH
 
 2. **构建 Sidecar**
@@ -180,8 +182,8 @@ All checks passed! Ready to build.
    pnpm run prepare:sidecar-bundle
    ```
    - 复制 `package.json` 和 `dist/` 到 Tauri resources
-   - 创建 `.npmrc` 配置 `node-linker=hoisted`（关键：避免符号链接）
-   - 使用 hoisted 模式安装生产依赖（所有依赖变成真实文件）
+   - 在临时 resources 目录用 `npm install --omit=dev` 安装生产依赖
+   - 使用 npm 的普通 `node_modules` 目录结构，避免 pnpm junction/symlink 进入安装包
    - 复制 Node.js 运行时（node.exe）
    - 验证 sharp 库安装为真实目录（不是符号链接）
    - 验证 sharp 原生二进制（sharp-win32-x64.node）存在
@@ -199,9 +201,9 @@ All checks passed! Ready to build.
 ```
 apps/desktop/src-tauri/target/release/bundle/
 ├── msi/
-│   └── Movie Cover Downloader_0.1.0_x64_en-US.msi     (~226 MB)
+│   └── Movie Cover Downloader_0.1.0_x64_en-US.msi     (~239 MB)
 └── nsis/
-    └── Movie Cover Downloader_0.1.0_x64-setup.exe     (~226 MB)
+    └── Movie Cover Downloader_0.1.0_x64-setup.exe     (~228 MB)
 ```
 
 **构建时间**：首次完整构建约 5-10 分钟（取决于机器性能）
@@ -229,7 +231,7 @@ pnpm install
 # 4. 构建 sidecar
 pnpm run build:sidecar
 
-# 5. 打包 sidecar bundle（使用 hoisted 模式，避免符号链接）
+# 5. 打包 sidecar bundle（使用 npm 安装生产依赖，避免符号链接）
 pnpm run prepare:sidecar-bundle
 
 # 6. 构建桌面应用和安装包
@@ -249,7 +251,6 @@ apps/desktop/src-tauri/resources/sidecar/ (~108 MB)
 ├── dist/              - TypeScript 编译后的代码
 │   └── index.js       - 入口文件
 ├── package.json       - 依赖清单
-├── .npmrc             - pnpm 配置（关键：node-linker=hoisted）
 └── node_modules/      (21 MB) - 生产依赖（真实文件，无符号链接）
     ├── sharp/
     │   └── lib/
@@ -260,9 +261,9 @@ apps/desktop/src-tauri/resources/sidecar/ (~108 MB)
     └── (其他依赖...)
 ```
 
-### ⚠️ 关键：为什么必须使用 hoisted 模式
+### ⚠️ 关键：为什么必须使用真实目录安装
 
-pnpm 默认使用**符号链接（symlink）**管理依赖：
+pnpm 默认使用**符号链接 / junction**管理依赖：
 ```
 node_modules/sharp -> /d/claude blog/new/.../node_modules/.pnpm/sharp@0.34.5/...
 ```
@@ -272,13 +273,12 @@ node_modules/sharp -> /d/claude blog/new/.../node_modules/.pnpm/sharp@0.34.5/...
 Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'sharp'
 ```
 
-**解决方案**：`prepare-sidecar-bundle.ps1` 创建 `.npmrc` 文件配置 hoisted 模式：
-```ini
-node-linker=hoisted
-shamefully-hoist=true
+**解决方案**：`prepare-sidecar-bundle.ps1` 只在临时 `resources/sidecar` 目录中使用 npm 安装生产依赖：
+```powershell
+npm install --omit=dev --package-lock=false --ignore-scripts=false --no-audit --no-fund
 ```
 
-这样安装的依赖都是**真实文件和目录**，可以正常打包到安装包中。
+这样安装的依赖都是**真实文件和目录**，可以正常打包到安装包中。项目源码依赖仍然使用 pnpm 管理。
 
 详细技术说明：[sidecar-symlink-fix.md](./sidecar-symlink-fix.md)
 
@@ -289,9 +289,9 @@ shamefully-hoist=true
 $sharp = Get-Item "apps\desktop\src-tauri\resources\sidecar\node_modules\sharp"
 if ($sharp.LinkType) { "❌ 符号链接 - 构建失败！" } else { "✅ 真实目录 - 正确" }
 
-# 检查符号链接数量（应该为 0）
-cd apps\desktop\src-tauri\resources\sidecar
-find node_modules -maxdepth 2 -type l | wc -l
+# 检查符号链接 / junction 数量（应该为 0）
+$sidecar = "apps\desktop\src-tauri\resources\sidecar"
+@(Get-ChildItem -LiteralPath $sidecar -Recurse -Force | Where-Object { $_.LinkType }).Count
 
 # 测试 Node.js 能否加载 sharp
 .\node.exe -e "require('sharp'); console.log('Sharp loaded successfully');"
@@ -390,17 +390,18 @@ imported from D:\Movie Cover Downloader\sidecar\dist\services\downloader.js
 **原因**：sidecar bundle 包含了符号链接
 
 **解决**：
-1. 确保 `prepare-sidecar-bundle.ps1` 使用了 hoisted 模式
+1. 确保 `prepare-sidecar-bundle.ps1` 使用 npm 在临时 bundle 目录安装生产依赖
 2. 验证 sharp 是真实目录（参考上文验证命令）
 3. 重新构建安装包
 
-### 问题 5：`pnpm install` 超时或下载缓慢
+### 问题 5：依赖安装超时或下载缓慢
 
-**症状**：依赖下载非常慢或超时
+**症状**：`pnpm install` 或 sidecar bundle 阶段的 `npm install` 下载非常慢或超时
 
 **解决**：配置国内镜像源
 ```powershell
 pnpm config set registry https://registry.npmmirror.com
+npm config set registry https://registry.npmmirror.com
 ```
 
 ### 问题 6：`WebView2 not found`
@@ -427,8 +428,9 @@ pnpm config set registry https://registry.npmmirror.com
 
 - [ ] Sidecar bundle 中的 sharp 是真实目录（不是符号链接）
 - [ ] Sharp 原生二进制存在且大小为 423 KB
-- [ ] node_modules 中符号链接数量为 0
-- [ ] 安装包文件大小约 226 MB（偏差 ±5 MB 正常）
+- [ ] `resources/sidecar` 中符号链接 / junction 数量为 0
+- [ ] NSIS 安装包约 228 MB，MSI 安装包约 239 MB（随依赖版本小幅波动正常）
+- [ ] 记录安装包 `LastWriteTime` 和 SHA256，确认是本次新产物
 
 ### 功能测试
 
