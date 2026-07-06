@@ -13,15 +13,29 @@
 
 各链路中提到的 `lib.rs` 命令现在位于对应的 commands 模块文件中。
 
+## 前端 Store 拆分结构
+
+最近的 Store 重构后，`apps/desktop/src/stores/app.ts` 不再承载全部领域逻辑，而是主协调层：
+
+- `app.ts`：启动恢复、持久化调度、组合子 store 与任务动作。
+- `taskQueue.ts`：任务队列、运行状态、重复任务检测、队列配置。
+- `taskActions.ts`：创建、暂停、继续、重试、删除、清空、打开输出目录等任务动作。
+- `cookies.ts`：Cookie 导入、可用性、冷却、失效。
+- `logs.ts`：运行日志。
+- `ui.ts`：弹窗开关、输出目录、全局提示。
+- `app-helpers.ts`：状态快照、任务恢复、持久化错误提示。
+
+排查 store 问题时先判断领域，再打开对应文件；不要默认把逻辑加回 `app.ts`。
+
 ## 搜索影视链路
 
 ```mermaid
 sequenceDiagram
   participant User as 用户
   participant Search as SearchMovieModal.vue
-  participant Store as app.ts
+  participant Store as app.ts + cookies.ts
   participant Bridge as runtime-bridge.ts
-  participant Tauri as lib.rs
+  participant Tauri as commands/task.rs
   participant Sidecar as sidecar index.ts
   participant SearchSvc as douban-search.ts
   participant Douban as 豆瓣搜索页
@@ -56,9 +70,9 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   participant Modal as CreateTaskModal.vue
-  participant Store as app.ts
+  participant Store as app.ts + taskQueue/taskActions
   participant Bridge as runtime-bridge.ts
-  participant Tauri as lib.rs
+  participant Tauri as commands/task.rs
   participant Sidecar as sidecar index.ts
   participant Scheduler as scheduler.ts
   participant Matcher as matcher.ts
@@ -86,7 +100,9 @@ sequenceDiagram
 关键文件：
 
 - `apps/desktop/src/components/queue/CreateTaskModal.vue`：自动下载表单和 draft 校验。
-- `apps/desktop/src/stores/app.ts`：`createTasks`、`drainQueue`、`runNativeTask`、`buildCompletedTask`。
+- `apps/desktop/src/stores/app.ts`：组合子 store、启动恢复、持久化调度。
+- `apps/desktop/src/stores/taskQueue.ts`：队列状态、调度运行状态、重复任务检测。
+- `apps/desktop/src/stores/taskActions.ts`：`createTasks`、`retryTask`、`pauseTask`、`resumeTask`、`deleteTask`、`clearQueueTasks` 等动作。
 - `apps/desktop/src-tauri/src/commands/task.rs`：`run_download_task` 命令。
 - `apps/desktop/src-tauri/src/sidecar/download.rs`：`run_download_task_blocking` 实现。
 - `apps/desktop/src-tauri/src/sidecar/parser.rs`：stdout/stderr 解析。
@@ -104,7 +120,7 @@ sequenceDiagram
   participant Modal as CreateTaskModal.vue
   participant Grid as SelectedPhotoGrid.vue
   participant Bridge as runtime-bridge.ts
-  participant Tauri as lib.rs
+  participant Tauri as commands/task.rs
   participant Sidecar as sidecar index.ts
   participant Matcher as matcher.ts
   participant DoubanAdapter as douban.ts
@@ -144,9 +160,9 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   participant Modal as CreateTaskModal.vue
-  participant Store as app.ts
+  participant Store as app.ts + taskQueue/taskActions
   participant Bridge as runtime-bridge.ts
-  participant Tauri as lib.rs
+  participant Tauri as commands/task.rs
   participant Sidecar as sidecar index.ts
   participant Downloader as downloader.ts
 
@@ -165,14 +181,14 @@ sequenceDiagram
   Bridge-->>Store: 完成任务并持久化
 ```
 
-重复任务检测在 `app.ts` 的 `findDuplicateTasksForDrafts` 和 `createTasks` 附近；覆盖确认 UI 在 `CreateTaskModal.vue`。
+重复任务检测在 `taskQueue.ts` 的 `findDuplicateTasksForDrafts` 附近；创建/替换任务动作在 `taskActions.ts`；覆盖确认 UI 在 `CreateTaskModal.vue`。
 
 ## 队列和任务控制链路
 
 ```mermaid
 flowchart LR
-  Store["app.ts\npause/resume/delete/clear"] --> Bridge["runtime-bridge.ts"]
-  Bridge --> Tauri["lib.rs\npause_download_task / resume_download_task / clear_download_tasks"]
+  Store["taskActions.ts + taskQueue.ts\npause/resume/delete/clear"] --> Bridge["runtime-bridge.ts"]
+  Bridge --> Tauri["commands/task.rs\npause_download_task / resume_download_task / clear_download_tasks"]
   Tauri --> Control["控制文件\npause / resume / cancel"]
   Tauri --> Process["sidecar 进程 pid"]
   Sidecar["task-control.ts\nFileTaskControl"] --> Control
@@ -189,10 +205,10 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  Import["ImportCookieModal.vue"] --> Store["app.ts\nimportCookie / startDoubanLoginImport"]
+  Import["ImportCookieModal.vue"] --> Store["app.ts + cookies.ts\nimportCookie / startDoubanLoginImport"]
   Store --> Bridge["runtime-bridge.ts"]
   Bridge --> Login["Tauri WebviewWindow\n豆瓣登录窗口"]
-  Bridge --> Tauri["lib.rs\ncheck_login_window_cookie_status"]
+  Bridge --> Tauri["commands/login.rs\ncheck_login_window_cookie_status"]
   Store --> SQLite["SQLite cookies 表"]
   Store --> Task["任务运行时挑选可用 Cookie"]
   Task --> TauriRun["run_* Tauri command"]
@@ -212,9 +228,9 @@ flowchart TB
 
 ```mermaid
 sequenceDiagram
-  participant Store as app.ts
+  participant Store as app.ts + 子 store
   participant Bridge as runtime-bridge.ts
-  participant Tauri as lib.rs
+  participant Tauri as commands/state.rs + sqlite/state.rs
   participant SQLite as runtime-state.sqlite
 
   Store->>Bridge: saveState(AppSeedState)
@@ -231,8 +247,11 @@ sequenceDiagram
 
 - `apps/desktop/src/types/app.ts`
 - `apps/desktop/src/stores/app.ts`
-- `apps/desktop/src-tauri/src/lib.rs`
-- `apps/desktop/src/test/stores/app.test.ts`
+- `apps/desktop/src/stores/app-helpers.ts`
+- `apps/desktop/src/stores/taskQueue.ts`、`cookies.ts`、`logs.ts`、`ui.ts` 中相关字段
+- `apps/desktop/src-tauri/src/sqlite/state.rs`
+- `apps/desktop/src/stores/__tests__/app.spec.ts`
+- 对应子 store 的 `apps/desktop/src/stores/__tests__/*.spec.ts`
 - `apps/desktop/src-tauri/src/lib.rs` 中 SQLite 相关 Rust 测试
 
 ## 图片处理和自定义裁剪链路
@@ -241,7 +260,7 @@ sequenceDiagram
 flowchart TB
   ImageProcess["ImageProcessModal.vue\n拼版 / 标注 / 导出"] --> Bridge["runtime-bridge.ts"]
   CustomCrop["CustomCropModal.vue\n上传 / 拖拽 / 裁剪"] --> Bridge
-  Bridge --> Tauri["lib.rs"]
+  Bridge --> Tauri["commands/image.rs"]
   Tauri --> ReadDropped["read_dropped_image_file"]
   Tauri --> ReadLocal["read_local_image_file"]
   Tauri --> SaveCustom["save_custom_cropped_image"]
@@ -255,3 +274,23 @@ flowchart TB
 - 自定义裁剪的 Tauri 拖拽读取必须走 `readDroppedImageFile(filePath)`，不绑定输出根目录。
 - `readLocalImageFile(filePath, outputRootDir)` 仍用于需要输出根目录边界校验的读取场景。
 - 保存裁剪结果固定写入输出根目录下的 `custom-crop-photo`。
+
+## 打包和 sidecar resources 链路
+
+```mermaid
+flowchart TB
+  Build["scripts/build-with-msvc.ps1 或 pnpm build:desktop"] --> DesktopPrebuild["apps/desktop prebuild"]
+  DesktopPrebuild --> SidecarBuild["pnpm --dir apps/sidecar build"]
+  DesktopPrebuild --> Prepare["scripts/prepare-sidecar-bundle.ps1"]
+  Prepare --> CopyDist["复制 sidecar package.json 与 dist"]
+  Prepare --> NpmInstall["resources/sidecar 内 npm install --omit=dev"]
+  Prepare --> CopyNode["复制 node.exe"]
+  Prepare --> VerifySharp["验证 sharp 真实目录与 native .node"]
+  VerifySharp --> TauriBundle["tauri build / NSIS bundle"]
+```
+
+关键点：
+
+- `prepare-sidecar-bundle.ps1` 必须在 `apps/desktop/src-tauri/resources/sidecar` 内安装生产依赖，确保 `node_modules` 是真实目录。
+- 不要直接复制 pnpm workspace 的 `node_modules`，否则 pnpm junction/symlink 可能被打进安装包，导致用户机器上找不到依赖。
+- 打包后检查 `resources/sidecar` 中链接数量为 0，并用打包资源里的 `node.exe -e "require('sharp')"` 验证 sharp 可加载。

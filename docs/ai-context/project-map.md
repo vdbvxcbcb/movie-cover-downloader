@@ -21,6 +21,7 @@
 - 桌面能力层：Tauri 2、Rust、SQLite、本地文件系统、sidecar 进程管理。
 - 抓取执行层：Node.js sidecar、TypeScript、豆瓣适配器、sharp 图片处理。
 - 当前核心对象：搜索影视、自动下载、选图下载、任务队列、Cookie、日志、图片处理、自定义裁剪。
+- 最低支持系统：Windows 10；Windows 7 / 8 / 8.1 不受支持。
 
 不要把早期规划文档里的 ImpAwards、Playwright 抓取、托盘、自动更新、代理等能力当成已实现功能。
 
@@ -30,9 +31,9 @@
 flowchart TB
   User["用户操作"]
   UI["Vue UI\n弹窗 / 页面 / 组件"]
-  Store["Pinia store\napps/desktop/src/stores/app.ts"]
+  Store["Pinia stores\napp.ts 协调 taskQueue/cookies/logs/ui"]
   Bridge["runtimeBridge\napps/desktop/src/lib/runtime-bridge.ts"]
-  Tauri["Tauri commands\napps/desktop/src-tauri/src/lib.rs"]
+  Tauri["Tauri commands\ncommands/* + lib.rs 注册"]
   SQLite["SQLite 状态库\nruntime-state.sqlite"]
   FS["本地文件系统\n输出目录 / 控制文件 / 图片"]
   Sidecar["Node sidecar\napps/sidecar/src/index.ts"]
@@ -68,7 +69,15 @@ flowchart TB
 | Tauri/Rust | `apps/desktop/src-tauri/src` (模块化) | SQLite、文件系统边界校验、sidecar 启动、stdout/stderr 解析、事件转发 | 在外部输入上 panic；把 Cookie 写进命令行或日志 |
 | sidecar | `apps/sidecar/src` | 豆瓣搜索/解析/下载、断点续传、sharp 转换裁剪、结构化事件输出 | 直接操作前端状态；调用 Tauri API |
 
-**Rust 模块化架构**（2026年6月重构）：
+**前端 Store 拆分**（最近重构）：
+
+- `stores/app.ts` 只做主协调：启动恢复、持久化调度、组合子 store 与任务动作。
+- `stores/taskQueue.ts` 管理任务队列、运行状态、重复任务检测和队列配置。
+- `stores/taskActions.ts` 承载创建、暂停、继续、重试、删除、清空、打开目录等任务动作。
+- `stores/cookies.ts`、`stores/logs.ts`、`stores/ui.ts` 分别管理 Cookie、日志和 UI 状态。
+- `stores/app-helpers.ts` 放快照、任务恢复、持久化错误提示等辅助函数。
+
+**Rust 模块化架构**（最近重构）：
 
 - **lib.rs** (857行) - Tauri 应用入口
 - **基础模块**: constants, types, utils, crypto, task_control
@@ -80,13 +89,13 @@ flowchart TB
 
 | 如果任务是 | 先读 | 通常还要读 |
 | --- | --- | --- |
-| 搜索影视结果、分页、选图下载入口 | [runtime-flows.md](./runtime-flows.md#搜索影视链路) | `SearchMovieModal.vue`、`runtime-bridge.ts`、`lib.rs`、`douban-search.ts` |
-| 添加下载任务、自动下载 | [runtime-flows.md](./runtime-flows.md#自动下载链路) | `CreateTaskModal.vue`、`app.ts`、`runtime-bridge.ts`、`scheduler.ts` |
+| 搜索影视结果、分页、选图下载入口 | [runtime-flows.md](./runtime-flows.md#搜索影视链路) | `SearchMovieModal.vue`、`runtime-bridge.ts`、`commands/task.rs`、`douban-search.ts` |
+| 添加下载任务、自动下载 | [runtime-flows.md](./runtime-flows.md#自动下载链路) | `CreateTaskModal.vue`、`taskActions.ts`、`taskQueue.ts`、`runtime-bridge.ts`、`scheduler.ts` |
 | 选图下载、滚动分页、框选、多选、预览 | [runtime-flows.md](./runtime-flows.md#选图发现链路) | `CreateTaskModal.vue`、`SelectedPhotoGrid.vue`、`SelectedPhotoPreviewModal.vue`、`douban.ts` |
-| 下载队列、暂停/继续/重试/删除 | [runtime-flows.md](./runtime-flows.md#队列和任务控制链路) | `app.ts`、`TaskTable.vue`、`queue-runtime.ts`、`task-control.ts`、`lib.rs` |
-| Cookie 导入、冷却、失效处理 | [runtime-flows.md](./runtime-flows.md#cookie-链路) | `ImportCookieModal.vue`、`app.ts`、`cookie-pool.ts`、`lib.rs` |
-| SQLite 持久化、状态迁移 | [runtime-flows.md](./runtime-flows.md#持久化链路) | `app.ts`、`types/app.ts`、`lib.rs`、相关 Rust 测试 |
-| 图片处理或自定义裁剪 | [runtime-flows.md](./runtime-flows.md#图片处理和自定义裁剪链路) | `ImageProcessModal.vue`、`CustomCropModal.vue`、`runtime-bridge.ts`、`lib.rs` |
+| 下载队列、暂停/继续/重试/删除 | [runtime-flows.md](./runtime-flows.md#队列和任务控制链路) | `taskQueue.ts`、`taskActions.ts`、`TaskTable.vue`、`task-control.ts`、`commands/task.rs` |
+| Cookie 导入、冷却、失效处理 | [runtime-flows.md](./runtime-flows.md#cookie-链路) | `ImportCookieModal.vue`、`cookies.ts`、`cookie-pool.ts`、`commands/login.rs`、`commands/task.rs` |
+| SQLite 持久化、状态迁移 | [runtime-flows.md](./runtime-flows.md#持久化链路) | `app.ts`、`app-helpers.ts`、`types/app.ts`、`sqlite/state.rs`、相关 Rust/Store 测试 |
+| 图片处理或自定义裁剪 | [runtime-flows.md](./runtime-flows.md#图片处理和自定义裁剪链路) | `ImageProcessModal.vue`、`CustomCropModal.vue`、`runtime-bridge.ts`、`commands/image.rs` |
 | 打包、sidecar resources、安装包 | [module-index.md](./module-index.md#构建和打包) | `package.json`、`apps/desktop/package.json`、`tauri.conf.json`、`scripts/prepare-sidecar-bundle.ps1` |
 
 ## 高风险边界
@@ -99,6 +108,7 @@ flowchart TB
 - 自定义裁剪拖拽本地图片必须走 `readDroppedImageFile(filePath)`，不能重新绑定输出根目录。
 - Cookie 不得进入命令行参数或日志。
 - 删除/清理本地目录必须走 Rust 边界校验。
+- 打包 sidecar resources 时不能直接复制 pnpm `node_modules` 的 symlink/junction；应保留 `prepare-sidecar-bundle.ps1` 里 npm 安装生产依赖的实体目录流程。
 
 ## 验证入口
 
@@ -113,4 +123,4 @@ cd apps/desktop/src-tauri
 cargo check
 ```
 
-文档-only 改动至少检查 Markdown 链接指向的本地文件或章节是否存在。
+文档-only 改动至少检查 Markdown 链接指向的本地文件或章节是否存在；涉及前端测试路径时，以 `src/**/__tests__/*.spec.ts` 为当前主要入口。

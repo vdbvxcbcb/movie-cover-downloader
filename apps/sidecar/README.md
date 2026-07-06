@@ -1,53 +1,71 @@
 # Sidecar Service
 
-`apps/sidecar` 是 Movie Cover Downloader 的真实抓取执行层。它以独立 Node.js 进程运行，由 Tauri 在执行下载任务时启动。sidecar 不直接操作前端状态，也不直接调用 Tauri API，而是通过 stdout 输出结构化 JSON，交给 Rust 命令层解析并转发给前端。
+`apps/sidecar` 是 Movie Cover Downloader 的 Node.js 抓取执行层。它由 Tauri/Rust 作为独立子进程启动，通过环境变量接收一次性命令和任务参数，通过 stdout 输出单行 JSON 事件，再由 Rust 解析并转发给前端。
+
+sidecar 不直接操作前端状态，也不调用 Tauri API。它只负责豆瓣搜索、标题/封面预览、图片发现、选中图片下载、自动下载、图片保存和进度上报。
 
 ## 职责概览
 
-sidecar 负责这些事情：
+- 读取 Tauri 注入的 `MCD_*` 环境变量，解析为一次性命令或下载任务。
+- 当前真实站点只支持豆瓣电影，链接来源限定在 `movie.douban.com` 和豆瓣图片域名。
+- 支持豆瓣影视搜索、豆瓣详情页标题/封面预览解析。
+- 支持剧照、海报、壁纸三类图片发现，包含分页/游标式批量发现。
+- 支持前端传入选中图片列表，只下载用户确认的图片。
+- 自动下载链路会解析详情页、分类页、图片页，并按数量限制或无限制模式生成下载列表。
+- 下载图片时支持 `.part` 断点续传、Range 请求、失败单图跳过、最终无保存则报错。
+- 使用 `sharp` 进行 JPG/PNG 输出、9:16 或 3:4 居中裁剪；原图模式会尽量保留原始 JPG/PNG 二进制。
+- 每保存一张图片后输出 `task-progress`，最终输出 `task-result`。
+- 读取任务控制文件，在安全点响应 `pause` / `cancel`。
 
-1. 从环境变量读取 Tauri 注入的单次下载任务。
-2. 根据任务链接识别站点来源，目前主要是豆瓣电影。
-3. 解析详情页标题和图片分类页。
-4. 发现剧照、海报或壁纸图片链接。
-5. 根据限制数量或无限制模式决定下载范围。
-6. 下载图片，支持断点续传。
-7. 按用户选择保存原图、9:16 或 3:4。
-8. 使用 `sharp` 进行图片裁剪和格式转换。
-9. 每保存一张图片后输出实时进度事件。
-10. 读取任务控制文件，响应暂停或取消。
-11. 返回最终任务结果给 Tauri。
+## 命令模式
+
+`src/index.ts` 根据 `MCD_COMMAND` 分派：
+
+| `MCD_COMMAND` | 用途 | 主要输出 |
+| --- | --- | --- |
+| 未设置 | 自动下载任务：发现图片并下载 | `task-progress`、`task-result` |
+| `douban-search` | 豆瓣影片搜索 | `douban-search-result` |
+| `douban-title` | 豆瓣详情页标题和封面预览 | `douban-title-result` |
+| `douban-photos-discover` | 选图下载的分页/游标发现 | `douban-photos-discover-progress`、`douban-photos-discover-result` |
+| `douban-selected-download` | 下载前端传入的选中图片 | `task-progress`、`task-result` |
+
+没有 `MCD_BOOTSTRAP_TASK_URL` 且不是特殊命令时，sidecar 会启动后记录空闲日志并退出。
 
 ## 目录结构
 
 ```text
 apps/sidecar/
-├─ package.json              # sidecar 独立包配置、构建脚本和依赖
+├─ package.json              # sidecar 包配置、构建/测试/类型检查脚本
 ├─ tsconfig.json             # TypeScript 编译配置
 ├─ README.md                 # 当前说明文档
-├─ dist/                     # TypeScript 编译后的 JS 产物，由 build 生成
-├─ node_modules/             # sidecar 依赖，开发或构建时安装
+├─ dist/                     # tsc 构建产物，打包前由脚本复制到 Tauri resources
 └─ src/
-   ├─ index.ts               # sidecar 入口：读取环境变量、组装服务、执行 bootstrap 任务
-   ├─ adapters/              # 站点适配器层
-   │  ├─ base.ts             # 通用请求、HTML 解析、URL 工具和适配器接口
-   │  ├─ douban.ts           # 豆瓣适配器：解析详情页、分类页和图片链接
-   │  └─ douban.test.ts      # 豆瓣适配器单元测试
-   ├─ services/              # 业务服务层
-   │  ├─ cookie-pool.ts      # Cookie 池：选择可用 Cookie、冷却异常 Cookie
-   │  ├─ downloader.ts       # 下载服务：断点续传、图片保存、裁剪、格式转换、进度上报
-   │  ├─ downloader.test.ts  # 下载服务单元测试
-   │  ├─ matcher.ts          # 匹配服务：为任务选择合适站点适配器
-   │  ├─ resume-store.ts     # 断点续传元数据和 .part 临时文件管理
-   │  ├─ scheduler.ts        # 调度器：串联发现、下载、Cookie 和任务控制
-   │  └─ task-control.ts     # 任务控制：读取 pause/resume/cancel 文件信号
-   ├─ shared/                # 共享契约和基础设施
-   │  ├─ contracts.ts        # 任务、发现结果、下载结果、日志和进度事件类型
-   │  ├─ logger.ts           # 输出 NDJSON 日志和 task-progress 事件
-   │  └─ runtime-config.ts   # 从环境变量生成运行配置
-   └─ utils/                 # 小型工具函数
-      ├─ output-folder.ts    # 输出目录和图片文件名生成
-      ├─ source-detector.ts  # 来源识别和豆瓣图片页 URL 构造
+   ├─ index.ts               # 命令分派入口，读取环境变量并组装服务
+   ├─ adapters/
+   │  ├─ base.ts             # 适配器接口、请求头、HTML 请求和通用解析工具
+   │  └─ douban.ts           # 豆瓣详情页/分类页/分页图片解析
+   ├─ services/
+   │  ├─ cookie-pool.ts      # 从运行配置读取豆瓣 Cookie，并提供简单冷却能力
+   │  ├─ douban-search.ts    # 豆瓣搜索页解析，返回分页搜索结果和封面 data URL
+   │  ├─ douban-title.ts     # 豆瓣详情页标题和封面预览解析
+   │  ├─ downloader.ts       # 图片下载、续传、sharp 转换/裁剪、进度上报
+   │  ├─ matcher.ts          # 根据任务选择适配器，当前只注册 DoubanAdapter
+   │  ├─ resume-store.ts     # `.mcd-resume` 续传临时文件和 metadata
+   │  ├─ scheduler.ts        # 自动下载任务编排：发现 -> 下载
+   │  └─ task-control.ts     # 读取 pause/resume/cancel 控制文件
+   ├─ shared/
+   │  ├─ contracts.ts        # sidecar 输入、输出、发现、下载和事件契约
+   │  ├─ logger.ts           # stdout NDJSON 日志和 task-progress 输出
+   │  └─ runtime-config.ts   # 从环境变量创建运行配置
+   ├─ test/
+   │  ├─ adapters/
+   │  │  └─ douban.test.ts
+   │  └─ services/
+   │     ├─ douban-search.test.ts
+   │     └─ downloader.test.ts
+   └─ utils/
+      ├─ output-folder.ts    # 输出目录、选图输出目录和文件名生成
+      ├─ source-detector.ts  # 豆瓣 subject 链接规范化和分类页 URL 构造
       └─ wait-for.ts         # Promise 等待工具
 ```
 
@@ -55,88 +73,78 @@ apps/sidecar/
 
 ### `src/index.ts`
 
-sidecar 的进程入口。它负责：
+sidecar 入口。它读取环境变量，解析输出格式、豆瓣图片分类、数量模式、图片比例、分页 cursor 和选中图片 payload，然后按 `MCD_COMMAND` 执行对应流程。
 
-- 读取 `MCD_BOOTSTRAP_*`、`MCD_DOUBAN_*`、`MCD_IMAGE_*` 等环境变量；
-- 把环境变量解析成 `SidecarTask`；
-- 创建 `RuntimeConfig`、`CookiePoolService`、`MatcherService`、`DownloaderService`、`FileTaskControl` 和 `SchedulerService`；
-- 监听 `SIGINT` / `SIGTERM`，在进程退出前调用调度器 shutdown；
-- 执行一次 bootstrap 任务；
-- 成功时输出 `{ kind: "task-result", payload: ... }`；
-- 暂停或取消时输出 `{ kind: "task-paused" }` 或 `{ kind: "task-cancelled" }`。
+自动下载模式会创建 `RuntimeConfig`、`CookiePoolService`、`MatcherService`、`DownloaderService`、`FileTaskControl` 和 `SchedulerService`。搜索、标题解析、选图发现和选中下载模式不会走完整调度器，只运行各自需要的最小服务。
 
-这个入口设计成“一次进程执行一个任务”，这样 Tauri 可以用任务 id、控制文件和 pid 文件精确管理每个下载任务。
+选中图片下载优先从 `MCD_SELECTED_IMAGES_FILE` 读取 JSON，避免大 payload 放进命令行或环境变量；每张图片 URL 会校验为豆瓣图片域名。
 
 ### `src/adapters/base.ts`
 
-站点适配器的基础工具。它提供：
+定义 `SourceAdapter` 和 `AdapterContext`，并集中处理：
 
-- `SourceAdapter` 接口，约束每个站点适配器必须实现 `canHandle` 和 `discover`；
-- `AdapterContext`，向适配器传入运行配置、日志器、Cookie 和请求间隔状态；
-- `buildHeaders`，统一构造 User-Agent、语言和 Cookie 请求头；
-- `fetchText`，统一执行 HTML 请求、请求间隔、状态码检查和响应读取；
-- `extractTitleFromHtml`、`stripTags`、`decodeHtml` 等 HTML 文本工具；
-- `dedupeUrls` 和 `resolveRelativeUrl` 等 URL 工具。
+- User-Agent、Accept-Language、Cookie 等请求头。
+- HTML 请求超时、重定向和文本读取。
+- 请求间隔下限。
+- 标题、HTML 文本、实体解码、URL 去重和相对链接解析。
 
 ### `src/adapters/douban.ts`
 
-豆瓣站点适配器。它负责：
+豆瓣适配器。它负责：
 
-- 判断任务是否属于豆瓣电影链接；
-- 抓取豆瓣详情页并提取片名；
-- 根据用户选择的 `still`、`poster`、`wallpaper` 构造图片分类页 URL；
-- 识别豆瓣登录页、风控页、空分类页和结构异常页；
-- 解析分类页中的图片链接；
-- 把缩略图 URL 尽量升级为更清晰的大图 URL；
-- 按任务数量限制截断图片列表；
-- 生成最终输出目录。
+- 只处理 `movie.douban.com/subject/` 链接。
+- 将 `still` / `poster` / `wallpaper` 映射到豆瓣图片分类页。
+- 解析详情页标题，分类页总数和分页。
+- 区分正常页、空分类、登录页、风控页和结构异常页。
+- 将缩略图升级为更清晰的大图 URL。
+- 选图发现时按 cursor 和 batchSize 返回一批图片，并可附带缩略图 data URL。
+- 自动下载时按 `limited` / `unlimited` 返回下载列表和输出目录。
 
-如果豆瓣分类页没有图片，适配器会抛出结构化错误，例如 `douban photo category is empty|title=...`，前端会把它转换成“某影片暂时没有剧照/海报/壁纸”的友好提示。
+豆瓣请求会启用最小 3000ms 间隔，避免过快访问触发风控。
 
-### `src/services/scheduler.ts`
+### `src/services/douban-search.ts`
 
-调度器是 sidecar 的编排层。单个任务的执行顺序是：
+抓取 `https://search.douban.com/movie/subject_search`，从 `window.__DATA__` 中解析搜索结果。它会过滤非豆瓣电影详情页结果，并尝试下载封面为 `coverDataUrl`，供前端搜索弹窗稳定展示。
 
-```text
-assertNotPaused
-  ↓
-matcher.discover
-  ↓
-assertNotPaused
-  ↓
-downloader.download
-  ↓
-组装 TaskRunResult
-```
+### `src/services/douban-title.ts`
 
-调度器本身不解析 HTML，也不写图片文件。它只串联不同服务，让发现、下载、Cookie 和任务控制职责保持分离。
+解析单个豆瓣 subject 链接。优先访问移动端 Rexxar API 获取标题和封面，失败时回退到移动端 HTML 标题解析。返回结果用于手动粘贴链接后的标题/封面预览。
 
 ### `src/services/matcher.ts`
 
-匹配服务负责选择站点适配器。当前注册的是 `DoubanAdapter`。后续如果扩展其他站点，应新增适配器并注册到这里。
+适配器分发层。当前只注册 `DoubanAdapter`。新增站点时应新增 adapter，再在这里注册，不要把站点逻辑混入 downloader。
+
+### `src/services/scheduler.ts`
+
+自动下载编排层。主流程是：
+
+```text
+assertNotPaused
+  -> matcher.discover
+  -> assertNotPaused
+  -> emitTaskProgress(downloading, target, 0)
+  -> downloader.download
+  -> TaskRunResult
+```
+
+调度器不解析 HTML、不保存图片，只协调 Cookie、适配器、下载器和任务控制。
 
 ### `src/services/downloader.ts`
 
-下载服务是 sidecar 中最核心的执行模块。它负责：
+图片下载核心模块。它负责：
 
-- 为每张图片构造请求头，包含 Accept、Referer 和可选 Cookie；
-- 支持 Range 断点续传；
-- 下载数据先写入 `.part` 临时文件；
-- 持续刷新续传 metadata；
-- 识别 pause/cancel 控制信号；
-- 判断原图是否可以直接保存；
-- 在需要时用 `sharp` 转换为 JPG/PNG；
-- 在用户选择 9:16 或 3:4 时做居中裁剪；
-- 根据片名、分类、尺寸、序号和比例生成文件名；
-- 成功保存后删除续传临时文件；
-- 输出 `task-progress` 事件；
-- 写入 `saved image` 日志。
-
-裁剪策略是“居中裁剪，不放大、不拉伸”。也就是说，9:16 或 3:4 只改变构图比例，不会把小图强行放大，因此尽量保持原图清晰度。
+- 为图片请求设置 Referer、Accept 和 Cookie。
+- 使用 `.mcd-resume/<task-id>/` 保存 `.part` 和 `.json` 续传数据。
+- 支持 Range 续传，Range 失效时清理残片并重试完整下载。
+- 限制单张源图最大 80MB。
+- 校验豆瓣图片重定向目标仍是豆瓣图片域名。
+- 根据输出格式和比例决定直接保存原图，或用 `sharp` 转 JPG/PNG、居中裁剪。
+- 保存成功后清理续传文件、输出进度事件和日志。
+- 单张图片失败时写 warning 并跳过；全部失败时抛出 `no downloadable images were saved`。
 
 ### `src/services/resume-store.ts`
 
-断点续传状态管理。临时文件集中放在输出目录下的 `.mcd-resume`：
+管理续传临时文件：
 
 ```text
 输出目录/
@@ -148,94 +156,87 @@ downloader.download
       └─ 2.json
 ```
 
-`.part` 保存已下载图片字节，`.json` 保存 URL、已下载字节、总字节数、ETag 和 Last-Modified。图片保存成功后会清理对应临时文件，并尝试删除空目录。
+图片保存成功或续传状态不可用时，会清理对应 `.part` / `.json`，并尝试删除空目录。
 
 ### `src/services/task-control.ts`
 
-任务控制服务读取 Tauri 写入的控制文件。控制文件内容很简单：
+读取 Tauri 写入的控制文件：
 
-- `resume`：继续执行；
-- `pause`：抛出 `PauseRequestedError`；
+- `resume`：继续。
+- `pause`：抛出 `PauseRequestedError`。
 - `cancel`：抛出 `CancelRequestedError`。
 
-下载流程会在关键节点调用 `assertNotPaused()`，确保暂停或取消发生在安全点，而不是中断到文件写入中间。
-
-### `src/services/cookie-pool.ts`
-
-Cookie 池负责选择当前站点可用 Cookie，并在出现风控或鉴权问题时临时冷却 Cookie。当前主要服务豆瓣请求。
+下载流程只在安全点调用 `assertNotPaused()`，避免中断到文件写入中间。
 
 ### `src/shared/contracts.ts`
 
-sidecar 的类型契约集中在这里，主要包括：
+sidecar 和 Rust/前端之间的核心类型契约，包括：
 
-- `SidecarTask`：Tauri 注入给 sidecar 的任务参数；
-- `ResolvedSource`：详情页解析结果；
-- `DiscoveredImage`：单张待下载图片；
-- `DiscoveryResult`：图片发现阶段结果；
-- `DownloadedImage`：单张图片保存结果；
-- `DownloadResult`：下载阶段结果；
-- `TaskRunResult`：sidecar 最终返回给 Tauri 的任务结果；
-- `SidecarLogEvent`、`SidecarTaskProgressEvent`、`SidecarTaskEvent`：stdout 事件结构。
+- `SidecarTask`
+- `DoubanSearchResultPage`
+- `DiscoveredImage`
+- `DiscoveryResult`
+- `DoubanPhotoDiscoveryCursor`
+- `DoubanPhotoDiscoveryBatchResult`
+- `DownloadResult`
+- `TaskRunResult`
+- `SidecarLogEvent`
+- `SidecarTaskProgressEvent`
+
+跨层 payload 变更时要同步前端类型、Rust `types.rs` 和相关测试。
 
 ### `src/shared/logger.ts`
 
-日志器把日志和进度事件写成单行 JSON，也就是 NDJSON。Tauri 会逐行读取 stdout 并解析。
+所有日志和进度都写到 stdout，每行一个 JSON 对象。Rust 会逐行解析：
 
-普通日志示例：
+- `task-progress`：更新前端队列进度。
+- `task-result`：自动下载或选中下载结果。
+- `douban-search-result`：搜索结果。
+- `douban-title-result`：标题/封面预览。
+- `douban-photos-discover-progress`：选图发现过程增量图片。
+- `douban-photos-discover-result`：选图发现批次结果。
 
-```json
-{"level":"INFO","scope":"downloader","message":"saved image: D:/cover/...jpg","taskId":"task-301","timestamp":...}
-```
-
-进度事件示例：
-
-```json
-{"kind":"task-progress","taskId":"task-301","phase":"downloading","targetCount":10,"savedCount":3,"timestamp":...}
-```
-
-最终结果示例：
-
-```json
-{"kind":"task-result","payload":{"discovery":{},"download":{}}}
-```
+stderr 会被 Rust 当作错误日志处理。
 
 ### `src/shared/runtime-config.ts`
 
-运行配置从环境变量读取，包含输出目录、并发、请求间隔、请求超时、Cookie 冷却时间、User-Agent 配置和豆瓣 Cookie。
+从环境变量读取运行配置：
 
-### `src/utils/output-folder.ts`
+- `MCD_CONCURRENCY`
+- `MCD_BATCH_SIZE`
+- `MCD_REQUEST_INTERVAL_MS`
+- `MCD_REQUEST_TIMEOUT_MS`
+- `MCD_COOKIE_COOLDOWN_MS`
+- `MCD_OUTPUT_DIR`
+- `MCD_UA_PROFILE`
+- `MCD_DOUBAN_COOKIE`
 
-负责生成输出目录和文件名。文件名会包含：
-
-```text
-片名-分类-尺寸-比例-序号.扩展名
-```
-
-例如：
-
-```text
-让子弹飞-still-1080x1920-9x16-001.jpg
-让子弹飞-poster-1200x1600-原图-001.jpg
-```
+Cookie 只放在子进程环境变量中，不写入命令行参数。
 
 ### `src/utils/source-detector.ts`
 
-负责把任务链接转换成实际要抓取的图片页 URL。当前只保留豆瓣逻辑：
+将豆瓣详情页规范化为 `https://movie.douban.com/subject/<id>/`，并构造分类页：
 
-- `still` -> `all_photos?type=S`
-- `poster` -> `all_photos?type=R`
+- `still` -> `photos?type=S`
+- `poster` -> `photos?type=R`
 - `wallpaper` -> `photos?type=W`
 
-### `src/utils/wait-for.ts`
+### `src/utils/output-folder.ts`
 
-简单的 Promise 等待工具，用于请求间隔和测试等待。
+清理 Windows 非法文件名字符，并统一生成：
 
-## sidecar 与 Tauri 的通信方式
+- 影片输出目录名。
+- 自动下载输出目录。
+- 选图下载输出目录：`selected/<asset>/<asset>-<ratio>`。
+- 最终图片文件名：`片名 - 分类 - 尺寸 - 比例.ext`。
+
+## 与 Tauri 的通信
 
 ### 输入：环境变量
 
-Tauri 启动 sidecar 子进程时通过环境变量传入任务参数，常见变量包括：
+常见变量：
 
+- `MCD_COMMAND`
 - `MCD_BOOTSTRAP_TASK_ID`
 - `MCD_BOOTSTRAP_TASK_URL`
 - `MCD_BOOTSTRAP_OUTPUT_DIR`
@@ -248,29 +249,26 @@ Tauri 启动 sidecar 子进程时通过环境变量传入任务参数，常见�
 - `MCD_REQUEST_INTERVAL_MS`
 - `MCD_TASK_CONTROL_FILE`
 - `MCD_DOUBAN_COOKIE`
-
-使用环境变量而不是复杂命令行参数，可以减少 Windows 路径、Cookie 特殊字符和空格转义带来的问题。
+- `MCD_SEARCH_QUERY`
+- `MCD_SEARCH_PAGE`
+- `MCD_DISCOVERY_CURSOR`
+- `MCD_DISCOVERY_BATCH_SIZE`
+- `MCD_DISCOVERY_TITLE`
+- `MCD_SELECTED_IMAGES_FILE`
+- `MCD_SELECTED_TITLE`
 
 ### 输出：stdout NDJSON
 
-sidecar 输出的每一行都是一个 JSON 对象，Tauri 根据字段分流：
+sidecar 输出的每一行都是 JSON。Rust 解析 stdout 并分流为运行日志、进度事件、搜索结果、标题结果、发现结果或最终任务结果。
 
-- `kind: "task-progress"` -> 前端实时进度条；
-- `kind: "task-result"` -> 任务完成结果；
-- `kind: "task-paused"` -> 用户暂停；
-- `kind: "task-cancelled"` -> 用户取消；
-- 普通 `level/scope/message` -> 日志中心。
-
-stderr 会被 Tauri 视为错误日志。
-
-## 构建脚本
+## 构建与测试
 
 在项目根目录运行：
 
 ```bash
 pnpm build:sidecar
 pnpm typecheck:sidecar
-pnpm dev:sidecar
+pnpm --dir apps/sidecar test
 ```
 
 在 `apps/sidecar` 目录内运行：
@@ -278,29 +276,18 @@ pnpm dev:sidecar
 ```bash
 pnpm build      # tsc -p tsconfig.json
 pnpm typecheck  # tsc --noEmit
+pnpm test       # tsx --test src/test/...
 pnpm dev        # tsx watch src/index.ts
 pnpm start      # node dist/index.js
 ```
 
-桌面端构建时会自动先构建 sidecar，并通过根目录的 `prepare:sidecar-bundle` 脚本把运行资源准备到 Tauri resources 中。
-
-## 测试覆盖重点
-
-当前测试主要覆盖：
-
-- 豆瓣页面分类识别；
-- 豆瓣分页和图片解析；
-- 空分类、登录、风控等异常页面判断；
-- 下载服务保存文件；
-- 下载失败时跳过单张图片；
-- 断点续传和暂停恢复；
-- 图片比例裁剪和文件命名。
+桌面端构建会先执行 sidecar build，再通过根目录 `prepare:sidecar-bundle` 把 `dist`、生产依赖和 `node.exe` 准备到 Tauri resources。
 
 ## 设计注意事项
 
-- sidecar 不应直接修改前端状态，必须通过 stdout 事件返回给 Tauri。
-- 下载进度必须在每张图片保存成功后立即输出。
-- Cookie 不应写入命令行参数，当前通过环境变量传入子进程。
-- `.mcd-resume` 是临时续传目录，图片保存完成后应清理。
-- 删除输出目录的安全边界由 Tauri 层负责，sidecar 只负责写入任务输出目录。
-- 新增站点时，应优先新增 `SourceAdapter`，不要把站点逻辑混进下载服务。
+- 不要让 sidecar 直接修改前端状态，必须通过 stdout 事件返回。
+- 不要把 Cookie 放进命令行参数或日志。
+- 不要绕过 `task-control.ts` 的安全点暂停/取消设计。
+- 不要直接复制 pnpm workspace 的 `node_modules` 到安装包；打包资源由 `scripts/prepare-sidecar-bundle.ps1` 在临时 resources 目录内安装生产依赖。
+- 新增站点时优先新增 adapter，再注册到 `MatcherService`。
+- 豆瓣空分类、登录、风控和结构异常要保持可区分，前端依赖这些错误信息展示友好提示。

@@ -24,15 +24,29 @@
 
 当前真实下载链路只围绕豆瓣电影设计。`docs/architecture.md`、`docs/database.md`、`docs/mvp-plan.md` 中有早期规划，例如 ImpAwards、Playwright、托盘、自动更新、代理等；未在代码里落地前，不要当成当前功能。
 
-## 最近几次提交后的重要状态
+## 最近提交的重要状态
 
-**Rust 后端模块化重构**（2026年6月完成）：
+**Rust 后端模块化重构**：
 
 - lib.rs 从 **3562 行减少到 857 行**（减少 76%）
 - 新增 **20 个模块文件**，清晰的职责分离
 - 所有 **40 个单元测试**保持通过
 - **Clippy 零警告**，符合 Rust 最佳实践
 - 修改 Rust 代码时，定位到对应模块文件，而非全部在 lib.rs 中查找
+
+**前端 Store 与测试体系重构**：
+
+- `apps/desktop/src/stores/app.ts` 已从单体大 store 拆成协调层，任务队列、Cookie、日志、UI 状态和任务动作分别落在 `taskQueue.ts`、`cookies.ts`、`logs.ts`、`ui.ts`、`taskActions.ts`。
+- Store 相关工具函数在 `apps/desktop/src/stores/app-helpers.ts`；不要把新领域逻辑继续堆回 `app.ts`。
+- 前端测试已迁移到 Vitest 4 + happy-dom，主要位于源码旁的 `__tests__/*.spec.ts`，例如 `stores/__tests__/app.spec.ts`、`components/queue/create-task/__tests__/CreateTaskModal.spec.ts`。
+- `apps/desktop/vitest.config.ts` 允许 `src/**/*.{test,spec}.ts` 和 `src/**/__tests__/**/*.{test,spec}.ts`；旧 `apps/desktop/src/test/**` 路径不是当前主要测试入口。
+
+**构建和发布状态**：
+
+- 最低支持系统已明确为 `Windows 10`；`Windows 7 / 8 / 8.1` 不受支持。
+- 打包前的 sidecar bundle 由 `scripts/prepare-sidecar-bundle.ps1` 准备：复制 sidecar `dist`，在 `apps/desktop/src-tauri/resources/sidecar` 临时目录内用 `npm install --omit=dev --package-lock=false --ignore-scripts=false --no-audit --no-fund` 安装生产依赖，确保 `node_modules` 是真实目录而不是 pnpm symlink/junction。
+- `pnpm-workspace.yaml` 已允许 `esbuild` 和 `sharp` build scripts；不要把 sharp 原生依赖改回未验证的软链接打包方式。
+- Windows release 打包优先使用 `scripts/build-with-msvc.ps1` 自动化脚本；打包后检查 NSIS 安装包 `LastWriteTime`、大小、必要时计算 SHA256，并验证 sidecar 中 `sharp` 可加载。
 
 **选图下载状态**：
 
@@ -72,12 +86,21 @@ movie-cover-downloader/
 
 关键前端文件：
 
-- `apps/desktop/src/stores/app.ts`：核心 Pinia store，管理任务、Cookie、日志、弹窗状态、持久化、队列调度。
+- `apps/desktop/src/stores/app.ts`：主 Pinia store 协调层，负责启动恢复、持久化调度、组合子 store 与任务动作。
+- `apps/desktop/src/stores/taskQueue.ts`：任务队列、运行状态、重复任务检测、队列配置。
+- `apps/desktop/src/stores/taskActions.ts`：创建、暂停、继续、重试、删除、清空、打开输出目录等任务动作。
+- `apps/desktop/src/stores/cookies.ts`：Cookie 导入、冷却、失效、可用 Cookie 选择。
+- `apps/desktop/src/stores/logs.ts`：运行日志状态和追加/清理逻辑。
+- `apps/desktop/src/stores/ui.ts`：弹窗开关、输出目录、全局提示和图片处理输出目录。
+- `apps/desktop/src/stores/app-helpers.ts`：状态快照、任务恢复、持久化错误提示等 store 辅助函数。
 - `apps/desktop/src/lib/runtime-bridge.ts`：前端和 Tauri 命令桥接层。
 - `apps/desktop/src/types/app.ts`：前端状态、任务、Cookie、日志、运行时结果类型。
 - `apps/desktop/src/layouts/AppShell.vue`：应用骨架和全局弹窗挂载处。
 - `apps/desktop/src/views/ControlCenterView.vue`：控制中心入口。
 - `apps/desktop/src/components/queue/CreateTaskModal.vue`：添加下载任务弹窗，包含自动下载和选图下载。
+- `apps/desktop/src/components/queue/create-task/SelectedPhotoGrid.vue`：选图图片网格、缩略图状态、懒加载、拖拽框选、触底请求。
+- `apps/desktop/src/components/queue/create-task/SelectedPhotoCategoryTabs.vue`：选图分类 tabs。
+- `apps/desktop/src/components/queue/create-task/SelectedPhotoPreviewModal.vue`：选图大图预览和左右切换。
 - `apps/desktop/src/components/queue/SearchMovieModal.vue`：豆瓣搜索影视弹窗。
 - `apps/desktop/src/components/queue/TaskTable.vue`：下载队列表格、封面兜底、任务操作。
 - `apps/desktop/src/components/queue/CustomCropModal.vue`：自定义裁剪弹窗。
@@ -133,6 +156,13 @@ movie-cover-downloader/
 - `apps/sidecar/src/utils/source-detector.ts`：豆瓣图片分类入口 URL 生成。
 - `apps/sidecar/src/utils/output-folder.ts`：安全生成输出目录和图片文件名。
 
+关键前端测试入口：
+
+- `apps/desktop/src/stores/__tests__/app.spec.ts`：主 store 协调、持久化、队列调度等高层行为。
+- `apps/desktop/src/stores/__tests__/taskQueue.spec.ts`、`cookies.spec.ts`、`logs.spec.ts`、`ui.spec.ts`：拆分后子 store 行为。
+- `apps/desktop/src/components/queue/create-task/__tests__/*.spec.ts`：添加任务和选图下载组件测试。
+- `apps/desktop/src/components/__tests__/*.spec.ts`、`apps/desktop/src/lib/__tests__/*.spec.ts`：页面/组件与纯工具测试。
+
 ## 运行与构建命令
 
 根目录常用命令：
@@ -155,6 +185,13 @@ pnpm test
 - `pnpm dev:web` 只启动 Vite 网页预览，不能验证真实 Tauri 命令、真实本地文件能力和真实下载。
 - `pnpm dev:desktop` 会通过 Tauri 启动桌面端，并先构建 sidecar。
 - `pnpm build:desktop` 会构建 sidecar、准备 Tauri resources，并输出 Windows 安装包。
+- Windows 本机重新打包 release 安装包时，优先运行自动化脚本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-with-msvc.ps1
+```
+
+- `scripts/prepare-sidecar-bundle.ps1` 在 Tauri resources 下用 npm 安装生产依赖，目的是把 `sharp` 等原生依赖打成真实目录；不要改回直接复制 pnpm `node_modules`。
 - 如果完整 `pnpm build:desktop` 在 NSIS 阶段超时，但 release exe 已构建，可单独执行：
 
 ```bash
@@ -292,7 +329,7 @@ CreateTaskModal
 
 状态管理规范：
 
-- 任务、Cookie、日志、弹窗开关和持久化状态优先放在 `stores/app.ts`。
+- `stores/app.ts` 只做组合协调、启动恢复和持久化调度；任务、Cookie、日志、UI 弹窗和任务动作优先放到对应的拆分 store/action 文件。
 - 持久化字段必须同步更新 `AppSeedState` 类型、store 快照、Rust SQLite 读写和相关测试。
 - 队列执行顺序按添加时间 FIFO，界面排序需求不要破坏后台调度顺序。
 - 队列运行中危险操作必须有界面禁用和 store 入口二次保护。
@@ -329,6 +366,12 @@ pnpm --dir apps/sidecar typecheck
 pnpm test
 ```
 
+前端 Vitest 测试当前以源码旁 `__tests__/*.spec.ts` 为主；排查单测时优先按具体 spec 运行，例如：
+
+```bash
+pnpm --dir apps/desktop test -- src/stores/__tests__/app.spec.ts
+```
+
 桌面端测试：
 
 ```bash
@@ -354,10 +397,12 @@ cargo build     # 完整构建
 修改建议：
 
 - 只改前端 SFC/CSS：至少跑 `pnpm --dir apps/desktop exec vue-tsc --noEmit`。
+- 改拆分后的 store：至少跑对应 `stores/__tests__/*.spec.ts`，再视影响范围跑 `pnpm --dir apps/desktop test`。
 - 改 sidecar：跑 `pnpm --dir apps/sidecar typecheck` 和相关测试。
 - 改 Rust/Tauri：跑 `cargo check` 和 `cargo test`，确保 40 个测试全部通过。
 - 改 Rust 模块：运行 `cargo clippy --all-targets` 确保零警告。
 - 打包前建议跑 `pnpm test`、`pnpm typecheck`、`pnpm typecheck:sidecar`、`cargo test`。
+- 改打包脚本或 release 流程：重新运行 `scripts/build-with-msvc.ps1` 或等价构建，并检查 `resources/sidecar` 中没有 symlink/junction、`node.exe -e "require('sharp')"` 能成功。
 
 ## 禁止事项
 
@@ -374,7 +419,7 @@ cargo build     # 完整构建
 ## 常见任务提示
 
 - “重新启动桌面端应用”：运行 `pnpm dev:desktop`。
-- “重新打包安装包”：优先运行 `pnpm build:desktop`；如果只需 NSIS exe，可运行 `pnpm --dir apps/desktop tauri build --bundles nsis`。
+- “重新打包安装包”：Windows release 优先运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-with-msvc.ps1`；如果只需 NSIS exe，可运行 `pnpm --dir apps/desktop tauri build --bundles nsis`。
 - “推送 release 安装包”：需要 GitHub 网络和权限，通常替换 `v0.1.0` 的 NSIS asset。
 - “检查未提交更改”：先看 `git status --short --branch`，再看 staged、unstaged、untracked。
 - “写 commit 信息”：先总结实际 diff，再给简洁 commit 标题和正文。

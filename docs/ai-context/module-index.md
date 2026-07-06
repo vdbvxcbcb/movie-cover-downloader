@@ -6,7 +6,13 @@
 
 | 文件 | 责任 | 常见触发任务 |
 | --- | --- | --- |
-| `apps/desktop/src/stores/app.ts` | 核心 Pinia store；任务队列、Cookie、日志、弹窗开关、持久化、队列调度、重复任务检测 | 队列、任务状态、Cookie 冷却、持久化、弹窗打开方式 |
+| `apps/desktop/src/stores/app.ts` | 主 Pinia store 协调层；启动恢复、持久化调度、组合子 store 与任务动作 | 应用启动、快照保存/加载、跨 store 协作 |
+| `apps/desktop/src/stores/app-helpers.ts` | store 辅助函数；状态快照、任务恢复、持久化错误提示 | 持久化字段、恢复逻辑、启动后任务状态 |
+| `apps/desktop/src/stores/taskQueue.ts` | 任务队列、运行状态、队列配置、重复任务检测 | 队列调度、任务状态、重复选图任务判断 |
+| `apps/desktop/src/stores/taskActions.ts` | 任务动作；创建、暂停、继续、重试、删除、清空、打开输出目录 | 队列操作、下载执行、任务生命周期 |
+| `apps/desktop/src/stores/cookies.ts` | Cookie 状态；导入、可用性、冷却、失效、优先级 | Cookie 导入、冷却、反爬错误处理 |
+| `apps/desktop/src/stores/logs.ts` | 运行日志状态 | 日志追加、清空、持久化 |
+| `apps/desktop/src/stores/ui.ts` | UI 状态；弹窗开关、输出目录、全局提示 | 弹窗打开方式、Notice/Toast、输出目录记忆 |
 | `apps/desktop/src/lib/runtime-bridge.ts` | 前端和 Tauri command/event 统一桥接；网页预览降级实现 | 新增系统能力、改 Tauri command 名称、事件订阅 |
 | `apps/desktop/src/types/app.ts` | 前端任务、Cookie、日志、运行时 payload 类型 | 新增状态字段、跨层 payload、持久化 schema |
 | `apps/desktop/src/layouts/AppShell.vue` | 应用骨架和全局弹窗挂载 | 新增/移动全局弹窗 |
@@ -38,9 +44,14 @@
 | `apps/desktop/src/lib/presenters.ts` | 展示格式化 |
 | `apps/desktop/src/lib/douban-empty-category.ts` | 豆瓣空分类提示解析 |
 | `apps/desktop/src/components/composables/selected-photo-helpers.ts` | 选图下载辅助函数 |
+| `apps/desktop/src/composables/useCookieNormalization.ts` | Cookie 输入标准化 |
+| `apps/desktop/src/composables/useDoubanFailureClassifier.ts` | 豆瓣失败/风控/空分类错误分类 |
+| `apps/desktop/src/composables/useTaskComparison.ts` | 任务重复和比较辅助 |
+| `apps/desktop/src/composables/useTaskOutputDirectory.ts` | 任务输出目录辅助 |
 | `apps/desktop/src/components/composables/useSelectedPhotoGridSelection.ts` | 选图网格选择/框选逻辑 |
 | `apps/desktop/src/components/composables/useImageProcess*.ts` | 图片处理弹窗状态和标注逻辑 |
-| `apps/desktop/src/test/**` | 前端 Vitest 测试 |
+| `apps/desktop/src/**/__tests__/*.spec.ts` | 当前主要前端 Vitest 测试，按源码目录就近放置 |
+| `apps/desktop/src/**/*.{test,spec}.ts` | Vitest 配置允许的补充测试入口 |
 
 ## Tauri/Rust 层
 
@@ -94,12 +105,23 @@
 
 ### 测试
 
-Rust 测试在 `lib.rs` 底部，重点覆盖：
+Rust 测试主要在 `lib.rs` 底部，重点覆盖：
 - SQLite 状态库恢复
 - Cookie 加密保护
 - 目录边界校验
 - 本地图片读取权限
 - 任务控制注册表
+
+前端测试已经迁移到 Vitest 4 + happy-dom，常用入口：
+
+- `apps/desktop/src/stores/__tests__/app.spec.ts`
+- `apps/desktop/src/stores/__tests__/taskQueue.spec.ts`
+- `apps/desktop/src/stores/__tests__/cookies.spec.ts`
+- `apps/desktop/src/stores/__tests__/logs.spec.ts`
+- `apps/desktop/src/stores/__tests__/ui.spec.ts`
+- `apps/desktop/src/components/queue/create-task/__tests__/*.spec.ts`
+- `apps/desktop/src/components/__tests__/*.spec.ts`
+- `apps/desktop/src/lib/__tests__/*.spec.ts`
 
 ## sidecar 层
 
@@ -134,6 +156,13 @@ Rust 测试在 `lib.rs` 底部，重点覆盖：
 | `scripts/check-build-env.ps1` | 环境检查脚本 |
 | `scripts/build-with-msvc.ps1` | MSVC 环境一键构建脚本 |
 
+打包要点：
+
+- Windows release 重新打包优先运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-with-msvc.ps1`。
+- `prepare-sidecar-bundle.ps1` 会复制 sidecar `dist`，在 `resources/sidecar` 内用 npm 安装生产依赖，再复制 `node.exe` 并验证 `sharp` 原生二进制。
+- 不要把 pnpm workspace 的 `node_modules` 直接复制进 Tauri resources；pnpm junction/symlink 会导致安装包在用户机器上缺依赖。
+- `pnpm-workspace.yaml` 允许 `esbuild` 和 `sharp` build scripts，这是当前构建 sharp 原生依赖所需配置。
+
 ## 常见验证命令
 
 ```bash
@@ -145,6 +174,9 @@ pnpm --dir apps/sidecar typecheck
 
 # 前端测试
 pnpm --dir apps/desktop test
+
+# 单个前端 Vitest spec
+pnpm --dir apps/desktop test -- src/stores/__tests__/app.spec.ts
 
 # Sidecar 测试
 pnpm --dir apps/sidecar test
@@ -173,3 +205,9 @@ cargo clippy --all-targets
 - 测试更容易编写
 - 依赖关系一目了然
 - 符合 Rust 最佳实践
+
+## Store 和测试迁移说明
+
+最近的前端重构将 `apps/desktop/src/stores/app.ts` 从单体 store 改成协调层，并把领域逻辑拆到 `taskQueue.ts`、`taskActions.ts`、`cookies.ts`、`logs.ts`、`ui.ts`。
+
+测试体系同步迁移到 Vitest 4 + happy-dom，测试文件从旧的 `apps/desktop/src/test/**` 为主，转为源码旁 `__tests__/*.spec.ts` 为主。排查超时或类型错误时，先按具体 spec 单独运行，再扩大到 `pnpm --dir apps/desktop test`。
