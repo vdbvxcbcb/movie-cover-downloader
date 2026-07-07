@@ -98,6 +98,32 @@ describe('TaskTable', () => {
       expect(runtimeBridgeMock.resolveDoubanMoviePreview).not.toHaveBeenCalled()
     })
 
+    it('should emit resolved cover so missing legacy task covers can be persisted', async () => {
+      runtimeBridgeMock.isNativeRuntime.mockReturnValue(true)
+      const coverDataUrl = 'data:image/jpeg;base64,resolved-cover'
+      runtimeBridgeMock.resolveDoubanMoviePreview.mockResolvedValue({
+        detailUrl: 'https://movie.douban.com/subject/123',
+        title: 'Test Movie',
+        coverDataUrl,
+      })
+
+      const wrapper = mount(TaskTable, {
+        props: {
+          tasks: [
+            createMockTask({
+              lifecycle: { phase: 'completed', attempts: 1, updatedAt: new Date().toISOString() },
+            }),
+          ],
+        },
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.find('.cover-cell img').attributes('src')).toBe(coverDataUrl)
+      expect(wrapper.emitted('coverResolved')?.[0]).toEqual(['task-1', { coverDataUrl }])
+    })
+
     it('should render multiple tasks', () => {
       const tasks = [
         createMockTask({ id: 'task-1', title: 'Movie A' }),

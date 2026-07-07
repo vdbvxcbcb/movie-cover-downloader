@@ -17,7 +17,7 @@ import {
   clearQueueTasks as clearQueueTasksAction,
   openTaskOutputDirectory as openTaskOutputDirectoryAction,
 } from "./taskActions";
-import type { CookieDraft, TaskDraft } from "../types/app";
+import type { CookieDraft, DoubanMoviePreview, TaskDraft } from "../types/app";
 
 type PersistReason = "state" | "logs" | "progress";
 
@@ -326,6 +326,22 @@ export const useAppStore = defineStore("app", () => {
     });
   }
 
+  function persistTaskCoverPreview(taskId: string, preview: Pick<DoubanMoviePreview, "coverUrl" | "coverDataUrl">) {
+    const task = taskQueueStore.getTaskById(taskId);
+    if (!task) return;
+
+    const nextCoverUrl = task.coverUrl ?? preview.coverUrl;
+    const nextCoverDataUrl = task.coverDataUrl ?? preview.coverDataUrl;
+    if (task.coverUrl === nextCoverUrl && task.coverDataUrl === nextCoverDataUrl) return;
+
+    taskQueueStore.replaceTask({
+      ...task,
+      coverUrl: nextCoverUrl,
+      coverDataUrl: nextCoverDataUrl,
+    });
+    schedulePersist();
+  }
+
   // 顶栏通用 action 分发入口，目前用于日志中心的错误过滤切换。
   async function triggerAction(actionId: string) {
     if (actionId === "logs.only-errors") {
@@ -421,6 +437,7 @@ export const useAppStore = defineStore("app", () => {
     resumeTask,
     deleteTask,
     openTaskOutputDirectory,
+    persistTaskCoverPreview,
     clearQueueTasks,
     clearAllLogs,
     triggerAction,

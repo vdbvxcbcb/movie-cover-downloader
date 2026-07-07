@@ -23,7 +23,7 @@ const uiStore = useUI();
 const { tasks, queueRunning, queueSortOrder, queueSearchQuery, queueHasActiveDownloads, activeTaskIds } = storeToRefs(taskQueueStore);
 const { cookies } = storeToRefs(cookiesStore);
 const { isActionPending } = uiStore;
-const { importCookie, openSearchMovie, openCreateTask, openCustomCrop, openImageProcess, clearQueueTasks, retryTask, pauseTask, resumeTask, deleteTask, openTaskOutputDirectory, deleteCookie } = appStore;
+const { importCookie, openSearchMovie, openCreateTask, openCustomCrop, openImageProcess, clearQueueTasks, retryTask, pauseTask, resumeTask, deleteTask, openTaskOutputDirectory, deleteCookie, persistTaskCoverPreview } = appStore;
 
 // 根据排序方向和搜索关键词筛选任务
 const orderedTasks = computed(() => {
@@ -114,6 +114,7 @@ const disableClearQueue = computed(() => disableCookieRequiredActions.value || q
         @resume="void resumeTask($event)"
         @remove="void deleteTask($event)"
         @open-output="void openTaskOutputDirectory($event)"
+        @cover-resolved="persistTaskCoverPreview"
       />
     </PanelSection>
 

@@ -27,6 +27,7 @@ const emit = defineEmits<{
   resume: [taskId: string];
   remove: [taskId: string];
   openOutput: [taskId: string];
+  coverResolved: [taskId: string, preview: { coverUrl?: string; coverDataUrl?: string }];
 }>();
 
 const isNativeRuntime = runtimeBridge.isNativeRuntime();
@@ -98,12 +99,17 @@ async function resolveTaskCover(task: TaskItem) {
 
   try {
     const preview = await runtimeBridge.resolveDoubanMoviePreview(task.target.detailUrl);
-    const coverSource = preview?.coverDataUrl ?? preview?.coverUrl;
+    if (!preview) return;
+    const coverSource = preview.coverDataUrl ?? preview.coverUrl;
     if (!coverSource) return;
     coverCache.value = {
       ...coverCache.value,
       [task.target.detailUrl]: coverSource,
     };
+    emit("coverResolved", task.id, {
+      coverUrl: preview.coverUrl,
+      coverDataUrl: preview.coverDataUrl,
+    });
   } catch {
     // 封面只影响展示，解析失败时保留占位，不影响队列任务。
   }
@@ -541,5 +547,3 @@ async function copyTaskDetailUrl(task: TaskItem) {
   box-shadow: 0 0 0 3px rgba(77, 212, 198, 0.12);
 }
 </style>
-
-

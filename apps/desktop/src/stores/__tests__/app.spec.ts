@@ -1,6 +1,7 @@
 // Pinia 仓库测试：模拟 Tauri 桥接以验证队列状态流转。
 import { describe, it, expect, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { createTaskFromDraft } from '../../data/mock'
 import { formatTaskProgress, formatTaskTitle, getTaskProgressPercent } from '../../lib/presenters'
 import type { AppSeedState, RuntimeDownloadTaskResult, RuntimeTaskProgressEvent, TaskDraft } from '../../types/app'
 
@@ -241,6 +242,23 @@ describe('app store', () => {
       await appStore.createTasks([createDraft({ detailUrl })])
 
       expect(taskQueueStore.tasks[0]?.coverDataUrl).toBe(coverDataUrl)
+    })
+
+    it('解析到旧任务封面后会写回任务并持久化', async () => {
+      const task = createTaskFromDraft('task-cover', createDraft({ detailUrl: 'https://movie.douban.com/subject/36877245/' }))
+      const coverDataUrl = 'data:image/jpeg;base64,resolved-cover'
+      const savedSnapshots: AppSeedState[] = []
+      const { appStore, taskQueueStore } = await setupStore({
+        loadState: async () => createPersistedSnapshot({ tasks: [task] }),
+        saveState: async (snapshot) => {
+          savedSnapshots.push(snapshot)
+        },
+      })
+
+      appStore.persistTaskCoverPreview(task.id, { coverDataUrl })
+
+      expect(taskQueueStore.tasks[0]?.coverDataUrl).toBe(coverDataUrl)
+      await waitFor(() => savedSnapshots.some((snapshot) => snapshot.tasks[0]?.coverDataUrl === coverDataUrl))
     })
 
     it('持久化状态加载失败后仍会完成 hydration 并允许后续保存', async () => {
