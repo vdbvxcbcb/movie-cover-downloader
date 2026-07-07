@@ -1,7 +1,7 @@
 // 豆瓣适配器：解析详情页、分类页和图片列表，并识别登录/风控/空分类。
 import path from "node:path";
 import type { FetchedHtmlPage, SourceAdapter } from "./base.js";
-import { buildHeaders, dedupeUrls, extractTitleFromHtml, fetchText, normalizeWhitespace } from "./base.js";
+import { buildHeaders, decodeHtml, dedupeUrls, extractTitleFromHtml, fetchText, normalizeWhitespace } from "./base.js";
 import type { AdapterContext } from "./base.js";
 import type {
   DiscoveredImage,
@@ -36,8 +36,8 @@ type DoubanAccessClassification = "ok" | "auth" | "risk";
 
 // 从豆瓣分类页文案里提取图片总数，用来判断是否需要继续抓分页。
 function extractDoubanCategoryCount(html: string) {
-  const count = html.match(/共(\d+)张/i)?.[1];
-  return count ? Number(count) : null;
+  const count = decodeHtml(html).match(/共\s*([\d,，]+)\s*[张張]/i)?.[1];
+  return count ? Number(count.replace(/[，,]/g, "")) : null;
 }
 
 // 豆瓣分类页只暴露部分缩略图，需要根据总数推导分页 start 参数继续抓取。

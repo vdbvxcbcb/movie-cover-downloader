@@ -2,6 +2,7 @@
 import { createTaskFromDraft } from "../data/mock";
 import { runTaskLifecycle } from "../lib/queue-runtime";
 import { runtimeBridge } from "../lib/runtime-bridge";
+import { normalizeComparableDetailUrl } from "../lib/task-draft-input";
 import { inferTaskSource } from "./app-helpers";
 import { classifyDoubanFailure, resolveFailureTaskTitle } from "../composables/useDoubanFailureClassifier";
 import { getTaskGeneratedOutputDirectory } from "../composables/useTaskOutputDirectory";
@@ -231,7 +232,7 @@ export async function createTasks(
   });
 
   const createdTasks = drafts.map((draft) => {
-    const preview = moviePreviews[draft.detailUrl];
+    const preview = moviePreviews[normalizeComparableDetailUrl(draft.detailUrl)] ?? moviePreviews[draft.detailUrl];
     return createTaskFromDraft(taskQueueStore.nextTaskId(), {
       ...draft,
       coverUrl: draft.coverUrl ?? preview?.coverUrl,

@@ -4,17 +4,21 @@ import { createPinia, setActivePinia } from 'pinia'
 import TaskTable from '../queue/TaskTable.vue'
 import type { TaskItem } from '../../types/app'
 
+const runtimeBridgeMock = vi.hoisted(() => ({
+  isNativeRuntime: vi.fn(() => false),
+  resolveDoubanMoviePreview: vi.fn(),
+}))
+
 // Mock runtime bridge
 vi.mock('@/lib/runtime-bridge', () => ({
-  runtimeBridge: {
-    isNativeRuntime: () => false,
-    resolveDoubanMoviePreview: vi.fn(),
-  },
+  runtimeBridge: runtimeBridgeMock,
 }))
 
 describe('TaskTable', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    runtimeBridgeMock.isNativeRuntime.mockReturnValue(false)
+    runtimeBridgeMock.resolveDoubanMoviePreview.mockReset()
   })
 
   const createMockTask = (overrides: Partial<TaskItem> = {}): TaskItem => ({
@@ -70,6 +74,28 @@ describe('TaskTable', () => {
 
       expect(wrapper.exists()).toBe(true)
       expect(wrapper.text()).toContain('Test Movie')
+    })
+
+    it('should render persisted cover immediately without resolving preview again', async () => {
+      runtimeBridgeMock.isNativeRuntime.mockReturnValue(true)
+      const coverDataUrl = 'data:image/jpeg;base64,persisted-cover'
+
+      const wrapper = mount(TaskTable, {
+        props: {
+          tasks: [
+            createMockTask({
+              coverDataUrl,
+              lifecycle: { phase: 'completed', attempts: 1, updatedAt: new Date().toISOString() },
+            }),
+          ],
+        },
+      })
+
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.find('.cover-cell img').attributes('src')).toBe(coverDataUrl)
+      expect(wrapper.text()).not.toContain('暂无封面')
+      expect(runtimeBridgeMock.resolveDoubanMoviePreview).not.toHaveBeenCalled()
     })
 
     it('should render multiple tasks', () => {

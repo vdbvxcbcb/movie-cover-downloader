@@ -164,4 +164,58 @@ describe("create task modal selected photo discovery", () => {
 
     wrapper.unmount();
   });
+
+  it("does not show empty warning while a partial selected-photo batch is waiting for more images", async () => {
+    setActivePinia(createPinia());
+    let firstDiscoveryPayload: RuntimeDiscoverDoubanPhotosPayload | undefined = undefined;
+    const partialStills = Array.from({ length: 5 }, (_, index) =>
+      createPhoto({
+        id: `still-${index + 1}`,
+        title: `剧照 ${index + 1}`,
+        imageUrl: `https://img1.doubanio.com/view/photo/l/public/still${index + 1}.jpg`,
+        previewUrl: `https://img1.doubanio.com/view/photo/m/public/still${index + 1}.jpg`,
+      }),
+    );
+
+    runtimeBridge.resolveDoubanMoviePreview = async () => null;
+    runtimeBridge.onDoubanPhotoDiscoveryProgress = async () => () => {};
+    runtimeBridge.discoverDoubanPhotos = async (payload) => {
+      firstDiscoveryPayload = payload;
+      return createDiscoveryResult({
+        images: partialStills,
+        nextCursor: {
+          assetIndex: 0,
+          pageIndex: 0,
+          withinPageOffset: 5,
+          pageCount: 6,
+          totalCount: 159,
+          normalizedTitle: "示例电影",
+          outputFolderName: "示例电影",
+        },
+        done: false,
+      });
+    };
+    runtimeBridge.cancelDoubanPhotoDiscovery = async () => 1;
+
+    const wrapper = mount(CreateTaskModal, {
+      props: {
+        selectedPhotoSeed: {
+          detailUrl: "https://movie.douban.com/subject/34780991/",
+          title: "示例电影",
+          autoDiscover: true,
+        },
+      },
+    });
+
+    await waitForTick();
+    await waitForTick();
+
+    const payload = firstDiscoveryPayload as unknown as RuntimeDiscoverDoubanPhotosPayload;
+    expect(payload.doubanAssetType).toBe("still");
+    expect(wrapper.text()).toContain("剧照 0");
+    expect(wrapper.text()).toContain("共159张剧照，已缓存0张");
+    expect(wrapper.text()).not.toContain("没有解析到可下载图片。");
+
+    wrapper.unmount();
+  });
 });

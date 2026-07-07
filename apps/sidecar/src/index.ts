@@ -148,6 +148,7 @@ function parseDiscoveryCursor(): DoubanPhotoDiscoveryCursor | null {
     pageIndex: Math.max(0, Number(parsed.pageIndex)),
     withinPageOffset: Math.max(0, Number(parsed.withinPageOffset ?? 0)),
     pageCount: Number.isFinite(parsed.pageCount) ? Math.max(1, Number(parsed.pageCount)) : undefined,
+    totalCount: Number.isFinite(parsed.totalCount) ? Math.max(0, Number(parsed.totalCount)) : undefined,
     normalizedTitle: parsed.normalizedTitle,
     outputFolderName: parsed.outputFolderName,
   };

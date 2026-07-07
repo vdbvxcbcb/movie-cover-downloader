@@ -363,6 +363,63 @@ test("selected photo batch discovery starts from requested asset type", async ()
   }
 });
 
+test("selected photo batch discovery keeps paging when poster count text contains spaces", async () => {
+  const adapter = new DoubanAdapter();
+  const task = createTask({ doubanAssetType: "poster" });
+  const context = createContext();
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+
+  const posterImages = Array.from({ length: 14 }, (_, index) =>
+    `<img src="https://img1.doubanio.com/view/photo/m/public/p${index + 1}.jpg">`,
+  ).join("");
+  const calls: string[] = [];
+
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const requestUrl = String(url);
+    calls.push(requestUrl);
+    if (requestUrl.includes("/photos?type=R")) {
+      return createFetchResponse({
+        finalUrl: "https://movie.douban.com/subject/34780991/photos?type=R",
+        html: `
+          <html>
+            <title>图片</title>
+            <div class="article"></div>
+            <span>（共 159 张）</span>
+            ${posterImages}
+          </html>
+        `,
+      });
+    }
+
+    return createFetchResponse({
+      finalUrl: "https://movie.douban.com/subject/34780991/",
+      html: '<html><span property="v:itemreviewed">Poster Movie</span></html>',
+    });
+  }) as unknown as typeof fetch;
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    if (typeof callback === "function") {
+      callback();
+    }
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const result = await adapter.discoverBatch(task, context, null, 14);
+    assert.equal(result.images.length, 14);
+    assert.equal(result.done, false);
+    assert.equal(result.nextCursor?.pageCount, 6);
+    assert.equal(result.nextCursor?.totalCount, 159);
+    assert.equal(calls.some((url) => url.includes("start=30")), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 // 构造 fetch mock 返回值，模拟豆瓣 HTML、最终 URL 和 Content-Type。
 function createFetchResponse(
   overrides: Partial<{

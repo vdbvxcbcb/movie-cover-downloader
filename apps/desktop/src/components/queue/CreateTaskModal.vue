@@ -874,10 +874,13 @@ async function loadNextSelectedPhotoBatch() {
       [doubanAssetType]: {
         cursor: discovery.nextCursor,
         done: discovery.done,
-        totalCount: discovery.nextCursor.totalCount,
+        totalCount: discovery.nextCursor?.totalCount,
       },
     };
-    if (selectedPhotos.value.length === 0) {
+    const currentDiscoveredCount =
+      selectedPhotos.value.filter((photo) => photo.doubanAssetType === doubanAssetType).length +
+      selectedPhotoPendingBatch.value[doubanAssetType].length;
+    if (discovery.done && currentDiscoveredCount === 0) {
       showAlert("没有解析到可下载图片。");
     }
   } catch (error) {

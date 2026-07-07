@@ -227,6 +227,22 @@ describe('app store', () => {
       expect(restartedStore.createTaskOutputRootDir).toBe('E:/movie-cover')
     })
 
+    it('创建任务时会用规范化链接匹配预览封面并持久化到任务', async () => {
+      const { appStore, taskQueueStore } = await setupStore()
+      const detailUrl = 'https://movie.douban.com/subject/34780991/'
+      const coverDataUrl = 'data:image/jpeg;base64,cover'
+
+      appStore.upsertCreateTaskMoviePreview(detailUrl, {
+        detailUrl,
+        title: '示例电影',
+        coverDataUrl,
+      })
+
+      await appStore.createTasks([createDraft({ detailUrl })])
+
+      expect(taskQueueStore.tasks[0]?.coverDataUrl).toBe(coverDataUrl)
+    })
+
     it('持久化状态加载失败后仍会完成 hydration 并允许后续保存', async () => {
       let saveCalls = 0
       const { appStore } = await setupStore({
