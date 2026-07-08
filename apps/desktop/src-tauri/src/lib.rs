@@ -755,6 +755,7 @@ mod tests {
         )
         .unwrap();
 
+        assert!(!output_path.starts_with(r"\\?\"));
         let output_path = PathBuf::from(output_path);
         assert_eq!(
             output_path.file_name().and_then(|value| value.to_str()),
@@ -788,6 +789,7 @@ mod tests {
         )
         .unwrap();
 
+        assert!(!output_path.starts_with(r"\\?\"));
         let output_path = PathBuf::from(output_path);
         assert_eq!(
             output_path.file_name().and_then(|value| value.to_str()),

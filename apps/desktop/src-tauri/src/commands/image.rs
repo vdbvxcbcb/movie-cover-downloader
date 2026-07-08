@@ -3,7 +3,12 @@
 use crate::constants::MAX_DROPPABLE_IMAGE_SIZE_BYTES;
 use crate::utils::{is_supported_local_image_path, sanitize_processed_image_file_name};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+fn display_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
+}
 
 // 自定义裁剪拖拽本地文件时通过该命令读取图片字节，并限制文件类型和大小。
 #[tauri::command]
@@ -97,7 +102,7 @@ pub fn save_custom_cropped_image(
     let output_path = output_dir.join(sanitize_processed_image_file_name(&file_name)?);
     fs::write(&output_path, image_bytes).map_err(|error| format!("保存裁剪图片失败: {error}"))?;
 
-    Ok(output_path.to_string_lossy().into_owned())
+    Ok(display_path(&output_path))
 }
 
 // 保存图片处理弹窗导出的成品图。
@@ -127,5 +132,5 @@ pub fn save_processed_image(
     let output_path = output_dir.join(sanitize_processed_image_file_name(&file_name)?);
     fs::write(&output_path, image_bytes).map_err(|error| format!("保存图片失败: {error}"))?;
 
-    Ok(output_path.to_string_lossy().into_owned())
+    Ok(display_path(&output_path))
 }
