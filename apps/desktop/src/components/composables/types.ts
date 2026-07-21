@@ -37,6 +37,10 @@ export interface SlotImage {
   name: string;
   scale: number;
   opacity: number;
+  naturalWidth: number;
+  naturalHeight: number;
+  offsetX: number;
+  offsetY: number;
 }
 
 export interface Annotation {

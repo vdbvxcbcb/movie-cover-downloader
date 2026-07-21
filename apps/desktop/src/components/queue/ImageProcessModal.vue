@@ -17,7 +17,7 @@ import ImageProcessSettingsContent from "./image-process/ImageProcessSettingsCon
 import ImageProcessToolStrip from "./image-process/ImageProcessToolStrip.vue";
 import { useImageProcessAnnotations } from "../composables/useImageProcessAnnotations";
 import { useImageProcessLayoutState } from "../composables/useImageProcessLayoutState";
-import { useImageProcessSlotImages } from "../composables/useImageProcessSlotImages";
+import { getSlotImagePlacement, useImageProcessSlotImages } from "../composables/useImageProcessSlotImages";
 import MessageNotice from "../common/MessageNotice.vue";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 
@@ -56,6 +56,7 @@ const emit = defineEmits<{
 
 let unlistenDragDrop: UnlistenFn | null = null;
 let exportDebounceTimer: number | null = null;
+let slotResizeObserver: ResizeObserver | null = null;
 const fileInput = useTemplateRef<HTMLInputElement>("fileInput");
 const backgroundInput = useTemplateRef<HTMLInputElement>("backgroundInput");
 const previewBoard = useTemplateRef<HTMLElement>("previewBoard");
@@ -72,6 +73,8 @@ const viewportHeight = ref(window.innerHeight);
 const localOutputRootDir = ref(props.outputRootDir);
 const leftSidebarCollapsed = shallowRef(false);
 const rightSidebarCollapsed = shallowRef(false);
+const slotViewportRevision = shallowRef(0);
+const slotSurfaceElements: (HTMLElement | null)[] = [];
 
 const settings = reactive<ImageProcessSettings>({
   ratio: "1:1",
@@ -92,12 +95,14 @@ const { selectedLayoutId, selectedLayout, visibleCells, singleImageLayoutSelecte
   activeSlotIndex,
   selectedSlotIndex,
 });
+const shouldContainSlotImages = computed(() => settings.ratio === "1:1" && singleImageLayoutSelected.value);
 const {
   slotImages,
   selectedSlotImage,
   selectedImageOpacity,
   draggedSlotIndex,
   hoveredSlotIndex,
+  panningSlotIndex,
   hasImages,
   acceptDroppedPath,
   openSlotFilePicker,
@@ -110,6 +115,9 @@ const {
   removeSlotImage,
   zoomSlot,
   resetSlotZoom,
+  updateSlotImageDimensions,
+  isSlotImagePannable,
+  startSlotImagePan,
   shuffleImages,
   clearSlotImages,
   cleanupSlotImages,
@@ -123,6 +131,7 @@ const {
   createId,
   showNotice,
   clearNotice,
+  getSlotViewport,
 });
 const {
   annotations,
@@ -155,7 +164,6 @@ const {
   previewBoard,
   createId,
 });
-const shouldContainSlotImages = computed(() => settings.ratio === "1:1" && singleImageLayoutSelected.value);
 const aspectRatioValue = computed(() => {
   const [width, height] = settings.ratio.split(":").map(Number);
   return width / height;
@@ -301,11 +309,66 @@ function cellStyle(cell: LayoutCell) {
   };
 }
 
-function imageStyle(image: SlotImage) {
+function setSlotSurfaceElement(index: number, element: unknown) {
+  const previous = slotSurfaceElements[index];
+  if (previous && previous !== element) {
+    slotResizeObserver?.unobserve(previous);
+  }
+  const surface = element instanceof HTMLElement ? element : null;
+  slotSurfaceElements[index] = surface;
+  if (surface) {
+    slotResizeObserver?.observe(surface);
+  }
+}
+
+function getSlotViewport(index: number) {
+  void slotViewportRevision.value;
+  const surface = slotSurfaceElements[index];
+  if (!surface) return null;
   return {
-    objectFit: shouldContainSlotImages.value ? ("scale-down" as const) : ("cover" as const),
+    width: surface.clientWidth,
+    height: surface.clientHeight,
+    fit: shouldContainSlotImages.value ? ("scale-down" as const) : ("cover" as const),
+  };
+}
+
+function handleSlotImageLoad(event: Event, index: number) {
+  const image = event.currentTarget as HTMLImageElement;
+  updateSlotImageDimensions(index, image.naturalWidth, image.naturalHeight);
+}
+
+function handleSlotImagePointerDown(event: PointerEvent, index: number) {
+  if (activeDrawingKind.value) return;
+  startSlotImagePan(event, index);
+}
+
+function imageStyle(image: SlotImage, index: number) {
+  const viewport = getSlotViewport(index);
+  if (!viewport || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+    return {
+      left: "0",
+      top: "0",
+      objectFit: shouldContainSlotImages.value ? ("scale-down" as const) : ("cover" as const),
+      opacity: String(image.opacity / 100),
+      transform: `scale(${image.scale})`,
+    };
+  }
+  const placement = getSlotImagePlacement({
+    imageWidth: image.naturalWidth,
+    imageHeight: image.naturalHeight,
+    viewportWidth: viewport.width,
+    viewportHeight: viewport.height,
+    scale: image.scale,
+    offsetX: image.offsetX,
+    offsetY: image.offsetY,
+    fit: viewport.fit,
+  });
+  return {
+    left: `${placement.x}px`,
+    top: `${placement.y}px`,
+    width: `${placement.width}px`,
+    height: `${placement.height}px`,
     opacity: String(image.opacity / 100),
-    transform: `scale(${image.scale})`,
   };
 }
 
@@ -379,6 +442,8 @@ function getScaleDownImageRect(
   scale = 1,
   exportScaleX = 1,
   exportScaleY = 1,
+  offsetX = 0,
+  offsetY = 0,
 ) {
   const drawScale = Math.max(scale, 0.01);
   const previewWidth = width / Math.max(exportScaleX, 0.01);
@@ -386,9 +451,11 @@ function getScaleDownImageRect(
   const fitScale = Math.min(1, previewWidth / image.naturalWidth, previewHeight / image.naturalHeight);
   const drawWidth = image.naturalWidth * fitScale * drawScale * exportScaleX;
   const drawHeight = image.naturalHeight * fitScale * drawScale * exportScaleY;
+  const maxOffsetX = Math.max(0, (drawWidth - width) / 2);
+  const maxOffsetY = Math.max(0, (drawHeight - height) / 2);
   return {
-    x: x + (width - drawWidth) / 2,
-    y: y + (height - drawHeight) / 2,
+    x: x + (width - drawWidth) / 2 + clamp(offsetX, -1, 1) * maxOffsetX,
+    y: y + (height - drawHeight) / 2 + clamp(offsetY, -1, 1) * maxOffsetY,
     width: drawWidth,
     height: drawHeight,
   };
@@ -479,7 +546,18 @@ async function renderCanvas(format: OutputFormat) {
     if (slotImage) {
       const image = await loadImage(slotImage.url);
       if (shouldDrawContainImages) {
-        const imageRect = getScaleDownImageRect(image, x, y, cellWidth, cellHeight, slotImage.scale, scaleX, scaleY);
+        const imageRect = getScaleDownImageRect(
+          image,
+          x,
+          y,
+          cellWidth,
+          cellHeight,
+          slotImage.scale,
+          scaleX,
+          scaleY,
+          slotImage.offsetX,
+          slotImage.offsetY,
+        );
         if (shouldPaintContainedPadding) {
           paintOutsideContainedImage(context, imageRect, x, y, cellWidth, cellHeight, format === "jpg" ? "#ffffff" : null);
         }
@@ -487,7 +565,17 @@ async function renderCanvas(format: OutputFormat) {
         context.drawImage(image, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
       } else {
         context.globalAlpha = slotImage.opacity / 100;
-        drawCoverImage(context, image, x, y, cellWidth, cellHeight, slotImage.scale);
+        const imageRect = getSlotImagePlacement({
+          imageWidth: image.naturalWidth,
+          imageHeight: image.naturalHeight,
+          viewportWidth: cellWidth,
+          viewportHeight: cellHeight,
+          scale: slotImage.scale,
+          offsetX: slotImage.offsetX,
+          offsetY: slotImage.offsetY,
+          fit: "cover",
+        });
+        context.drawImage(image, x + imageRect.x, y + imageRect.y, imageRect.width, imageRect.height);
       }
       context.globalAlpha = 1;
     } else {
@@ -666,6 +754,14 @@ async function exportImage(format: OutputFormat) {
 
 onMounted(async () => {
   window.addEventListener("resize", updateViewportHeight);
+  if (typeof ResizeObserver !== "undefined") {
+    slotResizeObserver = new ResizeObserver(() => {
+      slotViewportRevision.value += 1;
+    });
+    for (const surface of slotSurfaceElements) {
+      if (surface) slotResizeObserver.observe(surface);
+    }
+  }
 
   if (!runtimeBridge.isNativeRuntime()) return;
 
@@ -693,6 +789,8 @@ onBeforeUnmount(() => {
   cleanupSlotImages();
   removeBackgroundImage();
   cleanupAnnotationInteractions();
+  slotResizeObserver?.disconnect();
+  slotResizeObserver = null;
   window.removeEventListener("resize", updateViewportHeight);
   clearExportDebounce();
   void unlistenDragDrop?.();
@@ -777,6 +875,8 @@ onBeforeUnmount(() => {
                     'preview-cell--drag-over': hoveredSlotIndex === index,
                     'preview-cell--swap-source': draggedSlotIndex === index,
                     'preview-cell--selected': selectedSlotIndex === index && Boolean(slotImages[index]),
+                    'preview-cell--pannable': !activeDrawingKind && isSlotImagePannable(index),
+                    'preview-cell--panning': panningSlotIndex === index,
                   }"
                   :style="cellStyle(cell)"
                   @click="handleSlotClick(fileInput, index)"
@@ -787,8 +887,19 @@ onBeforeUnmount(() => {
                   @dragleave="handleSlotDragLeave($event, index)"
                   @drop="handleSlotDrop($event, index)"
                 >
-                  <span class="preview-cell__surface">
-                    <img v-if="slotImages[index]" :src="slotImages[index]?.url" :alt="slotImages[index]?.name" :style="imageStyle(slotImages[index]!)" draggable="false" />
+                  <span
+                    :ref="(element) => setSlotSurfaceElement(index, element)"
+                    class="preview-cell__surface"
+                    @pointerdown="handleSlotImagePointerDown($event, index)"
+                  >
+                    <img
+                      v-if="slotImages[index]"
+                      :src="slotImages[index]?.url"
+                      :alt="slotImages[index]?.name"
+                      :style="imageStyle(slotImages[index]!, index)"
+                      draggable="false"
+                      @load="handleSlotImageLoad($event, index)"
+                    />
                     <span v-else class="slot-empty">＋</span>
                   </span>
 
@@ -1241,6 +1352,19 @@ onBeforeUnmount(() => {
   border: 1px dashed rgba(255, 255, 255, 0.16);
   border-radius: var(--cell-radius);
   background: rgba(255, 255, 255, 0.045);
+  user-select: none;
+}
+
+.preview-cell--pannable .preview-cell__surface {
+  cursor: grab;
+}
+
+.preview-cell--panning .preview-cell__surface {
+  cursor: grabbing;
+}
+
+.preview-board--drawing .preview-cell__surface {
+  cursor: crosshair;
 }
 
 .preview-cell--empty:hover .preview-cell__surface,
@@ -1300,6 +1424,7 @@ onBeforeUnmount(() => {
 }
 
 .preview-cell img {
+  position: absolute;
   width: 100%;
   height: 100%;
   object-fit: cover;

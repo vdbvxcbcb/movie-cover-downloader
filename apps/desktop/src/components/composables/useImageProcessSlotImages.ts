@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { computed, ref, shallowRef } from "vue";
 import type { ComputedRef, Ref, ShallowRef } from "vue";
 import type { LayoutCell, NoticeTone, SlotImage } from "./types";
 
@@ -15,6 +15,85 @@ interface UseImageProcessSlotImagesOptions {
   createId: (prefix: string) => string;
   showNotice: (message: string, tone?: NoticeTone) => void;
   clearNotice: () => void;
+  getSlotViewport: (index: number) => { width: number; height: number; fit: "cover" | "scale-down" } | null;
+}
+
+interface SlotImagePanState {
+  pointerId: number;
+  slotIndex: number;
+  imageId: string;
+  startClientX: number;
+  startClientY: number;
+  startOffsetX: number;
+  startOffsetY: number;
+  maxOffsetX: number;
+  maxOffsetY: number;
+}
+
+interface SlotImagePlacementInput {
+  imageWidth: number;
+  imageHeight: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  fit: "cover" | "scale-down";
+}
+
+export interface SlotImagePlacement {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  maxOffsetX: number;
+  maxOffsetY: number;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+export function getNextSlotImageOffset(currentOffset: number, pointerDelta: number, maxOffset: number) {
+  if (maxOffset <= 0) return clamp(currentOffset, -1, 1);
+  return clamp(currentOffset + pointerDelta / maxOffset, -1, 1);
+}
+
+function getRetainedSlotImageOffset(
+  currentOffset: number,
+  currentSize: number,
+  viewportSize: number,
+  currentMaxOffset: number,
+  nextSize: number,
+  nextMaxOffset: number,
+) {
+  if (currentMaxOffset <= 0 || nextMaxOffset <= 0) return currentOffset;
+  const currentPosition = (viewportSize - currentSize) / 2 + currentOffset * currentMaxOffset;
+  const focus = (viewportSize / 2 - currentPosition) / currentSize;
+  return clamp((nextSize * (0.5 - focus)) / nextMaxOffset, -1, 1);
+}
+
+export function getSlotImagePlacement(input: SlotImagePlacementInput): SlotImagePlacement {
+  const imageWidth = Math.max(1, input.imageWidth);
+  const imageHeight = Math.max(1, input.imageHeight);
+  const viewportWidth = Math.max(1, input.viewportWidth);
+  const viewportHeight = Math.max(1, input.viewportHeight);
+  const fitScale = input.fit === "cover"
+    ? Math.max(viewportWidth / imageWidth, viewportHeight / imageHeight)
+    : Math.min(1, viewportWidth / imageWidth, viewportHeight / imageHeight);
+  const width = imageWidth * fitScale * Math.max(0.01, input.scale);
+  const height = imageHeight * fitScale * Math.max(0.01, input.scale);
+  const maxOffsetX = Math.max(0, (width - viewportWidth) / 2);
+  const maxOffsetY = Math.max(0, (height - viewportHeight) / 2);
+
+  return {
+    x: (viewportWidth - width) / 2 + clamp(input.offsetX, -1, 1) * maxOffsetX,
+    y: (viewportHeight - height) / 2 + clamp(input.offsetY, -1, 1) * maxOffsetY,
+    width,
+    height,
+    maxOffsetX,
+    maxOffsetY,
+  };
 }
 
 function createEmptySlotImages() {
@@ -39,6 +118,8 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
   const slotImages = ref<(SlotImage | null)[]>(createEmptySlotImages());
   const draggedSlotIndex = ref<number | null>(null);
   const hoveredSlotIndex = ref<number | null>(null);
+  const panningSlotIndex = shallowRef<number | null>(null);
+  let slotImagePanState: SlotImagePanState | null = null;
 
   const selectedSlotImage = computed(() =>
     options.selectedSlotIndex.value === null ? null : slotImages.value[options.selectedSlotIndex.value] ?? null,
@@ -81,6 +162,10 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
       name: file.name,
       scale: 1,
       opacity: 100,
+      naturalWidth: 0,
+      naturalHeight: 0,
+      offsetX: 0,
+      offsetY: 0,
     };
     slotImages.value = nextImages;
     options.selectedSlotIndex.value = index;
@@ -250,6 +335,9 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
   }
 
   function removeSlotImage(index: number) {
+    if (panningSlotIndex.value === index) {
+      cancelSlotImagePan();
+    }
     const nextImages = [...slotImages.value];
     revokeSlotImage(nextImages[index] ?? null);
     nextImages[index] = null;
@@ -262,10 +350,45 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
   function zoomSlot(index: number, delta: number) {
     const current = slotImages.value[index];
     if (!current) return;
+    const currentPlacement = getSlotPlacement(index);
+    const viewport = options.getSlotViewport(index);
+    const scale = Math.min(3, Math.max(0.5, Number((current.scale + delta).toFixed(2))));
+    let offsetX = scale <= 1 ? 0 : current.offsetX;
+    let offsetY = scale <= 1 ? 0 : current.offsetY;
+    if (scale > 1 && currentPlacement && viewport) {
+      const nextPlacement = getSlotImagePlacement({
+        imageWidth: current.naturalWidth,
+        imageHeight: current.naturalHeight,
+        viewportWidth: viewport.width,
+        viewportHeight: viewport.height,
+        scale,
+        offsetX: current.offsetX,
+        offsetY: current.offsetY,
+        fit: viewport.fit,
+      });
+      offsetX = getRetainedSlotImageOffset(
+        current.offsetX,
+        currentPlacement.width,
+        viewport.width,
+        currentPlacement.maxOffsetX,
+        nextPlacement.width,
+        nextPlacement.maxOffsetX,
+      );
+      offsetY = getRetainedSlotImageOffset(
+        current.offsetY,
+        currentPlacement.height,
+        viewport.height,
+        currentPlacement.maxOffsetY,
+        nextPlacement.height,
+        nextPlacement.maxOffsetY,
+      );
+    }
     const nextImages = [...slotImages.value];
     nextImages[index] = {
       ...current,
-      scale: Math.min(3, Math.max(0.5, Number((current.scale + delta).toFixed(2)))),
+      scale,
+      offsetX,
+      offsetY,
     };
     slotImages.value = nextImages;
   }
@@ -274,8 +397,107 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     const current = slotImages.value[index];
     if (!current) return;
     const nextImages = [...slotImages.value];
-    nextImages[index] = { ...current, scale: 1 };
+    nextImages[index] = { ...current, scale: 1, offsetX: 0, offsetY: 0 };
     slotImages.value = nextImages;
+  }
+
+  function updateSlotImageDimensions(index: number, naturalWidth: number, naturalHeight: number) {
+    const current = slotImages.value[index];
+    if (!current || naturalWidth <= 0 || naturalHeight <= 0) return;
+    const nextImages = [...slotImages.value];
+    nextImages[index] = { ...current, naturalWidth, naturalHeight };
+    slotImages.value = nextImages;
+  }
+
+  function getSlotPlacement(index: number) {
+    const image = slotImages.value[index];
+    const viewport = options.getSlotViewport(index);
+    if (!image || !viewport || image.naturalWidth <= 0 || image.naturalHeight <= 0) return null;
+    return getSlotImagePlacement({
+      imageWidth: image.naturalWidth,
+      imageHeight: image.naturalHeight,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      scale: image.scale,
+      offsetX: image.offsetX,
+      offsetY: image.offsetY,
+      fit: viewport.fit,
+    });
+  }
+
+  function isSlotImagePannable(index: number) {
+    if (options.selectedSlotIndex.value !== index) return false;
+    const image = slotImages.value[index];
+    if (!image || image.scale <= 1) return false;
+    const placement = getSlotPlacement(index);
+    return Boolean(placement && (placement.maxOffsetX > 0 || placement.maxOffsetY > 0));
+  }
+
+  function startSlotImagePan(event: PointerEvent, index: number) {
+    if (event.button !== 0 || !isSlotImagePannable(index)) return false;
+    const image = slotImages.value[index];
+    const placement = getSlotPlacement(index);
+    if (!image || !placement) return false;
+
+    cancelSlotImagePan();
+    event.preventDefault();
+    event.stopPropagation();
+    slotImagePanState = {
+      pointerId: event.pointerId,
+      slotIndex: index,
+      imageId: image.id,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startOffsetX: image.offsetX,
+      startOffsetY: image.offsetY,
+      maxOffsetX: placement.maxOffsetX,
+      maxOffsetY: placement.maxOffsetY,
+    };
+    panningSlotIndex.value = index;
+    window.addEventListener("pointermove", handleSlotImagePanMove);
+    window.addEventListener("pointerup", stopSlotImagePan);
+    window.addEventListener("pointercancel", cancelSlotImagePan);
+    window.addEventListener("blur", cancelSlotImagePan);
+    return true;
+  }
+
+  function handleSlotImagePanMove(event: PointerEvent) {
+    const panState = slotImagePanState;
+    if (!panState || event.pointerId !== panState.pointerId) return;
+    const current = slotImages.value[panState.slotIndex];
+    if (!current || current.id !== panState.imageId) {
+      cancelSlotImagePan();
+      return;
+    }
+
+    event.preventDefault();
+    const nextImages = [...slotImages.value];
+    nextImages[panState.slotIndex] = {
+      ...current,
+      offsetX: getNextSlotImageOffset(panState.startOffsetX, event.clientX - panState.startClientX, panState.maxOffsetX),
+      offsetY: getNextSlotImageOffset(panState.startOffsetY, event.clientY - panState.startClientY, panState.maxOffsetY),
+    };
+    slotImages.value = nextImages;
+  }
+
+  function removeSlotImagePanListeners() {
+    window.removeEventListener("pointermove", handleSlotImagePanMove);
+    window.removeEventListener("pointerup", stopSlotImagePan);
+    window.removeEventListener("pointercancel", cancelSlotImagePan);
+    window.removeEventListener("blur", cancelSlotImagePan);
+  }
+
+  function stopSlotImagePan(event: PointerEvent) {
+    if (slotImagePanState && event.pointerId !== slotImagePanState.pointerId) return;
+    slotImagePanState = null;
+    panningSlotIndex.value = null;
+    removeSlotImagePanListeners();
+  }
+
+  function cancelSlotImagePan() {
+    slotImagePanState = null;
+    panningSlotIndex.value = null;
+    removeSlotImagePanListeners();
   }
 
   function shuffleImages() {
@@ -310,6 +532,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
   function cleanupSlotImages() {
     clearSlotImages();
     cancelSlotSwapDrag();
+    cancelSlotImagePan();
   }
 
   return {
@@ -318,6 +541,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     selectedImageOpacity,
     draggedSlotIndex,
     hoveredSlotIndex,
+    panningSlotIndex,
     hasImages,
     acceptDroppedPath,
     openSlotFilePicker,
@@ -330,6 +554,10 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     removeSlotImage,
     zoomSlot,
     resetSlotZoom,
+    updateSlotImageDimensions,
+    isSlotImagePannable,
+    startSlotImagePan,
+    cancelSlotImagePan,
     shuffleImages,
     clearSlotImages,
     cleanupSlotImages,
