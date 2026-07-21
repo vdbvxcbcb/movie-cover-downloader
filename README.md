@@ -31,6 +31,32 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 - 目标平台：`Windows`
 - 最低支持系统：`Windows 10`；`Windows 7 / 8 / 8.1` 不受支持
 
+## 支持环境与主要依赖版本
+
+开发和构建本项目需要以下环境：
+
+| 环境 | 支持版本或要求 |
+| --- | --- |
+| Node.js | `>= 20` |
+| pnpm | `10.33.2`（由根目录 `package.json` 固定） |
+| Rust | stable 工具链，目标为 `x86_64-pc-windows-msvc` |
+| Windows | `Windows 10 / 11`，需安装 MSVC x64 C++ 构建工具和 WebView2 Runtime |
+
+当前主要依赖版本如下；实际安装的精确版本以 `pnpm-lock.yaml` 和 `apps/desktop/src-tauri/Cargo.lock` 为准：
+
+| 依赖 | 版本 |
+| --- | --- |
+| Tauri | `2.x` |
+| Vue | `3.5.x` |
+| Pinia | `3.0.x` |
+| Vue Router | `5.0.x` |
+| Vite | `6.x` |
+| TypeScript | 桌面端 `5.6.x`；sidecar `5.9.x` |
+| sharp | `0.34.x` |
+| rusqlite | `0.32.x` |
+
+发布的 Windows 安装包已捆绑 Node.js sidecar 及其生产依赖（包括 `sharp`）；普通用户安装和运行应用时无需另行安装 Node.js、pnpm 或 Rust。
+
 ## 主要功能
 
 - 豆瓣影视搜索：按片名搜索豆瓣电影，展示封面、标题、简介、详情页链接和分页结果。
