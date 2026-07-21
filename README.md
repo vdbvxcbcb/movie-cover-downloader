@@ -4,12 +4,13 @@
 
 ## 快速入口
 
-- 安装包下载：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
-- 使用说明：[docs/usage-guide.md](./docs/usage-guide.md)
-- sidecar 说明：[apps/sidecar/README.md](./apps/sidecar/README.md)
-- Windows 开发环境配置：[docs/windows-setup.md](./docs/windows-setup.md)
-- 构建检查清单：[docs/build-checklist.md](./docs/build-checklist.md)
-- 构建说明：[docs/build-guide.md](./docs/build-guide.md)
+安装包下载：[Release page](https://github.com/vdbvxcbcb/movie-cover-downloader/releases/download/v0.1.0/Movie.Cover.Downloader_0.1.0_x64-setup.exe)
+
+1. Windows 开发环境配置：[docs/windows-setup.md](./docs/windows-setup.md)
+2. 使用说明：[docs/usage-guide.md](./docs/usage-guide.md)
+3. 构建检查清单：[docs/build-checklist.md](./docs/build-checklist.md)
+4. 构建说明：[docs/build-guide.md](./docs/build-guide.md)
+5. sidecar 说明：[apps/sidecar/README.md](./apps/sidecar/README.md)
 
 ## 视频演示
 
