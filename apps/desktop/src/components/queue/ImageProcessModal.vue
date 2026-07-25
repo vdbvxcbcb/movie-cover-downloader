@@ -91,11 +91,10 @@ const settings = reactive<ImageProcessSettings>({
   backgroundOverlay: false,
 });
 
-const { selectedLayoutId, selectedLayout, visibleCells, singleImageLayoutSelected, groupedLayouts } = useImageProcessLayoutState({
+const { selectedLayoutId, selectedLayout, visibleCells, groupedLayouts } = useImageProcessLayoutState({
   activeSlotIndex,
   selectedSlotIndex,
 });
-const shouldContainSlotImages = computed(() => settings.ratio === "1:1" && singleImageLayoutSelected.value);
 const {
   slotImages,
   selectedSlotImage,
@@ -328,7 +327,6 @@ function getSlotViewport(index: number) {
   return {
     width: surface.clientWidth,
     height: surface.clientHeight,
-    fit: shouldContainSlotImages.value ? ("scale-down" as const) : ("cover" as const),
   };
 }
 
@@ -348,7 +346,7 @@ function imageStyle(image: SlotImage, index: number) {
     return {
       left: "0",
       top: "0",
-      objectFit: shouldContainSlotImages.value ? ("scale-down" as const) : ("cover" as const),
+      objectFit: "cover" as const,
       opacity: String(image.opacity / 100),
       transform: `scale(${image.scale})`,
     };
@@ -361,7 +359,6 @@ function imageStyle(image: SlotImage, index: number) {
     scale: image.scale,
     offsetX: image.offsetX,
     offsetY: image.offsetY,
-    fit: viewport.fit,
   });
   return {
     left: `${placement.x}px`,
@@ -433,67 +430,6 @@ function drawCoverImage(
   context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
 }
 
-function getScaleDownImageRect(
-  image: HTMLImageElement,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  scale = 1,
-  exportScaleX = 1,
-  exportScaleY = 1,
-  offsetX = 0,
-  offsetY = 0,
-) {
-  const drawScale = Math.max(scale, 0.01);
-  const previewWidth = width / Math.max(exportScaleX, 0.01);
-  const previewHeight = height / Math.max(exportScaleY, 0.01);
-  const fitScale = Math.min(1, previewWidth / image.naturalWidth, previewHeight / image.naturalHeight);
-  const drawWidth = image.naturalWidth * fitScale * drawScale * exportScaleX;
-  const drawHeight = image.naturalHeight * fitScale * drawScale * exportScaleY;
-  const maxOffsetX = Math.max(0, (drawWidth - width) / 2);
-  const maxOffsetY = Math.max(0, (drawHeight - height) / 2);
-  return {
-    x: x + (width - drawWidth) / 2 + clamp(offsetX, -1, 1) * maxOffsetX,
-    y: y + (height - drawHeight) / 2 + clamp(offsetY, -1, 1) * maxOffsetY,
-    width: drawWidth,
-    height: drawHeight,
-  };
-}
-
-function paintOutsideContainedImage(
-  context: CanvasRenderingContext2D,
-  imageRect: { x: number; y: number; width: number; height: number },
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  fillStyle: string | null,
-) {
-  const imageLeft = clamp(imageRect.x, x, x + width);
-  const imageTop = clamp(imageRect.y, y, y + height);
-  const imageRight = clamp(imageRect.x + imageRect.width, x, x + width);
-  const imageBottom = clamp(imageRect.y + imageRect.height, y, y + height);
-  const topHeight = Math.max(0, imageTop - y);
-  const bottomHeight = Math.max(0, y + height - imageBottom);
-  const middleHeight = Math.max(0, imageBottom - imageTop);
-  const leftWidth = Math.max(0, imageLeft - x);
-  const rightWidth = Math.max(0, x + width - imageRight);
-  const paintRect = fillStyle
-    ? (rectX: number, rectY: number, rectWidth: number, rectHeight: number) => {
-        context.fillStyle = fillStyle;
-        context.fillRect(rectX, rectY, rectWidth, rectHeight);
-      }
-    : (rectX: number, rectY: number, rectWidth: number, rectHeight: number) => {
-        context.clearRect(rectX, rectY, rectWidth, rectHeight);
-      };
-
-  if (topHeight > 0) paintRect(x, y, width, topHeight);
-  if (bottomHeight > 0) paintRect(x, imageBottom, width, bottomHeight);
-  if (leftWidth > 0 && middleHeight > 0) paintRect(x, imageTop, leftWidth, middleHeight);
-  if (rightWidth > 0 && middleHeight > 0) paintRect(imageRight, imageTop, rightWidth, middleHeight);
-}
-
 async function renderCanvas(format: OutputFormat) {
   const { width, height } = getExportSize();
   const canvas = document.createElement("canvas");
@@ -529,9 +465,6 @@ async function renderCanvas(format: OutputFormat) {
   const innerY = borderTop;
   const innerWidth = Math.max(1, width - borderLeft - borderRight);
   const innerHeight = Math.max(1, height - borderTop - borderBottom);
-  const shouldDrawContainImages = shouldContainSlotImages.value;
-  const shouldPaintContainedPadding = shouldDrawContainImages && !backgroundImage;
-
   for (const [index, cell] of visibleCells.value.entries()) {
     const slotImage = slotImages.value[index];
     const x = innerX + (cell.x / 100) * innerWidth + gapX / 2;
@@ -545,38 +478,17 @@ async function renderCanvas(format: OutputFormat) {
 
     if (slotImage) {
       const image = await loadImage(slotImage.url);
-      if (shouldDrawContainImages) {
-        const imageRect = getScaleDownImageRect(
-          image,
-          x,
-          y,
-          cellWidth,
-          cellHeight,
-          slotImage.scale,
-          scaleX,
-          scaleY,
-          slotImage.offsetX,
-          slotImage.offsetY,
-        );
-        if (shouldPaintContainedPadding) {
-          paintOutsideContainedImage(context, imageRect, x, y, cellWidth, cellHeight, format === "jpg" ? "#ffffff" : null);
-        }
-        context.globalAlpha = slotImage.opacity / 100;
-        context.drawImage(image, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
-      } else {
-        context.globalAlpha = slotImage.opacity / 100;
-        const imageRect = getSlotImagePlacement({
-          imageWidth: image.naturalWidth,
-          imageHeight: image.naturalHeight,
-          viewportWidth: cellWidth,
-          viewportHeight: cellHeight,
-          scale: slotImage.scale,
-          offsetX: slotImage.offsetX,
-          offsetY: slotImage.offsetY,
-          fit: "cover",
-        });
-        context.drawImage(image, x + imageRect.x, y + imageRect.y, imageRect.width, imageRect.height);
-      }
+      context.globalAlpha = slotImage.opacity / 100;
+      const imageRect = getSlotImagePlacement({
+        imageWidth: image.naturalWidth,
+        imageHeight: image.naturalHeight,
+        viewportWidth: cellWidth,
+        viewportHeight: cellHeight,
+        scale: slotImage.scale,
+        offsetX: slotImage.offsetX,
+        offsetY: slotImage.offsetY,
+      });
+      context.drawImage(image, x + imageRect.x, y + imageRect.y, imageRect.width, imageRect.height);
       context.globalAlpha = 1;
     } else {
       context.fillStyle = "rgba(255, 255, 255, 0.05)";

@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { computed, shallowRef } from "vue";
 import type { SelectableDoubanPhoto } from "../../../types/app";
 
-defineProps<{
+const props = defineProps<{
   photo: SelectableDoubanPhoto | null;
   imageUrl: string;
   currentIndex: number | null;
@@ -13,6 +14,59 @@ const emit = defineEmits<{
   step: [delta: -1 | 1];
   imageError: [photo: SelectableDoubanPhoto];
 }>();
+
+const commonAspectRatios = [
+  { label: "1:1", value: 1 },
+  { label: "16:9", value: 16 / 9 },
+  { label: "9:16", value: 9 / 16 },
+  { label: "4:3", value: 4 / 3 },
+  { label: "3:4", value: 3 / 4 },
+  { label: "3:2", value: 3 / 2 },
+  { label: "2:3", value: 2 / 3 },
+] as const;
+
+interface LoadedDimensions {
+  imageKey: string;
+  width: number;
+  height: number;
+}
+
+const loadedDimensions = shallowRef<LoadedDimensions | null>(null);
+const currentImageKey = computed(() => `${props.photo?.id ?? ""}:${props.imageUrl}`);
+
+function normalizeDimension(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+}
+
+const displayedDimensions = computed(() => {
+  const metadataWidth = normalizeDimension(props.photo?.width);
+  const metadataHeight = normalizeDimension(props.photo?.height);
+  if (metadataWidth > 0 && metadataHeight > 0) {
+    return { width: metadataWidth, height: metadataHeight };
+  }
+
+  const loaded = loadedDimensions.value;
+  return loaded?.imageKey === currentImageKey.value ? loaded : null;
+});
+const dimensionLabel = computed(() => {
+  const dimensions = displayedDimensions.value;
+  if (!dimensions) return "";
+  const aspectRatio = dimensions.width / dimensions.height;
+  const nearestRatio = commonAspectRatios.reduce((nearest, candidate) =>
+    Math.abs(Math.log(aspectRatio / candidate.value)) < Math.abs(Math.log(aspectRatio / nearest.value)) ? candidate : nearest,
+  );
+  return `${dimensions.width}x${dimensions.height} ${nearestRatio.label}`;
+});
+
+function handleImageLoad(event: Event) {
+  const image = event.currentTarget as HTMLImageElement;
+  if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+  loadedDimensions.value = {
+    imageKey: currentImageKey.value,
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+  };
+}
 </script>
 
 <template>
@@ -37,6 +91,7 @@ const emit = defineEmits<{
         class="selected-photo-preview__image"
         :src="imageUrl"
         :alt="photo.title"
+        @load="handleImageLoad"
         @error="emit('imageError', photo)"
       />
       <button
@@ -47,6 +102,9 @@ const emit = defineEmits<{
       >
         ›
       </button>
+      <div v-if="dimensionLabel" class="selected-photo-preview__meta">
+        {{ dimensionLabel }}
+      </div>
       <div class="selected-photo-preview__counter">
         {{ (currentIndex ?? 0) + 1 }} / {{ total }}
       </div>
@@ -138,6 +196,26 @@ const emit = defineEmits<{
   color: rgba(255, 255, 255, 0.92);
   background: rgba(255, 255, 255, 0.18);
   text-align: center;
+  transform: translateX(-50%);
+}
+
+.selected-photo-preview__meta {
+  position: fixed;
+  left: 50%;
+  bottom: 76px;
+  max-width: calc(100vw - 152px);
+  padding: 7px 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(8, 18, 20, 0.72);
+  backdrop-filter: blur(8px);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transform: translateX(-50%);
 }
 </style>

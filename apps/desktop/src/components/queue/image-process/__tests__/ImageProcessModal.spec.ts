@@ -5,7 +5,7 @@ import ImageProcessModal from "../../ImageProcessModal.vue";
 const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
 const revokeObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
 
-describe("ImageProcessModal image viewport", () => {
+describe("image process modal image viewport", () => {
   beforeEach(() => {
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
@@ -31,7 +31,17 @@ describe("ImageProcessModal image viewport", () => {
     }
   });
 
-  it("moves the selected zoomed image inside its fixed viewport", async () => {
+  it("starts with one fixed image viewport", () => {
+    const wrapper = mount(ImageProcessModal, {
+      props: { outputRootDir: "D:/covers" },
+    });
+
+    expect(wrapper.findAll(".preview-cell")).toHaveLength(1);
+    expect(wrapper.find(".preset-card--active").text()).toContain("单图");
+    wrapper.unmount();
+  });
+
+  it("keeps a selected image draggable and covering its viewport after zooming out", async () => {
     const wrapper = mount(ImageProcessModal, {
       props: { outputRootDir: "D:/covers" },
     });
@@ -50,8 +60,12 @@ describe("ImageProcessModal image viewport", () => {
     Object.defineProperty(image.element, "naturalHeight", { configurable: true, value: 200 });
     await image.trigger("load");
     await wrapper.find<HTMLButtonElement>('[aria-label="放大"]').trigger("click");
+    await wrapper.find<HTMLButtonElement>('[aria-label="放大"]').trigger("click");
+    await wrapper.find<HTMLButtonElement>('[aria-label="缩小"]').trigger("click");
 
     const centeredStyle = image.attributes("style");
+    expect(Number.parseFloat(image.element.style.width)).toBeGreaterThanOrEqual(100);
+    expect(Number.parseFloat(image.element.style.height)).toBeGreaterThanOrEqual(100);
     await surface.trigger("pointerdown", { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
     window.dispatchEvent(new PointerEvent("pointermove", { pointerId: 1, clientX: 40, clientY: 10 }));
     await wrapper.vm.$nextTick();

@@ -15,7 +15,7 @@ interface UseImageProcessSlotImagesOptions {
   createId: (prefix: string) => string;
   showNotice: (message: string, tone?: NoticeTone) => void;
   clearNotice: () => void;
-  getSlotViewport: (index: number) => { width: number; height: number; fit: "cover" | "scale-down" } | null;
+  getSlotViewport: (index: number) => { width: number; height: number } | null;
 }
 
 interface SlotImagePanState {
@@ -38,7 +38,6 @@ interface SlotImagePlacementInput {
   scale: number;
   offsetX: number;
   offsetY: number;
-  fit: "cover" | "scale-down";
 }
 
 export interface SlotImagePlacement {
@@ -78,9 +77,7 @@ export function getSlotImagePlacement(input: SlotImagePlacementInput): SlotImage
   const imageHeight = Math.max(1, input.imageHeight);
   const viewportWidth = Math.max(1, input.viewportWidth);
   const viewportHeight = Math.max(1, input.viewportHeight);
-  const fitScale = input.fit === "cover"
-    ? Math.max(viewportWidth / imageWidth, viewportHeight / imageHeight)
-    : Math.min(1, viewportWidth / imageWidth, viewportHeight / imageHeight);
+  const fitScale = Math.max(viewportWidth / imageWidth, viewportHeight / imageHeight);
   const width = imageWidth * fitScale * Math.max(0.01, input.scale);
   const height = imageHeight * fitScale * Math.max(0.01, input.scale);
   const maxOffsetX = Math.max(0, (width - viewportWidth) / 2);
@@ -352,7 +349,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     if (!current) return;
     const currentPlacement = getSlotPlacement(index);
     const viewport = options.getSlotViewport(index);
-    const scale = Math.min(3, Math.max(0.5, Number((current.scale + delta).toFixed(2))));
+    const scale = Math.min(3, Math.max(1, Number((current.scale + delta).toFixed(2))));
     let offsetX = scale <= 1 ? 0 : current.offsetX;
     let offsetY = scale <= 1 ? 0 : current.offsetY;
     if (scale > 1 && currentPlacement && viewport) {
@@ -364,7 +361,6 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
         scale,
         offsetX: current.offsetX,
         offsetY: current.offsetY,
-        fit: viewport.fit,
       });
       offsetX = getRetainedSlotImageOffset(
         current.offsetX,
@@ -421,7 +417,6 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
       scale: image.scale,
       offsetX: image.offsetX,
       offsetY: image.offsetY,
-      fit: viewport.fit,
     });
   }
 

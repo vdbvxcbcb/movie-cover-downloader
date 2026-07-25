@@ -6,10 +6,9 @@ export function useImageProcessLayoutState(options: {
   activeSlotIndex: Ref<number>;
   selectedSlotIndex: Ref<number | null>;
 }) {
-  const selectedLayoutId = ref("q4-grid");
+  const selectedLayoutId = ref("q1-full");
   const selectedLayout = computed(() => layoutPresets.find((layout) => layout.id === selectedLayoutId.value) ?? layoutPresets[0]);
   const visibleCells = computed(() => selectedLayout.value.cells);
-  const singleImageLayoutSelected = computed(() => selectedLayout.value.count === 1);
   const groupedLayouts = computed(() =>
     Array.from({ length: 9 }, (_, index) => ({
       count: index + 1,
@@ -28,7 +27,6 @@ export function useImageProcessLayoutState(options: {
     selectedLayoutId,
     selectedLayout,
     visibleCells,
-    singleImageLayoutSelected,
     groupedLayouts,
   };
 }

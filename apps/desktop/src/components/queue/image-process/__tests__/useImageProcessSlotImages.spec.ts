@@ -35,7 +35,7 @@ function createSlotImages(selectedIndex: number | null = 0) {
     createId: () => "image-1",
     showNotice: () => {},
     clearNotice: () => {},
-    getSlotViewport: () => ({ width: 100, height: 100, fit: "cover" }),
+    getSlotViewport: () => ({ width: 100, height: 100 }),
   });
   return { ...composable, selectedSlotIndex };
 }
@@ -59,7 +59,6 @@ describe("image process slot images", () => {
       scale: 2,
       offsetX: 0,
       offsetY: 0,
-      fit: "cover",
     });
     const leftEdge = getSlotImagePlacement({
       imageWidth: 400,
@@ -69,7 +68,6 @@ describe("image process slot images", () => {
       scale: 2,
       offsetX: 1,
       offsetY: 0,
-      fit: "cover",
     });
     const rightEdge = getSlotImagePlacement({
       imageWidth: 400,
@@ -79,7 +77,6 @@ describe("image process slot images", () => {
       scale: 2,
       offsetX: -1,
       offsetY: 0,
-      fit: "cover",
     });
 
     expect(centered).toEqual({ x: -150, y: -50, width: 400, height: 200, maxOffsetX: 150, maxOffsetY: 50 });
@@ -135,6 +132,26 @@ describe("image process slot images", () => {
     composable.slotImages.value[0] = createSlotImage({ scale: 2, offsetX: -1, offsetY: 1 });
     composable.resetSlotZoom(0);
     expect(composable.slotImages.value[0]).toMatchObject({ scale: 1, offsetX: 0, offsetY: 0 });
+  });
+
+  it("does not shrink below 100 percent", () => {
+    const composable = createSlotImages();
+    composable.slotImages.value[0] = createSlotImage({ scale: 1.06, offsetX: 0.4, offsetY: -0.2 });
+
+    composable.zoomSlot(0, -0.12);
+
+    expect(composable.slotImages.value[0]).toMatchObject({ scale: 1, offsetX: 0, offsetY: 0 });
+  });
+
+  it("keeps a selected image pannable after shrinking from a larger zoom", () => {
+    const composable = createSlotImages();
+    composable.slotImages.value[0] = createSlotImage({ scale: 1.5, offsetX: 0.4, offsetY: -0.2 });
+
+    composable.zoomSlot(0, -0.12);
+
+    expect(composable.slotImages.value[0]?.scale).toBe(1.38);
+    expect(composable.isSlotImagePannable(0)).toBe(true);
+    expect(composable.slotImages.value[0]?.offsetX).not.toBe(0);
   });
 
   it("keeps the current image focus while zooming further", () => {
