@@ -23,6 +23,7 @@
 - `cookies.ts`：Cookie 导入、可用性、冷却、失效。
 - `logs.ts`：运行日志。
 - `ui.ts`：弹窗开关、输出目录、全局提示。
+- `movieDetails.ts`：详情弹窗、500ms 防抖、内存缓存、在途请求复用、最后请求生效和重试。
 - `app-helpers.ts`：状态快照、任务恢复、持久化错误提示。
 
 排查 store 问题时先判断领域，再打开对应文件；不要默认把逻辑加回 `app.ts`。
@@ -64,6 +65,50 @@ sequenceDiagram
 - `apps/sidecar/src/services/douban-search.ts`：豆瓣搜索页解析。
 
 注意：搜索结果页已做内存缓存，缓存 key 包含 query 和 page；切换已访问页不应重复请求豆瓣。
+
+## 影片详情链路
+
+```mermaid
+sequenceDiagram
+  participant User as 用户
+  participant Entry as SearchMovieModal / TaskTable / CreateTaskModal
+  participant Store as movieDetails.ts
+  participant Cookies as cookies.ts
+  participant Bridge as runtime-bridge.ts
+  participant Tauri as commands/task.rs
+  participant RustSidecar as sidecar/douban.rs
+  participant Sidecar as sidecar index.ts
+  participant DetailService as douban-details.ts
+  participant Douban as 豆瓣 API / 详情页
+
+  User->>Entry: 点击影片封面
+  Entry->>Store: openDetails(seed)
+  Store->>Store: 命中内存缓存则立即打开
+  Store->>Store: 未缓存则等待 500ms
+  Store->>Cookies: pickUsableCookie()
+  Store->>Bridge: resolveDoubanMovieDetails(detailUrl,cookie?)
+  Bridge->>Tauri: invoke resolve_douban_movie_details
+  Tauri->>RustSidecar: run_blocking_job
+  RustSidecar->>Sidecar: MCD_COMMAND=douban-details + 环境变量
+  Sidecar->>DetailService: resolveDoubanMovieDetails
+  DetailService->>Douban: 请求结构化 API 和详情页补充字段
+  DetailService-->>Sidecar: DoubanMovieDetails
+  Sidecar-->>RustSidecar: douban-details-result
+  RustSidecar-->>Bridge: JSON string
+  Bridge-->>Store: 仅当前 requestRevision 生效并写入内存缓存
+  Store-->>Entry: AppShell 挂载 MovieDetailModal
+```
+
+关键文件：
+
+- `apps/desktop/src/stores/movieDetails.ts`：500ms 防抖、运行期缓存、同 URL 在途请求复用、旧响应丢弃和错误提示。
+- `apps/desktop/src/components/queue/movie-details/MovieDetailModal.vue`：详情字段、主演折叠、评分、简介复制、关闭和重试。
+- `apps/desktop/src/lib/runtime-bridge.ts`：`resolveDoubanMovieDetails`。
+- `apps/desktop/src-tauri/src/commands/task.rs`：`resolve_douban_movie_details` 命令。
+- `apps/desktop/src-tauri/src/sidecar/douban.rs`：以隐藏窗口方式启动详情 sidecar，并透传可选 Cookie 环境变量。
+- `apps/sidecar/src/services/douban-details.ts`：校验豆瓣 subject URL，合并结构化 API 与 HTML 补充字段。
+
+注意：详情缓存不持久化。无 Cookie 时允许匿名尝试；URL 只允许 `https://movie.douban.com/subject/<id>/`，结构化 API 的手动重定向只允许同一 subject ID 从 movie 切换到 tv，不能放宽为任意跳转。
 
 ## 自动下载链路
 
@@ -113,6 +158,28 @@ sequenceDiagram
 
 注意：豆瓣任务在前端队列层会串行保护，请求间隔会进入真实抓取链路。
 
+### 下载队列封面补全
+
+```mermaid
+sequenceDiagram
+  participant Table as TaskTable.vue
+  participant Bridge as runtime-bridge.ts
+  participant Tauri as commands/task.rs
+  participant Sidecar as douban-title.ts
+  participant App as app.ts
+  participant SQLite as runtime-state.sqlite
+
+  Table->>Bridge: resolveDoubanMoviePreview(detailUrl)
+  Bridge->>Tauri: invoke resolve_douban_movie_preview
+  Tauri->>Sidecar: 解析标题、coverUrl 和 coverDataUrl
+  Sidecar-->>Table: DoubanMoviePreview
+  Table->>App: coverResolved(taskId,preview)
+  App->>App: persistTaskCoverPreview
+  App->>SQLite: schedulePersist 完整快照
+```
+
+创建任务时，`taskActions.ts` 会先规范化豆瓣详情 URL 再匹配预览缓存；队列表格优先显示 `coverDataUrl`，其次才使用远程 `coverUrl`。封面解析失败只保留占位，不影响下载任务。
+
 ## 选图发现链路
 
 ```mermaid
@@ -152,7 +219,8 @@ sequenceDiagram
 注意：
 
 - 不要一次性解析全部分类或全部页面。
-- 空分类应显示空状态，不能卡在 loading。
+- `nextCursor` / `totalCount` 允许缺失；分类总数解析要兼容 HTML 实体以及中英文千位分隔符。
+- 空分类应在 discovery 完成且当前分类没有已发现或待合并图片时显示，不能提前报空或卡在 loading。
 - 切换分类要停止旧 discovery，再优先解析新分类。
 
 ## 选图下载链路
@@ -258,7 +326,9 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-  ImageProcess["ImageProcessModal.vue\n拼版 / 标注 / 导出"] --> Bridge["runtime-bridge.ts"]
+  ImageProcess["ImageProcessModal.vue\n拼版 / 标注 / 导出"] --> Layout["useImageProcessLayoutState\n默认单图布局"]
+  ImageProcess --> Placement["useImageProcessSlotImages\ncover / 缩放 / 受限平移"]
+  ImageProcess --> Bridge["runtime-bridge.ts"]
   CustomCrop["CustomCropModal.vue\n上传 / 拖拽 / 裁剪"] --> Bridge
   Bridge --> Tauri["commands/image.rs"]
   Tauri --> ReadDropped["read_dropped_image_file"]
@@ -274,6 +344,8 @@ flowchart TB
 - 自定义裁剪的 Tauri 拖拽读取必须走 `readDroppedImageFile(filePath)`，不绑定输出根目录。
 - `readLocalImageFile(filePath, outputRootDir)` 仍用于需要输出根目录边界校验的读取场景。
 - 保存裁剪结果固定写入输出根目录下的 `custom-crop-photo`。
+- `useImageProcessLayoutState.ts` 默认选择 `q1-full` 单图布局；格子固定，图片始终以 cover 基准覆盖格子。
+- `useImageProcessSlotImages.ts` 把缩放限制在 `1-3`，只有当前选中且 scale > 1 的图片可平移；偏移量按图片超出格子的范围归一化并夹紧，预览和 Canvas 导出共用同一 placement 计算。
 
 ## 打包和 sidecar resources 链路
 

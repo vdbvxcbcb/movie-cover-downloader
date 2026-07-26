@@ -11,14 +11,15 @@
 当前已经落地的核心能力：
 
 - 豆瓣影视搜索，支持结果缓存、分页、添加链接、从搜索结果进入选图下载。
+- 下载队列、搜索影视和选图下载封面共用影片详情弹窗，按需展示影片信息、评分、评分人数和剧情简介。
 - 添加下载任务弹窗包含两种模式：自动下载、选图下载。
 - 自动下载支持批量豆瓣 subject 链接、图片类型、数量、尺寸、格式、请求间隔、输出目录。
 - 选图下载支持剧照、海报、壁纸 3 个分类的分页/游标式解析，用户滚动到底部才继续请求下一批。
-- 选图下载支持单击勾选、拖拽框选、多选、全选当前分类、取消全选、双击预览大图、确认下载选中图片并停止后续解析。
+- 选图下载支持单击勾选、拖拽框选、多选、全选当前分类、取消全选、双击预览大图及分辨率/近似比例、确认下载选中图片并停止后续解析。
 - 选图下载提交前会检测相同链接、输出目录、分类和图片比例的重复任务；确认覆盖后清理旧输出、移除旧任务并重新加入新任务。
 - 下载队列支持暂停、继续、重试、删除、清空、打开输出目录、显示实时进度。
 - Cookie 导入支持豆瓣登录窗口导入和手动字符串导入。
-- 图片处理弹窗支持 1-9 张图片拼版、拖拽上传/换格、背景图、透明度、重叠效果、标注、导出 JPG/PNG。
+- 图片处理弹窗默认单图布局，支持 1-9 张图片拼版、拖拽上传/换格、选中图片缩放取景、背景图、透明度、重叠效果、标注、导出 JPG/PNG。
 - 自定义裁剪弹窗支持点击上传和拖拽上传本地图片，拖拽上传不限制图片必须位于输出根目录。
 - 日志中心、SQLite 本地状态持久化、NSIS 安装包打包。
 
@@ -58,15 +59,28 @@
 - 选图下载的后端发现协议是分页/游标式：前端滚动到底部才请求下一批，不能恢复成一次性解析全部图片。
 - 用户点击 `下载选中 N 张` 后会弹确认；确认后应停止继续解析后续图片，只下载已选列表。
 - 单击图片只负责勾选/取消勾选；双击同一张图片才打开大图预览，不要让单击误触发预览。
+- 大图预览显示实际分辨率和最接近的常用比例；元数据缺失时使用图片加载后的自然尺寸计算。
 - 拖拽框选从图片网格区域触发，超过阈值后进入框选状态；框选会保留拖拽开始前已有选择，并把框选命中的图片设为选中。
 - 选图下载提交前要走重复任务检测。重复判定包含链接、输出根目录、分类和图片比例；确认覆盖时要把旧任务从队列和 activeTaskIds 中移除，并清理旧输出目录。
 - 选图下载图片列表要有 loading、失败占位图、懒加载/分批显示，避免 400+ 图片一次性渲染造成卡顿。
 - 空分类应显示空状态，不要卡在 loading 或提示仍需手动点击“解析当前分类”。
+- 豆瓣分类总数文本可能包含 HTML 实体、空白和中英文千位分隔符；cursor 的 `totalCount` 允许缺失，只有 discovery 完成且当前分类确实没有图片时才显示空分类提示。
 - 搜索影视结果已做页级缓存；切换已访问页不应重复请求豆瓣。
 - 搜索影视弹窗分页器在普通笔记本高度下使用更小尺寸，加载下一页时分页器位置不能上下跳。
+- 下载队列封面解析成功后要把 `coverUrl` / `coverDataUrl` 回写任务并调度持久化；创建任务匹配预览时要先规范化豆瓣详情 URL，避免同一 subject 的不同链接形式丢失封面。
 - 图片处理弹窗在普通笔记本宽度下仍应尽量保持横向三栏布局，左侧布局选择区域要能看清文字，中间预览区可适当缩窄。
+- 图片处理默认使用单图布局；图片始终以 cover 方式覆盖固定格子，缩放不得低于 100%，只有当前选中且高于 100% 的图片可拖动，偏移量必须限制在不露出格子的范围内。
 - 控制中心和弹窗都要避免横向滚动；不是隐藏内容，而是重新排版到当前屏幕宽度内，超出高度时用纵向滚动。
 - 自定义裁剪点击上传和拖拽上传权限应一致：拖拽本地图片读取使用 `readDroppedImageFile`，不要再绑定输出根目录。
+
+**影片详情状态**：
+
+- 下载队列、搜索影视和选图下载顶部影片封面都调用 `movieDetails.openDetails`，由 `AppShell.vue` 挂载同一个 `MovieDetailModal.vue`；不要为不同入口复制详情弹窗。
+- 未缓存详情使用 500ms 防抖；同一 subject 在本次运行内复用内存缓存和在途请求，快速连续点击时只允许最后一次点击的结果生效。
+- 请求时有可用 Cookie 就通过环境变量传给 sidecar，没有 Cookie 时允许匿名尝试；Cookie 仍不得进入命令行或日志。
+- 详情 URL 只接受 `https://movie.douban.com/subject/<id>/`，API 重定向只允许同一 ID 在豆瓣 `movie` / `tv` 结构化接口间切换。
+- 详情封面优先使用入口已经加载的 `coverDataUrl`，再退回远程 `coverUrl`；任务标题展示时要移除海报/剧照/壁纸和下载模式后缀。
+- 评分只显示数值和评价人数，不显示星级或 `/ 10`；无有效评分时只显示 `暂无评分`。主演默认前 6 位，可展开/收起，剧情简介默认完整展示并可复制。
 
 ## 项目结构
 
@@ -92,6 +106,7 @@ movie-cover-downloader/
 - `apps/desktop/src/stores/cookies.ts`：Cookie 导入、冷却、失效、可用 Cookie 选择。
 - `apps/desktop/src/stores/logs.ts`：运行日志状态和追加/清理逻辑。
 - `apps/desktop/src/stores/ui.ts`：弹窗开关、输出目录、全局提示和图片处理输出目录。
+- `apps/desktop/src/stores/movieDetails.ts`：影片详情弹窗状态、500ms 防抖、内存缓存、在途请求复用和请求竞争保护。
 - `apps/desktop/src/stores/app-helpers.ts`：状态快照、任务恢复、持久化错误提示等 store 辅助函数。
 - `apps/desktop/src/lib/runtime-bridge.ts`：前端和 Tauri 命令桥接层。
 - `apps/desktop/src/types/app.ts`：前端状态、任务、Cookie、日志、运行时结果类型。
@@ -101,6 +116,7 @@ movie-cover-downloader/
 - `apps/desktop/src/components/queue/create-task/SelectedPhotoGrid.vue`：选图图片网格、缩略图状态、懒加载、拖拽框选、触底请求。
 - `apps/desktop/src/components/queue/create-task/SelectedPhotoCategoryTabs.vue`：选图分类 tabs。
 - `apps/desktop/src/components/queue/create-task/SelectedPhotoPreviewModal.vue`：选图大图预览和左右切换。
+- `apps/desktop/src/components/queue/movie-details/MovieDetailModal.vue`：共用影片详情弹窗，展示详细字段、评分和剧情简介。
 - `apps/desktop/src/components/queue/SearchMovieModal.vue`：豆瓣搜索影视弹窗。
 - `apps/desktop/src/components/queue/TaskTable.vue`：下载队列表格、封面兜底、任务操作。
 - `apps/desktop/src/components/queue/CustomCropModal.vue`：自定义裁剪弹窗。
@@ -131,7 +147,7 @@ movie-cover-downloader/
 - `runtime.rs`：sidecar 路径解析、请求间隔控制
 - `parser.rs`：stdout/stderr 解析、事件转发
 - `download.rs`：下载任务执行、豆瓣图片发现
-- `douban.rs`：豆瓣搜索、标题解析、预览解析
+- `douban.rs`：豆瓣搜索、标题解析、预览解析、影片详情解析
 
 **Commands 模块** (`commands/`)：
 - `state.rs`：状态持久化命令
@@ -149,6 +165,7 @@ movie-cover-downloader/
 - `apps/sidecar/src/index.ts`：sidecar 入口，一次进程处理一个命令。
 - `apps/sidecar/src/adapters/douban.ts`：豆瓣详情页、搜索页、图片分类页解析。
 - `apps/sidecar/src/services/douban-title.ts`：豆瓣标题/封面预览解析。
+- `apps/sidecar/src/services/douban-details.ts`：豆瓣影片结构化详情和详情页补充字段解析。
 - `apps/sidecar/src/services/downloader.ts`：下载、断点续传、sharp 转码/裁剪、保存文件、上报进度。
 - `apps/sidecar/src/services/scheduler.ts`：发现、下载、Cookie、任务控制编排。
 - `apps/sidecar/src/services/task-control.ts`：读取 pause/resume/cancel 控制文件。

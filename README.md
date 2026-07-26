@@ -1,6 +1,6 @@
 # Movie Cover Downloader
 
-一个面向 Windows 的豆瓣影视图片下载器桌面应用，用于制作视频封面和整理影视图片素材。当前主要支持豆瓣电影，提供影片搜索、自动下载、选图下载、任务队列、Cookie 管理、实时进度、本地输出目录管理和图片处理能力。
+一个面向 Windows 的豆瓣影视图片下载器桌面应用，用于制作视频封面和整理影视图片素材。当前主要支持豆瓣电影，提供影片搜索、影片详情、自动下载、选图下载、任务队列、Cookie 管理、实时进度、本地输出目录管理和图片处理能力。
 
 ## 快速入口
 
@@ -62,12 +62,13 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 
 - 豆瓣影视搜索：按片名搜索豆瓣电影，展示封面、标题、简介、详情页链接和分页结果。
 - 搜索结果缓存：同一次搜索内切换分页会复用已请求过的结果，减少重复请求。
+- 影片详情：点击搜索结果、下载队列或选图下载顶部的影片封面，可查看标题、演职员、类型、上映信息、评分、评分人数和剧情简介；简介可一键复制。
 - Cookie 管理：搜索影视、添加下载任务和真实下载链路依赖可用豆瓣 Cookie，支持登录窗口自动导入和字符串导入。
 - 自动下载：在 `3、添加下载任务` 弹窗的 `自动下载` 模式中粘贴豆瓣 `subject` 链接，按配置批量下载剧照、海报、壁纸。
 - 选图下载：在 `选图下载` 模式中按 `剧照 / 海报 / 壁纸` 三个分类分页解析豆瓣图片，用户滚动到底部继续加载下一批，勾选后只下载选中的内容。
 - 双路径选图：既支持知道链接时手动粘贴解析，也支持从 `2、搜索影视` 的搜索结果直接进入选图下载。
-- 图片选择与预览：选图下载列表支持单击勾选、拖拽框选多张图片、双击预览大图，并可在预览组中左右切换。
-- 图片处理：支持 1 到 9 张图片拼版、单张图片透明度、背景图透明度、背景重叠、方框/圆圈/箭头标注和导出。
+- 图片选择与预览：选图下载列表支持单击勾选、拖拽框选多张图片、双击预览大图，并可在预览组中左右切换；预览会显示图片分辨率和最接近的常用比例。
+- 图片处理：默认打开单图布局，支持 1 到 9 张图片拼版；选中图片放大后可在固定格子内拖动调整取景，缩小不会低于刚好覆盖格子的 100% 基准。
 - 自定义裁剪：支持点击上传和拖拽上传本地图片，裁剪结果保存到输出根目录下的 `custom-crop-photo`。
 - 任务队列：下载任务进入队列后按添加顺序执行，并实时展示进度、日志和输出目录；重复任务可在确认后覆盖旧输出并替换为新任务。
 
@@ -81,7 +82,8 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 
 1. 点击 `2、搜索影视`。
 2. 输入片名并搜索。
-3. 搜索结果右侧提供三个操作：
+3. 点击搜索结果封面可打开共用影片详情弹窗。
+4. 搜索结果右侧提供三个操作：
    - `选图下载`：打开 `3、添加下载任务`，切到 `选图下载` 模式，自动填入链接、片名、封面并开始解析。
    - `添加链接`：把影片详情页加入添加下载任务弹窗的链接草稿，继续走自动下载流程。
    - `删除链接`：从添加下载任务的链接草稿中移除已添加链接。
@@ -103,7 +105,7 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 3. 切换 `剧照 / 海报 / 壁纸` 时，会停止旧分类正在进行的解析，再优先解析新分类。
 4. 图片按当前分类分页/游标式加载，滚动到底部才会继续请求下一批，已解析结果会按分类缓存。
 5. 单击图片可勾选/取消勾选，拖拽空白区域可框选多张图片；`全选`、`取消全选` 只作用于当前分类。
-6. 双击图片打开大图预览，预览中可以左右切换同一组图片。
+6. 双击图片打开大图预览，预览中可以左右切换同一组图片，并显示类似 `1920x1080 16:9` 的分辨率和近似比例。
 7. 设置输出目录、图片尺寸、输出格式和请求间隔。
 8. 点击 `下载选中 N 张`，确认后会停止继续解析后续图片，并只下载已选图片。
 
@@ -121,8 +123,11 @@ https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 
 图片处理弹窗用于本地拼版和标注：
 
+- 默认选择单图布局，格子始终作为固定裁剪窗口。
 - 上传 1 到 9 张图片后生成拼版。
 - 点击某一张图片后，只调整当前图片透明度，并用完整实线框表示当前选择。
+- 只有当前选中且缩放比例高于 100% 的图片可拖动；放大后再缩小仍可继续调整，直到回到刚好覆盖格子的 100% 下限。
+- 拖动范围会被限制在格子边界内，预览和导出使用同一取景结果，不会露出空白区域。
 - 背景区域支持上传背景图、设置背景图透明度。
 - 背景区域的 `重叠` 按钮可让背景图与拼版图片叠加，预览和导出保持一致。
 - 方框、圆圈、箭头标注在拖拽完成后隐藏拖拽点；再次点击原区域时显示拖拽点和设置项。
@@ -169,6 +174,22 @@ sidecar 请求豆瓣搜索页并解析影片封面、片名、简介和详情页
 用户点击“添加链接”或“选图下载”
   ↓
 添加链接写入共享草稿；选图下载打开 CreateTaskModal 并自动进入选图模式
+```
+
+### 影片详情
+
+```text
+用户点击搜索结果、下载队列或选图下载顶部封面
+  ↓
+movieDetails store 对未缓存点击做 500ms 防抖，并复用缓存/在途请求
+  ↓
+runtime-bridge 调用 Tauri 命令 resolve_douban_movie_details
+  ↓
+Rust 以 MCD_COMMAND=douban-details 启动 sidecar
+  ↓
+sidecar 合并豆瓣结构化 API 与详情页补充字段
+  ↓
+只有最后一次点击的请求结果可以更新共用 MovieDetailModal
 ```
 
 ### 自动下载任务
@@ -223,12 +244,14 @@ sidecar 只下载用户选中的图片列表，并沿用现有进度事件进入
 - `stores/taskQueue.ts`：任务队列、运行状态、排序/搜索、重复任务检测和队列配置。
 - `stores/taskActions.ts`：任务动作层，负责创建、暂停、继续、重试、删除、清空和打开输出目录。
 - `stores/cookies.ts` / `stores/logs.ts` / `stores/ui.ts`：分别管理 Cookie、日志和弹窗/输出目录等 UI 状态。
-- `lib/runtime-bridge.ts`：前端与 Tauri 的统一桥接层，封装搜索、自动下载、选图发现、选图下载和本地文件操作。
+- `stores/movieDetails.ts`：管理影片详情弹窗、防抖、运行期缓存、在途请求复用和请求竞争。
+- `lib/runtime-bridge.ts`：前端与 Tauri 的统一桥接层，封装搜索、影片详情、自动下载、选图发现、选图下载和本地文件操作。
 - `components/queue/SearchMovieModal.vue`：豆瓣影视搜索弹窗，负责分页缓存、搜索结果展示、添加链接和选图下载入口。
 - `components/queue/CreateTaskModal.vue`：添加下载任务弹窗，包含 `自动下载 / 选图下载` 两种模式。
 - `components/queue/CustomCropModal.vue`：自定义裁剪弹窗，负责本地图片上传、拖拽读取、裁剪和保存。
 - `components/queue/ImageProcessModal.vue`：图片处理弹窗，负责拼版、透明度、背景重叠和标注导出。
 - `components/queue/TaskTable.vue`：任务队列表格，负责分页、进度展示、打开目录和删除确认。
+- `components/queue/movie-details/MovieDetailModal.vue`：下载队列、搜索影视和选图下载共用的影片详情弹窗。
 - `components/logs/LogConsole.vue`：日志列表组件。
 - `components/cookies/ImportCookieModal.vue`：Cookie 导入弹窗。
 
@@ -255,12 +278,12 @@ sidecar 只下载用户选中的图片列表，并沿用现有进度事件进入
 - `runtime.rs`：sidecar 路径解析、请求间隔控制、错误格式化
 - `parser.rs`：stdout/stderr 解析、日志/进度事件转发
 - `download.rs`：下载任务执行、豆瓣图片发现
-- `douban.rs`：豆瓣搜索、标题解析、预览解析
+- `douban.rs`：豆瓣搜索、标题解析、预览解析、影片详情解析
 
 **Commands 模块** (`commands/`)：
 - `state.rs`：状态持久化命令（load/save/emit_log）
 - `login.rs`：登录窗口管理（check_cookie_status/close_window）
-- `task.rs`：任务命令（暂停/继续/清理/下载/搜索）
+- `task.rs`：任务命令（暂停/继续/清理/下载/搜索/影片详情）
 - `fs.rs`：文件系统操作（删除/清空/选择/打开目录）
 - `image.rs`：图片处理（读取/保存裁剪结果）
 
@@ -284,6 +307,7 @@ sidecar 只下载用户选中的图片列表，并沿用现有进度事件进入
 - `discover_douban_photos`：图片发现（不下载，返回列表）
 - `search_douban_movies`：豆瓣影视搜索
 - `resolve_douban_movie_title` / `resolve_douban_movie_preview`：标题/封面解析
+- `resolve_douban_movie_details`：影片详情解析
 - `pause_download_task` / `resume_download_task` / `clear_download_tasks`：任务控制
 - `delete_directory_path` / `clear_directory_contents`：目录管理
 - `pick_output_directory` / `open_directory_path` / `reveal_file_path`：目录操作
@@ -297,10 +321,12 @@ sidecar 是独立 Node 进程，不直接操作前端状态，也不直接调用
 核心职责包括：
 
 - 通过 `MCD_COMMAND=douban-search` 执行豆瓣影视搜索。
+- 通过 `MCD_COMMAND=douban-details` 按需解析影片详情。
 - 通过 `MCD_COMMAND=douban-photos-discover` 执行选图下载的图片发现模式。
 - 通过 `MCD_COMMAND=douban-selected-download` 下载用户选中的图片列表。
 - 解析豆瓣详情页、`all_photos` 页面和 `photos?type=S/R/W` 分类页。
 - 为搜索弹窗返回影片缩略图、片名、简介和详情页链接。
+- 合并豆瓣结构化 API 与详情页信息，返回影片字段、评分和剧情简介。
 - 为选图下载返回图片标题、图片地址、页面地址、分类、方向和尺寸信息。
 - 下载图片并支持断点续传、请求间隔、暂停/取消控制。
 - 使用 `sharp` 做裁剪和格式转换。

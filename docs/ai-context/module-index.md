@@ -6,13 +6,14 @@
 
 | 文件 | 责任 | 常见触发任务 |
 | --- | --- | --- |
-| `apps/desktop/src/stores/app.ts` | 主 Pinia store 协调层；启动恢复、持久化调度、组合子 store 与任务动作 | 应用启动、快照保存/加载、跨 store 协作 |
+| `apps/desktop/src/stores/app.ts` | 主 Pinia store 协调层；启动恢复、持久化调度、组合子 store、任务动作和队列封面回写 | 应用启动、快照保存/加载、跨 store 协作、封面持久化 |
 | `apps/desktop/src/stores/app-helpers.ts` | store 辅助函数；状态快照、任务恢复、持久化错误提示 | 持久化字段、恢复逻辑、启动后任务状态 |
 | `apps/desktop/src/stores/taskQueue.ts` | 任务队列、运行状态、队列配置、重复任务检测 | 队列调度、任务状态、重复选图任务判断 |
-| `apps/desktop/src/stores/taskActions.ts` | 任务动作；创建、暂停、继续、重试、删除、清空、打开输出目录 | 队列操作、下载执行、任务生命周期 |
+| `apps/desktop/src/stores/taskActions.ts` | 任务动作；创建、暂停、继续、重试、删除、清空、打开输出目录，并按规范化详情 URL 匹配封面预览 | 队列操作、下载执行、任务生命周期、创建任务封面 |
 | `apps/desktop/src/stores/cookies.ts` | Cookie 状态；导入、可用性、冷却、失效、优先级 | Cookie 导入、冷却、反爬错误处理 |
 | `apps/desktop/src/stores/logs.ts` | 运行日志状态 | 日志追加、清空、持久化 |
 | `apps/desktop/src/stores/ui.ts` | UI 状态；弹窗开关、输出目录、全局提示 | 弹窗打开方式、Notice/Toast、输出目录记忆 |
+| `apps/desktop/src/stores/movieDetails.ts` | 影片详情状态；500ms 防抖、内存缓存、在途请求复用、请求竞争和重试 | 封面点击反馈、详情加载、快速切换影片、缓存行为 |
 | `apps/desktop/src/lib/runtime-bridge.ts` | 前端和 Tauri command/event 统一桥接；网页预览降级实现 | 新增系统能力、改 Tauri command 名称、事件订阅 |
 | `apps/desktop/src/types/app.ts` | 前端任务、Cookie、日志、运行时 payload 类型 | 新增状态字段、跨层 payload、持久化 schema |
 | `apps/desktop/src/layouts/AppShell.vue` | 应用骨架和全局弹窗挂载 | 新增/移动全局弹窗 |
@@ -27,11 +28,12 @@
 | `apps/desktop/src/components/queue/create-task/AutoDownloadStrategyPanel.vue` | 自动下载模式配置面板 | 图片类型、数量、尺寸、格式、请求间隔 |
 | `apps/desktop/src/components/queue/create-task/SelectedPhotoCategoryTabs.vue` | 选图分类 tabs | 剧照/海报/壁纸分类切换 |
 | `apps/desktop/src/components/queue/create-task/SelectedPhotoGrid.vue` | 选图图片网格；懒加载、选择、拖拽框选、触底请求 | 单击选择、框选、loading/失败占位、滚动加载 |
-| `apps/desktop/src/components/queue/create-task/SelectedPhotoPreviewModal.vue` | 选中图片大图预览 | 双击预览、左右切换、键盘关闭 |
+| `apps/desktop/src/components/queue/create-task/SelectedPhotoPreviewModal.vue` | 选中图片大图预览；分辨率和近似常用比例 | 双击预览、左右切换、尺寸/比例、键盘关闭 |
 | `apps/desktop/src/components/queue/SearchMovieModal.vue` | 豆瓣搜索影视弹窗；页级缓存、结果操作 | 搜索结果、分页器、添加链接、选图下载入口 |
 | `apps/desktop/src/components/queue/TaskTable.vue` | 下载队列表格、任务操作、输出目录入口 | 暂停、继续、重试、删除、打开目录、进度展示 |
 | `apps/desktop/src/components/queue/CustomCropModal.vue` | 自定义裁剪弹窗 | 上传/拖拽读取、本地图片裁剪、保存 |
 | `apps/desktop/src/components/queue/ImageProcessModal.vue` | 图片处理大弹窗 | 拼版、背景、透明度、标注、导出 |
+| `apps/desktop/src/components/queue/movie-details/MovieDetailModal.vue` | 共用影片详情弹窗；字段、评分、主演折叠、简介复制和错误状态 | 详情布局、字段顺序、封面兜底、复制简介、关闭/重试 |
 
 ## 前端工具和测试
 
@@ -49,7 +51,7 @@
 | `apps/desktop/src/composables/useTaskComparison.ts` | 任务重复和比较辅助 |
 | `apps/desktop/src/composables/useTaskOutputDirectory.ts` | 任务输出目录辅助 |
 | `apps/desktop/src/components/composables/useSelectedPhotoGridSelection.ts` | 选图网格选择/框选逻辑 |
-| `apps/desktop/src/components/composables/useImageProcess*.ts` | 图片处理弹窗状态和标注逻辑 |
+| `apps/desktop/src/components/composables/useImageProcess*.ts` | 图片处理弹窗布局、图片缩放/受限平移和标注逻辑 |
 | `apps/desktop/src/**/__tests__/*.spec.ts` | 当前主要前端 Vitest 测试，按源码目录就近放置 |
 | `apps/desktop/src/**/*.{test,spec}.ts` | Vitest 配置允许的补充测试入口 |
 
@@ -90,7 +92,7 @@
 | `apps/desktop/src-tauri/src/sidecar/runtime.rs` | 运行时管理：sidecar 路径解析、请求间隔控制、错误格式化 |
 | `apps/desktop/src-tauri/src/sidecar/parser.rs` | 输出解析：stdout/stderr 解析、日志事件、进度事件、结果提取 |
 | `apps/desktop/src-tauri/src/sidecar/download.rs` | 下载执行：下载任务阻塞执行、豆瓣图片发现 |
-| `apps/desktop/src-tauri/src/sidecar/douban.rs` | 豆瓣操作：搜索、标题解析、预览解析 |
+| `apps/desktop/src-tauri/src/sidecar/douban.rs` | 豆瓣操作：搜索、标题解析、预览解析、影片详情 sidecar 调用 |
 
 ### Commands 模块
 
@@ -99,7 +101,7 @@
 | `apps/desktop/src-tauri/src/commands/mod.rs` | 命令模块导出 |
 | `apps/desktop/src-tauri/src/commands/state.rs` | 状态命令：load_persisted_state、save_persisted_state、emit_runtime_log |
 | `apps/desktop/src-tauri/src/commands/login.rs` | 登录命令：check_login_window_cookie_status、close_login_window |
-| `apps/desktop/src-tauri/src/commands/task.rs` | 任务命令：暂停/继续/清理、run_download_task、discover_douban_photos、搜索等 |
+| `apps/desktop/src-tauri/src/commands/task.rs` | 任务命令：暂停/继续/清理、下载、发现、搜索、标题/封面和影片详情解析 |
 | `apps/desktop/src-tauri/src/commands/fs.rs` | 文件系统命令：目录删除/清空、目录选择、打开目录、定位文件 |
 | `apps/desktop/src-tauri/src/commands/image.rs` | 图片命令：读取本地/拖拽图片、保存裁剪/处理结果 |
 
@@ -127,13 +129,14 @@ Rust 测试主要在 `lib.rs` 底部，重点覆盖：
 
 | 文件 | 责任 | 常见触发任务 |
 | --- | --- | --- |
-| `apps/sidecar/src/index.ts` | sidecar 入口；解析环境变量；按 `MCD_COMMAND` 分派搜索、标题、选图发现、选图下载、自动下载 | 新增命令、改 payload 环境变量、改命令分派 |
+| `apps/sidecar/src/index.ts` | sidecar 入口；解析环境变量；按 `MCD_COMMAND` 分派搜索、标题、影片详情、选图发现、选图下载、自动下载 | 新增命令、改 payload 环境变量、改命令分派 |
 | `apps/sidecar/src/services/scheduler.ts` | 自动下载任务编排：discover -> download | 下载队列任务行为 |
 | `apps/sidecar/src/services/matcher.ts` | 根据任务选择 adapter；当前只注册 `DoubanAdapter` | 新增站点、改发现入口 |
 | `apps/sidecar/src/adapters/douban.ts` | 豆瓣详情页、图片分类页、分页/游标解析、预览 data URL | 解析不到图片、空分类、选图批次、豆瓣页面结构变化 |
 | `apps/sidecar/src/services/downloader.ts` | 图片下载、断点续传、格式转换、裁剪、保存、进度上报 | 下载失败、图片格式、尺寸比例、续传 |
 | `apps/sidecar/src/services/douban-search.ts` | 豆瓣搜索页解析 | 搜索结果缺失、封面/简介解析 |
 | `apps/sidecar/src/services/douban-title.ts` | 豆瓣详情页标题和封面预览解析 | 手动粘贴链接后的标题/封面 |
+| `apps/sidecar/src/services/douban-details.ts` | 合并豆瓣结构化 API 和详情页字段，校验 subject URL、重定向和封面域名 | 影片字段缺失、评分、详情风控、movie/tv API 跳转 |
 | `apps/sidecar/src/services/cookie-pool.ts` | sidecar 内 Cookie 读取和站点分发 | Cookie 是否传入真实请求 |
 | `apps/sidecar/src/services/task-control.ts` | sidecar 安全点暂停/取消读取 | 暂停、继续、取消 |
 | `apps/sidecar/src/services/resume-store.ts` | 断点续传元数据 | `.part` 和 resume metadata |

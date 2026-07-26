@@ -20,7 +20,7 @@
 - 前端：Vue 3、TypeScript、Vite、Pinia。
 - 桌面能力层：Tauri 2、Rust、SQLite、本地文件系统、sidecar 进程管理。
 - 抓取执行层：Node.js sidecar、TypeScript、豆瓣适配器、sharp 图片处理。
-- 当前核心对象：搜索影视、自动下载、选图下载、任务队列、Cookie、日志、图片处理、自定义裁剪。
+- 当前核心对象：搜索影视、影片详情、自动下载、选图下载、任务队列、Cookie、日志、图片处理、自定义裁剪。
 - 最低支持系统：Windows 10；Windows 7 / 8 / 8.1 不受支持。
 
 不要把早期规划文档里的 ImpAwards、Playwright 抓取、托盘、自动更新、代理等能力当成已实现功能。
@@ -31,7 +31,7 @@
 flowchart TB
   User["用户操作"]
   UI["Vue UI\n弹窗 / 页面 / 组件"]
-  Store["Pinia stores\napp.ts 协调 taskQueue/cookies/logs/ui"]
+  Store["Pinia stores\napp.ts 协调领域 store；movieDetails 独立管理详情"]
   Bridge["runtimeBridge\napps/desktop/src/lib/runtime-bridge.ts"]
   Tauri["Tauri commands\ncommands/* + lib.rs 注册"]
   SQLite["SQLite 状态库\nruntime-state.sqlite"]
@@ -75,6 +75,7 @@ flowchart TB
 - `stores/taskQueue.ts` 管理任务队列、运行状态、重复任务检测和队列配置。
 - `stores/taskActions.ts` 承载创建、暂停、继续、重试、删除、清空、打开目录等任务动作。
 - `stores/cookies.ts`、`stores/logs.ts`、`stores/ui.ts` 分别管理 Cookie、日志和 UI 状态。
+- `stores/movieDetails.ts` 独立管理影片详情弹窗、500ms 防抖、本次运行内存缓存、在途请求复用和最后请求生效。
 - `stores/app-helpers.ts` 放快照、任务恢复、持久化错误提示等辅助函数。
 
 **Rust 模块化架构**（最近重构）：
@@ -90,6 +91,7 @@ flowchart TB
 | 如果任务是 | 先读 | 通常还要读 |
 | --- | --- | --- |
 | 搜索影视结果、分页、选图下载入口 | [runtime-flows.md](./runtime-flows.md#搜索影视链路) | `SearchMovieModal.vue`、`runtime-bridge.ts`、`commands/task.rs`、`douban-search.ts` |
+| 影片详情弹窗、字段解析、缓存或请求竞争 | [runtime-flows.md](./runtime-flows.md#影片详情链路) | `movieDetails.ts`、`MovieDetailModal.vue`、`runtime-bridge.ts`、`commands/task.rs`、`douban-details.ts` |
 | 添加下载任务、自动下载 | [runtime-flows.md](./runtime-flows.md#自动下载链路) | `CreateTaskModal.vue`、`taskActions.ts`、`taskQueue.ts`、`runtime-bridge.ts`、`scheduler.ts` |
 | 选图下载、滚动分页、框选、多选、预览 | [runtime-flows.md](./runtime-flows.md#选图发现链路) | `CreateTaskModal.vue`、`SelectedPhotoGrid.vue`、`SelectedPhotoPreviewModal.vue`、`douban.ts` |
 | 下载队列、暂停/继续/重试/删除 | [runtime-flows.md](./runtime-flows.md#队列和任务控制链路) | `taskQueue.ts`、`taskActions.ts`、`TaskTable.vue`、`task-control.ts`、`commands/task.rs` |
@@ -104,7 +106,12 @@ flowchart TB
 - 选图发现必须保持分页/游标式，前端滚动到底部才请求下一批。
 - 切换选图分类时取消旧 discovery 是正常流程，不应弹错误警告。
 - 用户确认下载选中图片后，应停止后续 discovery，只下载前端传入的 selected images。
+- 选图 discovery 的 `nextCursor` 和 `totalCount` 都可能缺失；空分类提示必须等待 discovery 完成并确认当前分类无已发现或待合并图片。
 - 重复选图任务判定必须包含链接、输出根目录、分类和图片比例。
+- 影片详情只接受规范的豆瓣电影 `subject` HTTPS 链接；API 重定向只允许同一 subject ID 在 `m.douban.com/rexxar/api/v2/movie|tv/` 之间切换。
+- 影片详情缓存只存在于本次运行内；快速连续点击时必须保持 500ms 防抖、在途请求复用和最后请求生效，不能让旧响应覆盖新影片。
+- 图片拼版格子是固定裁剪窗口；缩放下限为覆盖格子的 100%，只有当前选中且高于 100% 的图片可拖动，不能通过偏移露出空白。
+- 下载队列异步解析出的封面要回写任务并持久化，优先保存 `coverDataUrl`，避免重启后重新依赖远程图片请求。
 - 自定义裁剪拖拽本地图片必须走 `readDroppedImageFile(filePath)`，不能重新绑定输出根目录。
 - Cookie 不得进入命令行参数或日志。
 - 删除/清理本地目录必须走 Rust 边界校验。
