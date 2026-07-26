@@ -50,6 +50,7 @@ pub fn run() {
             search_douban_movies,
             resolve_douban_movie_title,
             resolve_douban_movie_preview,
+            resolve_douban_movie_details,
             open_output_dir,
             open_directory_path,
             reveal_file_path

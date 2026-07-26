@@ -3,6 +3,7 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import TaskTable from '../queue/TaskTable.vue'
 import type { TaskItem } from '../../types/app'
+import { useMovieDetails } from '../../stores/movieDetails'
 
 const runtimeBridgeMock = vi.hoisted(() => ({
   isNativeRuntime: vi.fn(() => false),
@@ -139,6 +140,15 @@ describe('TaskTable', () => {
       expect(wrapper.text()).toContain('Movie A')
       expect(wrapper.text()).toContain('Movie B')
       expect(wrapper.text()).toContain('Movie C')
+    })
+
+    it('should open movie details when the cover is clicked', async () => {
+      const task = createMockTask({ coverDataUrl: 'data:image/jpeg;base64,cover' })
+      const wrapper = mount(TaskTable, { props: { tasks: [task] } })
+
+      await wrapper.get('.cover-cell--button').trigger('click')
+
+      expect(useMovieDetails().pendingDetailUrl).toBe('https://movie.douban.com/subject/123/')
     })
   })
 

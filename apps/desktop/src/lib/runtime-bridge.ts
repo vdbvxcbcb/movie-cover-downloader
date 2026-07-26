@@ -5,6 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type {
   AppSeedState,
   DoubanLoginImportStatus,
+  DoubanMovieDetails,
   DoubanMoviePreview,
   DoubanSearchResultPage,
   LogEntry,
@@ -227,6 +228,15 @@ class RuntimeBridge {
 
     const serialized = await invoke<string>("resolve_douban_movie_preview", { detailUrl });
     return JSON.parse(serialized) as DoubanMoviePreview;
+  }
+
+  async resolveDoubanMovieDetails(detailUrl: string, doubanCookie?: string) {
+    if (!isTauriRuntime()) {
+      throw new Error("影片详情仅在 Tauri 桌面环境可用");
+    }
+
+    const serialized = await invoke<string>("resolve_douban_movie_details", { detailUrl, doubanCookie });
+    return JSON.parse(serialized) as DoubanMovieDetails;
   }
   // 真实下载只允许在 Tauri 环境执行，避免网页预览误以为可以访问本地 sidecar。
   // 触发真实 sidecar 下载任务；非 Tauri 环境直接报错，避免误导用户。

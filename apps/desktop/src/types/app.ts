@@ -199,6 +199,28 @@ export interface DoubanMoviePreview {
   coverDataUrl?: string;
 }
 
+export interface DoubanMovieDetailsSeed extends DoubanMoviePreview {}
+
+export interface DoubanMovieDetails extends DoubanMoviePreview {
+  originalTitle?: string;
+  year?: string;
+  directors: string[];
+  writers: string[];
+  casts: string[];
+  genres: string[];
+  countries: string[];
+  languages: string[];
+  releaseDates: string[];
+  durations: string[];
+  seasonNumber?: number;
+  episodeCount?: number;
+  aka: string[];
+  imdbId?: string;
+  ratingValue?: number;
+  ratingCount?: number;
+  summary?: string;
+}
+
 export interface SelectedPhotoDownloadSeed {
   detailUrl: string;
   title?: string;

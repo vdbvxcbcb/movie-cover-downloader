@@ -12,13 +12,16 @@ import CreateTaskModal from "../components/queue/CreateTaskModal.vue";
 import CustomCropModal from "../components/queue/CustomCropModal.vue";
 import ImageProcessModal from "../components/queue/ImageProcessModal.vue";
 import SearchMovieModal from "../components/queue/SearchMovieModal.vue";
+import MovieDetailModal from "../components/queue/movie-details/MovieDetailModal.vue";
 import { useAppStore } from "../stores/app";
 import { useUI } from "../stores/ui";
+import { useMovieDetails } from "../stores/movieDetails";
 import type { CookieDraft, TaskDraft, TopAction } from "../types/app";
 
 const route = useRoute();
 const appStore = useAppStore();
 const uiStore = useUI();
+const movieDetailsStore = useMovieDetails();
 const noticeRevision = shallowRef(0);
 
 const {
@@ -37,6 +40,13 @@ const {
   expiredCookieCount,
   expiredCookieExpiresAt,
 } = storeToRefs(uiStore);
+const {
+  isOpen: movieDetailsOpen,
+  loading: movieDetailsLoading,
+  details: movieDetails,
+  errorMessage: movieDetailsError,
+  currentSeed: movieDetailsSeed,
+} = storeToRefs(movieDetailsStore);
 
 const {
   clearNotice,
@@ -164,5 +174,15 @@ watch(notice, (value) => {
     :latest-expires-at="expiredCookieExpiresAt"
     @close="closeExpiredCookiePrompt"
     @open-login="openLoginFromExpiredPrompt"
+  />
+
+  <MovieDetailModal
+    v-if="movieDetailsOpen"
+    :details="movieDetails"
+    :seed="movieDetailsSeed"
+    :loading="movieDetailsLoading"
+    :error-message="movieDetailsError"
+    @close="movieDetailsStore.closeDetails"
+    @retry="movieDetailsStore.retry"
   />
 </template>

@@ -32,6 +32,7 @@ import { runtimeBridge } from "../../lib/runtime-bridge";
 import { useUI } from "../../stores/ui";
 import { useTaskQueue } from "../../stores/taskQueue";
 import { useCookies } from "../../stores/cookies";
+import { useMovieDetails } from "../../stores/movieDetails";
 import { storeToRefs } from "pinia";
 import {
   createSelectedPhotoDiscoveryState,
@@ -61,6 +62,7 @@ const emit = defineEmits<{
 const uiStore = useUI();
 const taskQueueStore = useTaskQueue();
 const cookiesStore = useCookies();
+const movieDetailsStore = useMovieDetails();
 
 const { createTaskOutputRootDir } = storeToRefs(uiStore);
 const {
@@ -612,6 +614,28 @@ function getSelectedPhotoSubjectUrl(detailUrl: string) {
   const parsed = new URL(detailUrl);
   const subjectId = parsed.pathname.match(/^\/subject\/(\d+)/i)?.[1];
   return subjectId ? `https://movie.douban.com/subject/${subjectId}/` : detailUrl;
+}
+
+const selectedPhotoDetailsUrl = computed(() => {
+  try {
+    return getSelectedPhotoSubjectUrl(normalizeSelectedPhotoUrl(selectedPhotoLink.value));
+  } catch {
+    return "";
+  }
+});
+
+const selectedPhotoDetailsPending = computed(() =>
+  selectedPhotoDetailsUrl.value ? movieDetailsStore.isDetailsPending(selectedPhotoDetailsUrl.value) : false,
+);
+
+function openSelectedPhotoMovieDetails() {
+  if (!selectedPhotoDetailsUrl.value) return;
+  movieDetailsStore.openDetails({
+    detailUrl: selectedPhotoDetailsUrl.value,
+    title: selectedPhotoTitle.value || "影片详情",
+    coverUrl: selectedPhotoCoverUrl.value || undefined,
+    coverDataUrl: selectedPhotoCoverDataUrl.value || undefined,
+  });
 }
 
 function toSelectablePhoto(photo: SelectedDoubanPhoto): SelectableDoubanPhoto {
@@ -1273,10 +1297,19 @@ function cancelReplacementSubmit() {
 
       <div v-else class="selected-download">
         <section class="selected-download__hero">
-          <div class="selected-download__cover">
+          <button
+            type="button"
+            class="selected-download__cover"
+            :class="{ 'selected-download__cover--pending': selectedPhotoDetailsPending }"
+            :disabled="!selectedPhotoDetailsUrl"
+            :aria-label="`查看${selectedPhotoTitle || '当前影片'}的影片详情`"
+            :aria-busy="selectedPhotoDetailsPending"
+            title="查看影片详情"
+            @click="openSelectedPhotoMovieDetails"
+          >
             <img v-if="selectedPhotoCover" :src="selectedPhotoCover" :alt="selectedPhotoTitle || '影片封面'" />
             <span v-else class="selected-download__cover-placeholder">封面</span>
-          </div>
+          </button>
           <div class="selected-download__link">
             <label class="field">
               <span>豆瓣图片链接</span>
@@ -1480,10 +1513,27 @@ function cancelReplacementSubmit() {
 .selected-download__cover {
   width: 72px;
   height: 96px;
+  padding: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  cursor: pointer;
+}
+
+.selected-download__cover:hover:not(:disabled),
+.selected-download__cover:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.selected-download__cover:disabled {
+  cursor: default;
+}
+
+.selected-download__cover--pending {
+  opacity: 0.72;
 }
 
 .selected-download__cover img,

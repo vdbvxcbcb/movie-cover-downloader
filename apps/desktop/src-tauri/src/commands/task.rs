@@ -3,7 +3,8 @@
 use crate::sidecar::{
     discover_douban_photos_blocking, emit_runtime_log_event, run_download_task_blocking,
     search_douban_movies_blocking, resolve_douban_movie_preview_blocking,
-    resolve_douban_movie_title_blocking, selected_images_payload_file_path,
+    resolve_douban_movie_details_blocking, resolve_douban_movie_title_blocking,
+    selected_images_payload_file_path,
     task_control_file_path,
 };
 use crate::task_control::{TaskControlRegistry, terminate_task_process};
@@ -175,4 +176,14 @@ pub async fn resolve_douban_movie_preview(
     detail_url: String,
 ) -> Result<String, String> {
     run_blocking_job(move || resolve_douban_movie_preview_blocking(app, detail_url)).await
+}
+
+#[tauri::command]
+pub async fn resolve_douban_movie_details(
+    app: AppHandle,
+    detail_url: String,
+    douban_cookie: Option<String>,
+) -> Result<String, String> {
+    run_blocking_job(move || resolve_douban_movie_details_blocking(app, detail_url, douban_cookie))
+        .await
 }

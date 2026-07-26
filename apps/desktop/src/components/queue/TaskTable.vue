@@ -14,6 +14,7 @@ import {
 import { clampTaskPage, paginateItems } from "../../lib/task-pagination";
 import { runtimeBridge } from "../../lib/runtime-bridge";
 import { useUI } from "../../stores/ui";
+import { useMovieDetails } from "../../stores/movieDetails";
 import type { TaskItem } from "../../types/app";
 
 const props = defineProps<{
@@ -32,6 +33,7 @@ const emit = defineEmits<{
 
 const isNativeRuntime = runtimeBridge.isNativeRuntime();
 const uiStore = useUI();
+const movieDetailsStore = useMovieDetails();
 const { showNotice } = uiStore;
 const nativeBackgroundPhases = new Set(["resolving", "discovering", "downloading"]);
 const currentPage = shallowRef(1);
@@ -123,6 +125,19 @@ function handleCoverError(task: TaskItem) {
     ...failedCoverSources.value,
     [task.target.detailUrl]: source,
   };
+}
+
+function openMovieDetails(task: TaskItem) {
+  movieDetailsStore.openDetails({
+    detailUrl: task.target.detailUrl,
+    title: formatTaskTitle(task),
+    coverUrl: task.coverUrl,
+    coverDataUrl: task.coverDataUrl,
+  });
+}
+
+function isMovieDetailsPending(task: TaskItem) {
+  return movieDetailsStore.isDetailsPending(task.target.detailUrl);
 }
 // 获取任务状态徽标；桌面后台阶段会额外展示“后台处理中”。
 function getStatusDescriptor(task: TaskItem) {
@@ -282,10 +297,18 @@ async function copyTaskDetailUrl(task: TaskItem) {
             </div>
           </td>
           <td class="task-table__cover">
-            <div class="cover-cell">
+            <button
+              type="button"
+              class="cover-cell cover-cell--button"
+              :class="{ 'cover-cell--pending': isMovieDetailsPending(task) }"
+              :aria-label="`查看${formatTaskTitle(task)}的影片详情`"
+              :aria-busy="isMovieDetailsPending(task)"
+              title="查看影片详情"
+              @click="openMovieDetails(task)"
+            >
               <img v-if="getTaskCoverSource(task)" :src="getTaskCoverSource(task)" :alt="formatTaskTitle(task)" @error="handleCoverError(task)" />
               <span v-else>暂无封面</span>
-            </div>
+            </button>
           </td>
           <td><StatusPill :label="getStatusDescriptor(task).label" :tone="getStatusDescriptor(task).tone" /></td>
           <td class="task-table__progress">
@@ -393,6 +416,30 @@ async function copyTaskDetailUrl(task: TaskItem) {
   color: var(--muted);
   font-size: 0.76rem;
   text-align: center;
+}
+
+.cover-cell--button {
+  position: relative;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.cover-cell--button:hover,
+.cover-cell--button:focus-visible {
+  border-color: rgba(77, 212, 198, 0.7);
+  box-shadow: 0 0 0 3px rgba(77, 212, 198, 0.12);
+  outline: none;
+}
+
+.cover-cell--pending::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 17, 19, 0.34);
+  box-shadow: inset 0 -3px 0 var(--accent);
+  pointer-events: none;
 }
 
 .cover-cell img {

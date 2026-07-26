@@ -13,5 +13,5 @@ pub use download::{
 };
 pub use douban::{
     search_douban_movies_blocking, resolve_douban_movie_title_blocking,
-    resolve_douban_movie_preview_blocking,
+    resolve_douban_movie_preview_blocking, resolve_douban_movie_details_blocking,
 };

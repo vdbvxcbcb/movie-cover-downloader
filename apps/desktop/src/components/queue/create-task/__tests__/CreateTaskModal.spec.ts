@@ -1,8 +1,9 @@
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import CreateTaskModal from "../../CreateTaskModal.vue";
 import { runtimeBridge } from "../../../../lib/runtime-bridge";
+import { useMovieDetails } from "../../../../stores/movieDetails";
 import type {
   RuntimeDiscoveredAsset,
   RuntimeDoubanPhotoDiscoveryBatchResult,
@@ -54,6 +55,33 @@ describe("create task modal selected photo discovery", () => {
     runtimeBridge.cancelDoubanPhotoDiscovery = originalCancelDoubanPhotoDiscovery;
     runtimeBridge.resolveDoubanMoviePreview = originalResolveDoubanMoviePreview;
     runtimeBridge.onDoubanPhotoDiscoveryProgress = originalOnDoubanPhotoDiscoveryProgress;
+  });
+
+  it("opens the shared movie details from the selected-photo cover", async () => {
+    setActivePinia(createPinia());
+    const movieDetailsStore = useMovieDetails();
+    const openDetails = vi.spyOn(movieDetailsStore, "openDetails").mockImplementation(() => undefined);
+
+    const wrapper = mount(CreateTaskModal, {
+      props: {
+        selectedPhotoSeed: {
+          detailUrl: "https://movie.douban.com/subject/34780991/",
+          title: "示例电影 (2024)",
+          coverUrl: "https://img1.doubanio.com/cover.jpg",
+          coverDataUrl: "data:image/jpeg;base64,selected-cover",
+        },
+      },
+    });
+
+    await wrapper.get(".selected-download__cover").trigger("click");
+
+    expect(openDetails).toHaveBeenCalledWith({
+      detailUrl: "https://movie.douban.com/subject/34780991/",
+      title: "示例电影 (2024)",
+      coverUrl: "https://img1.doubanio.com/cover.jpg",
+      coverDataUrl: "data:image/jpeg;base64,selected-cover",
+    });
+    wrapper.unmount();
   });
 
   it("ignores late progress from a stopped discovery task", async () => {

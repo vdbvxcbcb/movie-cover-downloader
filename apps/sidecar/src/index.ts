@@ -5,6 +5,7 @@ import { DownloaderService } from "./services/downloader.js";
 import { MatcherService } from "./services/matcher.js";
 import { SchedulerService } from "./services/scheduler.js";
 import { searchDoubanMovies } from "./services/douban-search.js";
+import { resolveDoubanMovieDetails } from "./services/douban-details.js";
 import { resolveDoubanMovieTitle } from "./services/douban-title.js";
 import { CancelRequestedError, FileTaskControl, PauseRequestedError } from "./services/task-control.js";
 import { createLogger, emitTaskProgress } from "./shared/logger.js";
@@ -182,6 +183,12 @@ async function runDoubanTitleCommand(config: ReturnType<typeof createRuntimeConf
   process.stdout.write(`${JSON.stringify({ kind: "douban-title-result", payload: result })}\n`);
 }
 
+async function runDoubanDetailsCommand(config: ReturnType<typeof createRuntimeConfig>) {
+  const detailUrl = process.env.MCD_DETAILS_DETAIL_URL ?? "";
+  const result = await resolveDoubanMovieDetails(detailUrl, { config });
+  process.stdout.write(`${JSON.stringify({ kind: "douban-details-result", payload: result })}\n`);
+}
+
 async function runDoubanPhotosDiscoverCommand(
   config: ReturnType<typeof createRuntimeConfig>,
   matcher: MatcherService,
@@ -252,6 +259,11 @@ async function main() {
 
   if (process.env.MCD_COMMAND === "douban-title") {
     await runDoubanTitleCommand(config);
+    return;
+  }
+
+  if (process.env.MCD_COMMAND === "douban-details") {
+    await runDoubanDetailsCommand(config);
     return;
   }
 

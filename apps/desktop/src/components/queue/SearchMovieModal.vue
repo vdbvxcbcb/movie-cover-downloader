@@ -8,6 +8,7 @@ import { runtimeBridge } from "../../lib/runtime-bridge";
 import { normalizeComparableDetailUrl } from "../../lib/task-draft-input";
 import { useUI } from "../../stores/ui";
 import { useCookies } from "../../stores/cookies";
+import { useMovieDetails } from "../../stores/movieDetails";
 import { storeToRefs } from "pinia";
 import type { DoubanSearchResultItem, DoubanSearchResultPage } from "../../types/app";
 
@@ -17,6 +18,7 @@ const emit = defineEmits<{
 
 const uiStore = useUI();
 const cookiesStore = useCookies();
+const movieDetailsStore = useMovieDetails();
 
 const { createTaskDetailUrls } = storeToRefs(uiStore);
 const { addCreateTaskDetailUrl, removeCreateTaskDetailUrl, openSelectedPhotoDownload } = uiStore;
@@ -68,6 +70,19 @@ function showAlert(message: string, tone: "success" | "error" | "warn" = "warn")
 
 function getCoverSource(item: DoubanSearchResultItem) {
   return item.coverDataUrl ?? item.coverUrl;
+}
+
+function openMovieDetails(item: DoubanSearchResultItem) {
+  movieDetailsStore.openDetails({
+    detailUrl: item.detailUrl,
+    title: item.title,
+    coverUrl: item.coverUrl,
+    coverDataUrl: item.coverDataUrl,
+  });
+}
+
+function isMovieDetailsPending(item: DoubanSearchResultItem) {
+  return movieDetailsStore.isDetailsPending(item.detailUrl);
 }
 
 function buildSearchCacheKey(query: string, page: number) {
@@ -240,10 +255,18 @@ function resultKey(item: DoubanSearchResultItem) {
         <div v-if="loading" class="search-movie-modal__empty">正在搜索豆瓣电影...</div>
         <div v-else-if="searchPage?.items.length" class="search-result-list">
           <article v-for="item in searchPage.items" :key="resultKey(item)" class="search-result-row">
-            <div class="search-result-row__cover" aria-hidden="true">
+            <button
+              type="button"
+              class="search-result-row__cover search-result-row__cover-button"
+              :class="{ 'search-result-row__cover-pending': isMovieDetailsPending(item) }"
+              :aria-label="`查看${item.title}的影片详情`"
+              :aria-busy="isMovieDetailsPending(item)"
+              title="查看影片详情"
+              @click="openMovieDetails(item)"
+            >
               <img v-if="getCoverSource(item)" :src="getCoverSource(item)" :alt="item.title" @error="handleCoverError" />
               <span v-else>无封面</span>
-            </div>
+            </button>
             <div class="search-result-row__content">
               <div class="search-result-row__head">
                 <strong>{{ item.title }}</strong>
@@ -349,6 +372,30 @@ function resultKey(item: DoubanSearchResultItem) {
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+.search-result-row__cover-button {
+  position: relative;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.search-result-row__cover-button:hover,
+.search-result-row__cover-button:focus-visible {
+  border-color: rgba(77, 212, 198, 0.7);
+  box-shadow: 0 0 0 3px rgba(77, 212, 198, 0.12);
+  outline: none;
+}
+
+.search-result-row__cover-pending::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 17, 19, 0.34);
+  box-shadow: inset 0 -3px 0 var(--accent);
+  pointer-events: none;
 }
 
 .search-result-row__cover img {

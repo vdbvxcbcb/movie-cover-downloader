@@ -157,3 +157,53 @@ pub fn resolve_douban_movie_preview_blocking(
 
     serde_json::to_string(&result).map_err(|error| format!("序列化豆瓣影片预览失败: {error}"))
 }
+
+// 豆瓣影片详情解析：按需启动 sidecar，返回评分、演职员和剧情简介等只读信息。
+pub fn resolve_douban_movie_details_blocking(
+    app: AppHandle,
+    detail_url: String,
+    douban_cookie: Option<String>,
+) -> Result<String, String> {
+    let detail_url = detail_url.trim().to_string();
+    if detail_url.is_empty() {
+        return Err("请填写豆瓣详情页链接".to_string());
+    }
+
+    let sidecar_root = resolve_sidecar_root(&app);
+    let _sidecar_entry = resolve_sidecar_entry(&sidecar_root)?;
+    let sidecar_entry_arg = resolve_sidecar_entry_arg();
+    let sidecar_node = resolve_sidecar_node(&sidecar_root);
+
+    let mut command = Command::new(sidecar_node);
+    command
+        .arg(sidecar_entry_arg)
+        .current_dir(&sidecar_root)
+        .env("MCD_COMMAND", "douban-details")
+        .env("MCD_DETAILS_DETAIL_URL", &detail_url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(cookie) = douban_cookie.as_ref() {
+        command.env("MCD_DOUBAN_COOKIE", cookie);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("启动豆瓣影片详情解析失败: {error}"))?;
+
+    let result = parse_sidecar_json_result(&output, "豆瓣影片详情结果", |parsed| {
+        if parsed.get("kind").and_then(Value::as_str) == Some("douban-details-result") {
+            parsed.get("payload").cloned()
+        } else {
+            None
+        }
+    })?;
+
+    serde_json::to_string(&result).map_err(|error| format!("序列化豆瓣影片详情失败: {error}"))
+}

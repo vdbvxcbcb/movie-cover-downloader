@@ -17,6 +17,7 @@ pub use task::{
     pause_download_task, resume_download_task, clear_download_tasks,
     run_download_task, run_selected_photo_download, discover_douban_photos,
     search_douban_movies, resolve_douban_movie_title, resolve_douban_movie_preview,
+    resolve_douban_movie_details,
 };
 pub use fs::{
     delete_directory_path, clear_directory_contents, pick_output_directory,
