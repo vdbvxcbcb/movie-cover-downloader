@@ -285,6 +285,21 @@ pub fn remember_sidecar_error_message(error_holder: &Arc<Mutex<Option<String>>>,
     }
 }
 
+fn extract_structured_sidecar_error(output: &str) -> Option<String> {
+    output.lines().rev().find_map(|line| {
+        let parsed = serde_json::from_str::<Value>(line.trim()).ok()?;
+        if parsed
+            .get("level")
+            .and_then(Value::as_str)
+            .is_some_and(|level| level.eq_ignore_ascii_case("ERROR"))
+        {
+            parsed.get("message")?.as_str().map(str::to_string)
+        } else {
+            None
+        }
+    })
+}
+
 // 通用 sidecar JSON 结果解析函数，统一处理错误提取和结果返回
 pub fn parse_sidecar_json_result<T, F>(
     output: &std::process::Output,
@@ -298,24 +313,18 @@ where
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {
+        if let Some(error) = extract_structured_sidecar_error(&stderr)
+            .or_else(|| extract_structured_sidecar_error(&stdout))
+        {
+            return Err(error);
+        }
+
         let last_error_line = stderr
             .lines()
             .rfind(|line| !line.trim().is_empty())
+            .or_else(|| stdout.lines().rfind(|line| !line.trim().is_empty()))
             .unwrap_or("sidecar 进程异常退出");
-
-        let parsed_error = serde_json::from_str::<Value>(last_error_line)
-            .ok()
-            .and_then(|value| {
-                if value.get("level")?.as_str()? == "ERROR" {
-                    Some(value.get("message")?.as_str()?.to_string())
-                } else {
-                    None
-                }
-            });
-
-        return Err(parsed_error.unwrap_or_else(|| {
-            format!("{}执行失败: {}", result_kind, last_error_line)
-        }));
+        return Err(format!("{}执行失败: {}", result_kind, last_error_line));
     }
 
     let last_line = stdout

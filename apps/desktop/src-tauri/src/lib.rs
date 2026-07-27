@@ -73,6 +73,7 @@ mod tests {
         format_sidecar_exit_error, resolve_sidecar_entry_arg,
         resolve_sidecar_event_task_id, resolve_sidecar_node,
     };
+    use crate::sidecar::parser::parse_sidecar_json_result;
     use crate::sqlite::{
         is_recoverable_sqlite_error, load_snapshot_from_sqlite,
         rotate_corrupted_state_db, save_snapshot_to_sqlite_path_with_recovery,
@@ -83,12 +84,18 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
+        process::{ExitStatus, Output},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
         },
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
 
     // 每个测试使用独立临时目录，并先删除同名目录，避免上次测试残留影响结果。
     fn test_temp_dir(label: &str) -> PathBuf {
@@ -181,6 +188,30 @@ mod tests {
         let error = format_sidecar_exit_error(Some(1), None);
 
         assert_eq!(error, "sidecar 任务执行失败，退出码 Some(1)");
+    }
+
+    #[test]
+    fn parse_sidecar_json_result_uses_structured_stdout_error_on_failure() {
+        #[cfg(unix)]
+        let status = ExitStatus::from_raw(1 << 8);
+        #[cfg(windows)]
+        let status = ExitStatus::from_raw(1);
+        let output = Output {
+            status,
+            stdout: br#"{"level":"ERROR","scope":"bootstrap","message":"douban risk protection requires authentication"}
+"#
+            .to_vec(),
+            stderr: Vec::new(),
+        };
+
+        let error = parse_sidecar_json_result::<serde_json::Value, _>(
+            &output,
+            "豆瓣影片详情结果",
+            |_| None,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "douban risk protection requires authentication");
     }
 
     #[test]
