@@ -22,6 +22,14 @@ https://github.com/user-attachments/assets/e4e03bf4-594c-4769-b632-072f80325735
 
 https://github.com/user-attachments/assets/8fc89742-8dd9-4f2c-99c9-dacde3a0fec7
 
+https://github.com/user-attachments/assets/82cd954c-2d5a-4831-9bdf-fa7c024b0242
+
+https://github.com/user-attachments/assets/0b8218c8-7e6b-4fcd-b48f-a9e9d84d6c1a
+
+https://github.com/user-attachments/assets/60e42d47-5056-4356-88fc-7cb6c49cb4a5
+
+https://github.com/user-attachments/assets/6c1419ee-7a83-4aa8-8aa7-859437c3a915
+
 ## 当前定位
 
 - 桌面壳：`Tauri 2`
