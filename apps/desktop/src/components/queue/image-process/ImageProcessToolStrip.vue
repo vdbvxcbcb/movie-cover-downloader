@@ -5,14 +5,23 @@ defineProps<{
   activeDrawingKind: DrawingKind | null;
   hasImages: boolean;
   hasAnnotations: boolean;
+  previewScale: number;
+  canUndo: boolean;
 }>();
 
 const emit = defineEmits<{
   addText: [];
   selectDrawing: [kind: DrawingKind];
   shuffle: [];
+  clearAnnotations: [];
   clear: [];
+  updatePreviewScale: [value: number];
+  undo: [];
 }>();
+
+function clampPreviewScale(value: number) {
+  return Math.min(1, Math.max(0.3, Number(value.toFixed(1))));
+}
 </script>
 
 <template>
@@ -45,10 +54,39 @@ const emit = defineEmits<{
     >
       ○
     </button>
+    <button type="button" class="tool-strip__icon" title="撤销标注" aria-label="撤销标注" :disabled="!canUndo" @click="emit('undo')">↶</button>
     <button type="button" title="随机图片位置" :disabled="!hasImages" @click="emit('shuffle')">随机</button>
-    <button type="button" title="清空图片和标注" :disabled="!hasImages && !hasAnnotations" @click="emit('clear')">
-      清除
+    <button type="button" title="清除标注" :disabled="!hasAnnotations" @click="emit('clearAnnotations')">清除标注</button>
+    <button type="button" title="清除全部前景图与标注" :disabled="!hasImages && !hasAnnotations" @click="emit('clear')">
+      清除全部
     </button>
+    <span class="tool-strip__divider" aria-hidden="true"></span>
+    <div class="preview-zoom" aria-label="画布预览缩放">
+      <button
+        type="button"
+        class="tool-strip__icon"
+        title="缩小画布预览"
+        aria-label="缩小画布预览"
+        :disabled="previewScale <= 0.3"
+        @click="emit('updatePreviewScale', clampPreviewScale(previewScale - 0.1))"
+      >
+        −
+      </button>
+      <output>{{ Math.round(previewScale * 100) }}%</output>
+      <button
+        type="button"
+        class="tool-strip__icon"
+        title="放大画布预览"
+        aria-label="放大画布预览"
+        :disabled="previewScale >= 1"
+        @click="emit('updatePreviewScale', clampPreviewScale(previewScale + 0.1))"
+      >
+        ＋
+      </button>
+      <button type="button" title="还原画布预览" aria-label="还原画布预览" :disabled="previewScale === 1" @click="emit('updatePreviewScale', 1)">
+        还原
+      </button>
+    </div>
   </div>
 </template>
 
@@ -96,5 +134,25 @@ const emit = defineEmits<{
 .tool-strip button:disabled {
   cursor: not-allowed;
   opacity: 0.46;
+}
+
+.tool-strip__divider {
+  width: 1px;
+  height: 24px;
+  margin: 5px 2px;
+  background: var(--line);
+}
+
+.preview-zoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preview-zoom output {
+  width: 44px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: center;
 }
 </style>

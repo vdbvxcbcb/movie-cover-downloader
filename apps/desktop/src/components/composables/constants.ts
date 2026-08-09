@@ -536,4 +536,5 @@ export const ratios: AspectRatio[] = ["1:1", "16:9", "9:16", "16:10", "4:3", "3:
 export const strokeWidths = [1, 3, 5, 7, 10, 15];
 export const shapeResizeHandles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
 export const textResizeHandles = ["nw", "ne", "e", "se", "sw", "w"] as const;
-export const defaultAnnotationFontSize = 48;
+export const defaultAnnotationFontSize = 30;
+export const defaultTextAnnotationColor = "#fef730";

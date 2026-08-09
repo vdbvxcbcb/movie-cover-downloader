@@ -1,7 +1,7 @@
-import { reactive, ref, shallowRef } from "vue";
+import { computed, reactive, ref, shallowRef } from "vue";
 import type { Ref } from "vue";
 import type { Annotation, AnnotationDragMode, AnnotationKind, DrawingKind } from "./types";
-import { defaultAnnotationFontSize, shapeResizeHandles, textResizeHandles } from "./constants";
+import { defaultAnnotationFontSize, defaultTextAnnotationColor, shapeResizeHandles, textResizeHandles } from "./constants";
 
 interface UseImageProcessAnnotationsOptions {
   previewBoard: Readonly<Ref<HTMLElement | null>>;
@@ -10,6 +10,47 @@ interface UseImageProcessAnnotationsOptions {
 
 export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+interface CenteredTextPositionInput {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  boardWidth: number;
+  boardHeight: number;
+  threshold: number;
+}
+
+export function getCenteredTextPosition(input: CenteredTextPositionInput) {
+  const guideX = Math.abs((input.x + input.w / 2 - 0.5) * input.boardWidth) <= input.threshold;
+  const guideY = Math.abs((input.y + input.h / 2 - 0.5) * input.boardHeight) <= input.threshold;
+  return {
+    x: guideX ? 0.5 - input.w / 2 : input.x,
+    y: guideY ? 0.5 - input.h / 2 : input.y,
+    guideX,
+    guideY,
+  };
+}
+
+export function getTextAnnotationLines(text: string) {
+  return text.split("\n");
+}
+
+export function getTextLineOffsets(text: string, lineHeight: number) {
+  return getTextAnnotationLines(text).map((_, index) => index * lineHeight);
+}
+
+export function measureTextAnnotationBounds(
+  text: string,
+  fontSize: number,
+  measureLine: (line: string) => number,
+) {
+  const lines = getTextAnnotationLines(text);
+  return {
+    width: Math.max(fontSize * 0.75, ...lines.map((line) => measureLine(line || " "))) + 4,
+    height: Math.max(fontSize * 1.15, lines.length * fontSize * 1.15) + 4,
+  };
 }
 
 export function arrowEndpoints(annotation: Annotation) {
@@ -67,7 +108,82 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
   const activeDrawingKind = ref<DrawingKind | null>(null);
   const creatingAnnotationId = shallowRef("");
   const suppressNextBoardClick = shallowRef(false);
+  const centerGuideX = shallowRef(false);
+  const centerGuideY = shallowRef(false);
   const annotations = ref<Annotation[]>([]);
+  interface AnnotationSnapshot {
+    annotations: Annotation[];
+    selectedAnnotationId: string;
+  }
+  const annotationHistory = ref<AnnotationSnapshot[]>([]);
+  let gestureSnapshot: AnnotationSnapshot | null = null;
+  let textEditSnapshot: AnnotationSnapshot | null = null;
+
+  function captureSnapshot(): AnnotationSnapshot {
+    return { annotations: annotations.value.map((annotation) => ({ ...annotation })), selectedAnnotationId: selectedAnnotationId.value };
+  }
+
+  function snapshotsEqual(left: AnnotationSnapshot, right: AnnotationSnapshot) {
+    return left.selectedAnnotationId === right.selectedAnnotationId && JSON.stringify(left.annotations) === JSON.stringify(right.annotations);
+  }
+
+  function annotationDataEqual(left: AnnotationSnapshot, right: AnnotationSnapshot) {
+    return JSON.stringify(left.annotations) === JSON.stringify(right.annotations);
+  }
+
+  function restoreSnapshot(snapshot: AnnotationSnapshot) {
+    annotations.value = snapshot.annotations.map((annotation) => ({ ...annotation }));
+    selectedAnnotationId.value = snapshot.selectedAnnotationId;
+  }
+
+  function pushSnapshot(snapshot: AnnotationSnapshot) {
+    if (snapshotsEqual(snapshot, captureSnapshot())) return;
+    annotationHistory.value = [...annotationHistory.value.slice(-49), snapshot];
+  }
+
+  const canUndo = computed(() => {
+    const current = captureSnapshot();
+    return annotationHistory.value.length > 0 || Boolean(textEditSnapshot && !snapshotsEqual(textEditSnapshot, current)) || Boolean(gestureSnapshot && !snapshotsEqual(gestureSnapshot, current));
+  });
+
+  function beginTextAnnotationEdit(annotationId: string) {
+    if (textEditSnapshot) return;
+    if (!annotations.value.some((annotation) => annotation.id === annotationId && annotation.kind === "text")) return;
+    selectedAnnotationId.value = annotationId;
+    textEditSnapshot = captureSnapshot();
+  }
+
+  function finishTextAnnotationEdit() {
+    if (!textEditSnapshot) return;
+    pushSnapshot(textEditSnapshot);
+    textEditSnapshot = null;
+  }
+
+  function finishAnnotationEditing() {
+    finishTextAnnotationEdit();
+    selectedAnnotationId.value = "";
+  }
+
+  function undoAnnotations() {
+    const current = captureSnapshot();
+    if (textEditSnapshot) {
+      if (!snapshotsEqual(textEditSnapshot, current)) {
+        restoreSnapshot(textEditSnapshot);
+        textEditSnapshot = null;
+        return;
+      }
+      textEditSnapshot = null;
+    }
+    if (gestureSnapshot) {
+      if (creatingAnnotationId.value) cancelAnnotationCreate();
+      else cancelAnnotationDrag();
+      return;
+    }
+    const snapshot = annotationHistory.value[annotationHistory.value.length - 1];
+    if (!snapshot) return;
+    annotationHistory.value = annotationHistory.value.slice(0, -1);
+    restoreSnapshot(snapshot);
+  }
   const annotationDrag = reactive({
     startX: 0,
     startY: 0,
@@ -90,19 +206,14 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
   });
 
   function measureTextAnnotation(text: string, fontSize: number) {
-    const content = text || " ";
-    let width = Array.from(content).length * fontSize * 0.9;
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
     if (context) {
       context.font = `700 ${fontSize}px "Microsoft YaHei UI", sans-serif`;
-      width = context.measureText(content).width;
     }
-
-    return {
-      width: Math.max(fontSize * 0.75, width + 4),
-      height: Math.max(fontSize * 1.15, fontSize + 4),
-    };
+    return measureTextAnnotationBounds(text, fontSize, (line) =>
+      context ? context.measureText(line || " ").width : Array.from(line || " ").length * fontSize * 0.9,
+    );
   }
 
   function measuredTextAnnotation(annotation: Annotation, anchorX: "left" | "right" = "left", anchorY: "top" | "bottom" = "top") {
@@ -273,11 +384,15 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
   }
 
   function clearAnnotations() {
+    const before = captureSnapshot();
     annotations.value = [];
+    selectedAnnotationId.value = "";
     activeDrawingKind.value = null;
+    pushSnapshot(before);
   }
 
   function addAnnotation(kind: AnnotationKind) {
+    const before = captureSnapshot();
     const base = annotations.value.length * 0.035;
     let annotation: Annotation = {
       id: options.createId(kind),
@@ -287,16 +402,18 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
       w: kind === "arrow" ? 0.2 : 0.16,
       h: kind === "arrow" ? 0.12 : 0.16,
       text: "",
-      color: kind === "text" ? "#ff3b30" : "#ff3b30",
+      color: kind === "text" ? defaultTextAnnotationColor : "#ff3b30",
       fontSize: defaultAnnotationFontSize,
       strokeWidth: kind === "text" ? 2 : 5,
       rotation: 0,
+      textAlign: "left",
     };
     if (kind === "text") {
       annotation = measuredTextAnnotation(annotation);
     }
     annotations.value = [...annotations.value, annotation];
     selectedAnnotationId.value = annotation.id;
+    pushSnapshot(before);
     return annotation.id;
   }
 
@@ -331,6 +448,7 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
       height: `${annotation.h * 100}%`,
       color: annotation.color,
       fontSize: `${annotation.fontSize}px`,
+      textAlign: annotation.kind === "text" ? annotation.textAlign ?? "left" : undefined,
       "--annotation-line-width": `${annotation.strokeWidth}px`,
       "--annotation-rotation": `${annotation.rotation}deg`,
     };
@@ -419,14 +537,17 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
   }
 
   function updateAnnotation(annotationId: string, patch: Partial<Annotation>) {
+    const before = textEditSnapshot ? null : captureSnapshot();
     annotations.value = annotations.value.map((annotation) => {
       if (annotation.id !== annotationId) return annotation;
       const nextAnnotation = { ...annotation, ...patch };
       return nextAnnotation.kind === "text" && ("text" in patch || "fontSize" in patch) ? measuredTextAnnotation(nextAnnotation) : nextAnnotation;
     });
+    if (before) pushSnapshot(before);
   }
 
   function copyAnnotation(annotation: Annotation) {
+    const before = captureSnapshot();
     const copy: Annotation = {
       ...annotation,
       id: options.createId(annotation.kind),
@@ -435,18 +556,23 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
     };
     annotations.value = [...annotations.value, copy];
     selectedAnnotationId.value = copy.id;
+    pushSnapshot(before);
   }
 
   function deleteAnnotation(annotationId: string) {
+    const before = captureSnapshot();
     annotations.value = annotations.value.filter((annotation) => annotation.id !== annotationId);
     if (selectedAnnotationId.value === annotationId) {
       selectedAnnotationId.value = "";
     }
+    pushSnapshot(before);
   }
 
   function startAnnotationDrag(event: PointerEvent, annotation: Annotation, mode: AnnotationDragMode = "move") {
     event.preventDefault();
     event.stopPropagation();
+    if (annotation.kind === "text") finishTextAnnotationEdit();
+    gestureSnapshot = captureSnapshot();
     selectedAnnotationId.value = annotation.id;
     activeDrawingKind.value = null;
     draggingAnnotationId.value = annotation.id;
@@ -475,10 +601,14 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
 
     window.addEventListener("pointermove", handleAnnotationDrag);
     window.addEventListener("pointerup", stopAnnotationDrag, { once: true });
+    window.addEventListener("pointercancel", cancelAnnotationDrag, { once: true });
+    window.addEventListener("blur", cancelAnnotationDrag, { once: true });
   }
 
   function startTextAnnotationPointer(event: PointerEvent, annotation: Annotation) {
     event.stopPropagation();
+    finishTextAnnotationEdit();
+    gestureSnapshot = captureSnapshot();
     selectedAnnotationId.value = annotation.id;
     activeDrawingKind.value = null;
     draggingAnnotationId.value = annotation.id;
@@ -499,6 +629,8 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
     annotationDrag.originRotation = annotation.rotation;
     window.addEventListener("pointermove", handleAnnotationDrag);
     window.addEventListener("pointerup", stopAnnotationDrag, { once: true });
+    window.addEventListener("pointercancel", cancelAnnotationDrag, { once: true });
+    window.addEventListener("blur", cancelAnnotationDrag, { once: true });
   }
 
   function handleAnnotationDrag(event: PointerEvent) {
@@ -534,10 +666,28 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
       if (annotation.kind === "arrow") {
         return moveArrowFromDrag(annotation, deltaX, deltaY);
       }
+      const x = clamp(annotationDrag.originX + deltaX, 0, 1 - annotation.w);
+      const y = clamp(annotationDrag.originY + deltaY, 0, 1 - annotation.h);
+      if (annotation.kind === "text") {
+        const centered = getCenteredTextPosition({
+          x,
+          y,
+          w: annotation.w,
+          h: annotation.h,
+          boardWidth: rect.width,
+          boardHeight: rect.height,
+          threshold: 6,
+        });
+        centerGuideX.value = centered.guideX;
+        centerGuideY.value = centered.guideY;
+        return { ...annotation, x: centered.x, y: centered.y };
+      }
+      centerGuideX.value = false;
+      centerGuideY.value = false;
       return {
         ...annotation,
-        x: clamp(annotationDrag.originX + deltaX, 0, 1 - annotation.w),
-        y: clamp(annotationDrag.originY + deltaY, 0, 1 - annotation.h),
+        x,
+        y,
       };
     });
   }
@@ -547,10 +697,36 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
     if (draggedAnnotation && draggedAnnotation.kind !== "text" && annotationDrag.hasMoved) {
       selectedAnnotationId.value = "";
     }
+    if (gestureSnapshot && !annotationDataEqual(gestureSnapshot, captureSnapshot())) pushSnapshot(gestureSnapshot);
+    gestureSnapshot = null;
     draggingAnnotationId.value = "";
     annotationDragMode.value = "move";
     annotationDrag.hasMoved = false;
+    centerGuideX.value = false;
+    centerGuideY.value = false;
+    removeAnnotationDragListeners();
+    const activeEditor = document.activeElement as HTMLTextAreaElement | null;
+    if (draggedAnnotation?.kind === "text" && activeEditor?.dataset.annotationId === draggedAnnotation.id) {
+      beginTextAnnotationEdit(draggedAnnotation.id);
+    }
+  }
+
+  function removeAnnotationDragListeners() {
     window.removeEventListener("pointermove", handleAnnotationDrag);
+    window.removeEventListener("pointerup", stopAnnotationDrag);
+    window.removeEventListener("pointercancel", cancelAnnotationDrag);
+    window.removeEventListener("blur", cancelAnnotationDrag);
+  }
+
+  function cancelAnnotationDrag() {
+    if (gestureSnapshot) restoreSnapshot(gestureSnapshot);
+    gestureSnapshot = null;
+    draggingAnnotationId.value = "";
+    annotationDragMode.value = "move";
+    annotationDrag.hasMoved = false;
+    centerGuideX.value = false;
+    centerGuideY.value = false;
+    removeAnnotationDragListeners();
   }
 
   function editTextAnnotation(annotation: Annotation) {
@@ -618,6 +794,7 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
 
     event.preventDefault();
     event.stopPropagation();
+    gestureSnapshot = captureSnapshot();
     suppressNextBoardClick.value = true;
     creationDrag.startX = point.x;
     creationDrag.startY = point.y;
@@ -644,6 +821,8 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
     activeDrawingKind.value = null;
     creatingAnnotationId.value = "";
     selectedAnnotationId.value = "";
+    if (gestureSnapshot) pushSnapshot(gestureSnapshot);
+    gestureSnapshot = null;
     window.setTimeout(() => {
       suppressNextBoardClick.value = false;
     }, 0);
@@ -653,9 +832,8 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
   }
 
   function cancelAnnotationCreate() {
-    if (creatingAnnotationId.value) {
-      annotations.value = annotations.value.filter((annotation) => annotation.id !== creatingAnnotationId.value);
-    }
+    if (gestureSnapshot) restoreSnapshot(gestureSnapshot);
+    gestureSnapshot = null;
     creatingAnnotationId.value = "";
     window.setTimeout(() => {
       suppressNextBoardClick.value = false;
@@ -674,14 +852,17 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
   }
 
   function cleanupAnnotationInteractions() {
-    window.removeEventListener("pointermove", handleAnnotationDrag);
+    cancelAnnotationDrag();
     cancelAnnotationCreate();
   }
 
   return {
     annotations,
+    canUndo,
     selectedAnnotationId,
     activeDrawingKind,
+    centerGuideX,
+    centerGuideY,
     addAnnotation,
     selectDrawingTool,
     clearAnnotations,
@@ -696,6 +877,10 @@ export function useImageProcessAnnotations(options: UseImageProcessAnnotationsOp
     shouldShowResizeHandles,
     resizeHandlesFor,
     updateAnnotation,
+    beginTextAnnotationEdit,
+    finishTextAnnotationEdit,
+    finishAnnotationEditing,
+    undoAnnotations,
     copyAnnotation,
     deleteAnnotation,
     startAnnotationDrag,

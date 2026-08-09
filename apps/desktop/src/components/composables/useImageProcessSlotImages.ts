@@ -1,6 +1,6 @@
 import { computed, ref, shallowRef } from "vue";
 import type { ComputedRef, Ref, ShallowRef } from "vue";
-import type { LayoutCell, NoticeTone, SlotImage } from "./types";
+import type { ImageRotation, LayoutCell, NoticeTone, SlotImage } from "./types";
 
 interface SlotImageBridge {
   readDroppedImageFile?: (filePath: string) => Promise<Uint8Array>;
@@ -16,6 +16,7 @@ interface UseImageProcessSlotImagesOptions {
   showNotice: (message: string, tone?: NoticeTone) => void;
   clearNotice: () => void;
   getSlotViewport: (index: number) => { width: number; height: number } | null;
+  previewScale: Readonly<ShallowRef<number>>;
 }
 
 interface SlotImagePanState {
@@ -40,6 +41,21 @@ interface SlotImagePlacementInput {
   offsetY: number;
 }
 
+interface SlotIndexFromClientPositionInput {
+  clientX: number;
+  clientY: number;
+  boardLeft: number;
+  boardTop: number;
+  boardWidth: number;
+  boardHeight: number;
+  previewScale: number;
+  borderTop: number;
+  borderRight: number;
+  borderBottom: number;
+  borderLeft: number;
+  cells: LayoutCell[];
+}
+
 export interface SlotImagePlacement {
   x: number;
   y: number;
@@ -49,6 +65,27 @@ export interface SlotImagePlacement {
   maxOffsetY: number;
 }
 
+export function normalizeImageRotation(rotation: number): ImageRotation {
+  const normalized = ((rotation % 360) + 360) % 360;
+  return normalized === 90 || normalized === 180 || normalized === 270 ? normalized : 0;
+}
+
+export function getRotatedImageDimensions(width: number, height: number, rotation: ImageRotation) {
+  return rotation === 90 || rotation === 270 ? { width: height, height: width } : { width, height };
+}
+
+export function getRotatedImageDrawBox(placement: SlotImagePlacement, rotation: ImageRotation) {
+  const quarterTurn = rotation === 90 || rotation === 270;
+  const width = quarterTurn ? placement.height : placement.width;
+  const height = quarterTurn ? placement.width : placement.height;
+  return {
+    x: placement.x + placement.width / 2 - width / 2,
+    y: placement.y + placement.height / 2 - height / 2,
+    width,
+    height,
+  };
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -56,6 +93,27 @@ function clamp(value: number, min: number, max: number) {
 export function getNextSlotImageOffset(currentOffset: number, pointerDelta: number, maxOffset: number) {
   if (maxOffset <= 0) return clamp(currentOffset, -1, 1);
   return clamp(currentOffset + pointerDelta / maxOffset, -1, 1);
+}
+
+export function getSlotIndexFromClientPosition(input: SlotIndexFromClientPositionInput) {
+  const previewScale = Math.max(0.01, input.previewScale);
+  const x = (input.clientX - input.boardLeft) / previewScale;
+  const y = (input.clientY - input.boardTop) / previewScale;
+  if (x < 0 || y < 0 || x > input.boardWidth || y > input.boardHeight) return -1;
+
+  const innerWidth = Math.max(1, input.boardWidth - input.borderLeft - input.borderRight);
+  const innerHeight = Math.max(1, input.boardHeight - input.borderTop - input.borderBottom);
+  const innerX = x - input.borderLeft;
+  const innerY = y - input.borderTop;
+  if (innerX < 0 || innerY < 0 || innerX > innerWidth || innerY > innerHeight) return -1;
+
+  return input.cells.findIndex((cell) => {
+    const cellLeft = (cell.x / 100) * innerWidth;
+    const cellTop = (cell.y / 100) * innerHeight;
+    const cellRight = cellLeft + (cell.w / 100) * innerWidth;
+    const cellBottom = cellTop + (cell.h / 100) * innerHeight;
+    return innerX >= cellLeft && innerX <= cellRight && innerY >= cellTop && innerY <= cellBottom;
+  });
 }
 
 function getRetainedSlotImageOffset(
@@ -117,6 +175,8 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
   const hoveredSlotIndex = ref<number | null>(null);
   const panningSlotIndex = shallowRef<number | null>(null);
   let slotImagePanState: SlotImagePanState | null = null;
+  let droppedPathsRevision = 0;
+  let disposed = false;
 
   const selectedSlotImage = computed(() =>
     options.selectedSlotIndex.value === null ? null : slotImages.value[options.selectedSlotIndex.value] ?? null,
@@ -163,13 +223,14 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
       naturalHeight: 0,
       offsetX: 0,
       offsetY: 0,
+      rotation: 0,
     };
     slotImages.value = nextImages;
     options.selectedSlotIndex.value = index;
     options.clearNotice();
   }
 
-  async function acceptDroppedPath(filePath: string, index: number) {
+  async function acceptDroppedPath(filePath: string, index: number, revision: number) {
     try {
       if (!options.bridge.readDroppedImageFile) {
         throw new Error("runtimeBridge.readDroppedImageFile 尚未实现。");
@@ -177,10 +238,23 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
 
       const fileName = fileNameFromPath(filePath);
       const bytes = await options.bridge.readDroppedImageFile(filePath);
+      if (disposed || revision !== droppedPathsRevision) return;
       const file = new File([bytes], fileName, { type: imageMimeType(fileName) });
       setSlotImage(index, file);
     } catch (error) {
+      if (disposed || revision !== droppedPathsRevision) return;
       options.showNotice(error instanceof Error ? error.message : String(error), "error");
+    }
+  }
+
+  async function acceptDroppedPaths(filePaths: string[], startIndex: number) {
+    if (disposed) return;
+    const revision = ++droppedPathsRevision;
+    let targetIndex = filePaths.length > 1 ? 0 : startIndex;
+    for (const filePath of filePaths) {
+      if (disposed || revision !== droppedPathsRevision || targetIndex >= options.visibleCells.value.length) break;
+      await acceptDroppedPath(filePath, targetIndex, revision);
+      targetIndex += 1;
     }
   }
 
@@ -202,6 +276,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     const input = event.target as HTMLInputElement;
     const files = Array.from(input.files ?? []);
     if (files.length === 0) return;
+    droppedPathsRevision += 1;
 
     let targetIndex = options.activeSlotIndex.value;
     for (const file of files) {
@@ -228,6 +303,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     event.preventDefault();
     event.stopPropagation();
     hoveredSlotIndex.value = null;
+    droppedPathsRevision += 1;
 
     if (draggedSlotIndex.value !== null && draggedSlotIndex.value !== index) {
       swapSlotImages(draggedSlotIndex.value, index);
@@ -235,36 +311,32 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
       return;
     }
 
-    const file = event.dataTransfer?.files?.[0];
-    if (file) {
-      setSlotImage(index, file);
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    const startIndex = files.length > 1 ? 0 : index;
+    for (const [offset, file] of files.entries()) {
+      const targetIndex = startIndex + offset;
+      if (targetIndex >= options.visibleCells.value.length) break;
+      setSlotImage(targetIndex, file);
     }
   }
 
   function slotIndexFromClientPosition(clientX: number, clientY: number) {
     if (!options.previewBoard.value) return -1;
     const rect = options.previewBoard.value.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return -1;
-
     const style = getComputedStyle(options.previewBoard.value);
-    const left = Number.parseFloat(style.getPropertyValue("--border-left")) || 0;
-    const top = Number.parseFloat(style.getPropertyValue("--border-top")) || 0;
-    const right = Number.parseFloat(style.getPropertyValue("--border-right")) || 0;
-    const bottom = Number.parseFloat(style.getPropertyValue("--border-bottom")) || 0;
-    const innerWidth = Math.max(1, rect.width - left - right);
-    const innerHeight = Math.max(1, rect.height - top - bottom);
-    const innerX = x - left;
-    const innerY = y - top;
-    if (innerX < 0 || innerY < 0 || innerX > innerWidth || innerY > innerHeight) return -1;
-
-    return options.visibleCells.value.findIndex((cell) => {
-      const cellLeft = (cell.x / 100) * innerWidth;
-      const cellTop = (cell.y / 100) * innerHeight;
-      const cellRight = cellLeft + (cell.w / 100) * innerWidth;
-      const cellBottom = cellTop + (cell.h / 100) * innerHeight;
-      return innerX >= cellLeft && innerX <= cellRight && innerY >= cellTop && innerY <= cellBottom;
+    return getSlotIndexFromClientPosition({
+      clientX,
+      clientY,
+      boardLeft: rect.left,
+      boardTop: rect.top,
+      boardWidth: options.previewBoard.value.clientWidth,
+      boardHeight: options.previewBoard.value.clientHeight,
+      previewScale: options.previewScale.value,
+      borderLeft: Number.parseFloat(style.getPropertyValue("--border-left")) || 0,
+      borderTop: Number.parseFloat(style.getPropertyValue("--border-top")) || 0,
+      borderRight: Number.parseFloat(style.getPropertyValue("--border-right")) || 0,
+      borderBottom: Number.parseFloat(style.getPropertyValue("--border-bottom")) || 0,
+      cells: options.visibleCells.value,
     });
   }
 
@@ -332,6 +404,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
   }
 
   function removeSlotImage(index: number) {
+    droppedPathsRevision += 1;
     if (panningSlotIndex.value === index) {
       cancelSlotImagePan();
     }
@@ -353,9 +426,10 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     let offsetX = scale <= 1 ? 0 : current.offsetX;
     let offsetY = scale <= 1 ? 0 : current.offsetY;
     if (scale > 1 && currentPlacement && viewport) {
+      const dimensions = getRotatedImageDimensions(current.naturalWidth, current.naturalHeight, current.rotation);
       const nextPlacement = getSlotImagePlacement({
-        imageWidth: current.naturalWidth,
-        imageHeight: current.naturalHeight,
+        imageWidth: dimensions.width,
+        imageHeight: dimensions.height,
         viewportWidth: viewport.width,
         viewportHeight: viewport.height,
         scale,
@@ -393,7 +467,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     const current = slotImages.value[index];
     if (!current) return;
     const nextImages = [...slotImages.value];
-    nextImages[index] = { ...current, scale: 1, offsetX: 0, offsetY: 0 };
+    nextImages[index] = { ...current, scale: 1, offsetX: 0, offsetY: 0, rotation: 0 };
     slotImages.value = nextImages;
   }
 
@@ -409,9 +483,10 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     const image = slotImages.value[index];
     const viewport = options.getSlotViewport(index);
     if (!image || !viewport || image.naturalWidth <= 0 || image.naturalHeight <= 0) return null;
+    const dimensions = getRotatedImageDimensions(image.naturalWidth, image.naturalHeight, image.rotation);
     return getSlotImagePlacement({
-      imageWidth: image.naturalWidth,
-      imageHeight: image.naturalHeight,
+      imageWidth: dimensions.width,
+      imageHeight: dimensions.height,
       viewportWidth: viewport.width,
       viewportHeight: viewport.height,
       scale: image.scale,
@@ -420,10 +495,18 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     });
   }
 
+  function rotateSlot(index: number, delta: number) {
+    const current = slotImages.value[index];
+    if (!current) return;
+    const nextImages = [...slotImages.value];
+    nextImages[index] = { ...current, rotation: normalizeImageRotation(current.rotation + delta), offsetX: 0, offsetY: 0 };
+    slotImages.value = nextImages;
+  }
+
   function isSlotImagePannable(index: number) {
     if (options.selectedSlotIndex.value !== index) return false;
     const image = slotImages.value[index];
-    if (!image || image.scale <= 1) return false;
+    if (!image) return false;
     const placement = getSlotPlacement(index);
     return Boolean(placement && (placement.maxOffsetX > 0 || placement.maxOffsetY > 0));
   }
@@ -469,8 +552,16 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     const nextImages = [...slotImages.value];
     nextImages[panState.slotIndex] = {
       ...current,
-      offsetX: getNextSlotImageOffset(panState.startOffsetX, event.clientX - panState.startClientX, panState.maxOffsetX),
-      offsetY: getNextSlotImageOffset(panState.startOffsetY, event.clientY - panState.startClientY, panState.maxOffsetY),
+      offsetX: getNextSlotImageOffset(
+        panState.startOffsetX,
+        (event.clientX - panState.startClientX) / Math.max(0.01, options.previewScale.value),
+        panState.maxOffsetX,
+      ),
+      offsetY: getNextSlotImageOffset(
+        panState.startOffsetY,
+        (event.clientY - panState.startClientY) / Math.max(0.01, options.previewScale.value),
+        panState.maxOffsetY,
+      ),
     };
     slotImages.value = nextImages;
   }
@@ -517,6 +608,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
   }
 
   function clearSlotImages() {
+    droppedPathsRevision += 1;
     for (const image of slotImages.value) {
       revokeSlotImage(image);
     }
@@ -525,6 +617,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
   }
 
   function cleanupSlotImages() {
+    disposed = true;
     clearSlotImages();
     cancelSlotSwapDrag();
     cancelSlotImagePan();
@@ -538,7 +631,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     hoveredSlotIndex,
     panningSlotIndex,
     hasImages,
-    acceptDroppedPath,
+    acceptDroppedPaths,
     openSlotFilePicker,
     handleSlotClick,
     handleSlotFileChange,
@@ -549,6 +642,7 @@ export function useImageProcessSlotImages(options: UseImageProcessSlotImagesOpti
     removeSlotImage,
     zoomSlot,
     resetSlotZoom,
+    rotateSlot,
     updateSlotImageDimensions,
     isSlotImagePannable,
     startSlotImagePan,

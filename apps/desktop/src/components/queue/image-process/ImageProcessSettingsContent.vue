@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ActionButton from "../../common/ActionButton.vue";
-import type { AspectRatio, OutputFormat, SlotImage } from "../../composables/types";
+import type { AspectRatio, ImageProcessSelection, OutputFormat, SlotImage } from "../../composables/types";
 
 interface ImageProcessSettings {
   ratio: AspectRatio;
@@ -15,6 +15,7 @@ interface ImageProcessSettings {
   backgroundName: string;
   backgroundOpacity: number;
   backgroundOverlay: boolean;
+  backgroundScale: number;
 }
 
 defineProps<{
@@ -26,6 +27,7 @@ defineProps<{
   browsingOutputDirectory: boolean;
   saving: boolean;
   exportDebouncing: boolean;
+  currentSelection: ImageProcessSelection;
 }>();
 
 const emit = defineEmits<{
@@ -37,6 +39,7 @@ const emit = defineEmits<{
   (event: "updateOutputRootDir", value: string): void;
   (event: "browseOutputDirectory"): void;
   (event: "exportImage", format: OutputFormat): void;
+  (event: "updateCurrentSelection", value: ImageProcessSelection): void;
 }>();
 
 function updateNumberSetting<K extends keyof ImageProcessSettings>(key: K, value: string) {
@@ -75,6 +78,29 @@ function updateNumberSetting<K extends keyof ImageProcessSettings>(key: K, value
     </section>
 
     <section class="settings-section">
+      <h4>当前选择</h4>
+      <div class="selection-segment" role="group" aria-label="当前选择">
+        <button
+          type="button"
+          aria-label="选择前景图"
+          :class="{ 'selection-segment__button--active': currentSelection === 'foreground' }"
+          @click="emit('updateCurrentSelection', 'foreground')"
+        >
+          前景图
+        </button>
+        <button
+          type="button"
+          aria-label="选择背景图"
+          :disabled="!settings.backgroundUrl"
+          :class="{ 'selection-segment__button--active': currentSelection === 'background' }"
+          @click="emit('updateCurrentSelection', 'background')"
+        >
+          背景图
+        </button>
+      </div>
+    </section>
+
+    <section class="settings-section">
       <h4>背景</h4>
       <div class="color-field">
         <span>背景色</span>
@@ -92,6 +118,18 @@ function updateNumberSetting<K extends keyof ImageProcessSettings>(key: K, value
           max="100"
           :disabled="!settings.backgroundUrl"
           @input="updateNumberSetting('backgroundOpacity', ($event.target as HTMLInputElement).value)"
+        />
+      </label>
+      <label class="range-field">
+        <span>背景图大小 {{ settings.backgroundUrl ? `${Math.round(settings.backgroundScale * 100)}%` : "未上传" }}</span>
+        <input
+          :value="Math.round(settings.backgroundScale * 100)"
+          type="range"
+          min="30"
+          max="100"
+          aria-label="背景图大小"
+          :disabled="!settings.backgroundUrl"
+          @input="emit('updateSetting', 'backgroundScale', Number(($event.target as HTMLInputElement).value) / 100)"
         />
       </label>
       <div class="setting-actions">
@@ -247,6 +285,36 @@ function updateNumberSetting<K extends keyof ImageProcessSettings>(key: K, value
   font-size: 0.8rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.selection-segment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.selection-segment button {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.selection-segment button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.selection-segment .selection-segment__button--active {
+  border-color: var(--line-strong);
+  background: rgba(77, 212, 198, 0.12);
+  color: var(--text);
 }
 
 .export-actions :deep(.action-btn) {

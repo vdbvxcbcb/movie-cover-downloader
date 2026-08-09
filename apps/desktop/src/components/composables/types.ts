@@ -2,6 +2,9 @@ export type AspectRatio = "1:1" | "16:9" | "9:16" | "16:10" | "4:3" | "3:4";
 export type OutputFormat = "jpg" | "png";
 export type AnnotationKind = "text" | "arrow" | "rect" | "circle";
 export type DrawingKind = Exclude<AnnotationKind, "text">;
+export type ImageProcessSelection = "foreground" | "background";
+export type TextAlign = "left" | "center" | "right";
+export type ImageRotation = 0 | 90 | 180 | 270;
 export type AnnotationDragMode =
   | "move"
   | "resize-n"
@@ -41,6 +44,7 @@ export interface SlotImage {
   naturalHeight: number;
   offsetX: number;
   offsetY: number;
+  rotation: ImageRotation;
 }
 
 export interface Annotation {
@@ -55,6 +59,7 @@ export interface Annotation {
   fontSize: number;
   strokeWidth: number;
   rotation: number;
+  textAlign?: TextAlign;
   arrowReverseX?: boolean;
   arrowReverseY?: boolean;
   arrowStartX?: number;

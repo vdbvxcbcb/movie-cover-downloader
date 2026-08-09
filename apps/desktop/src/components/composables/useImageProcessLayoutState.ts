@@ -2,6 +2,15 @@ import { computed, ref, watch } from "vue";
 import type { Ref } from "vue";
 import { layoutPresets } from "./constants";
 
+export function getImageProcessExportSize(ratio: number, scale: number) {
+  const longEdge = Math.round(1800 * Math.min(1, Math.max(0.3, scale)));
+  if (ratio >= 1) {
+    return { width: longEdge, height: Math.round(longEdge / ratio) };
+  }
+
+  return { width: Math.round(longEdge * ratio), height: longEdge };
+}
+
 export function useImageProcessLayoutState(options: {
   activeSlotIndex: Ref<number>;
   selectedSlotIndex: Ref<number | null>;

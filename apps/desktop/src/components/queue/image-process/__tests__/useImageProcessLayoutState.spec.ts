@@ -1,8 +1,15 @@
 import { nextTick, ref } from "vue";
 import { describe, expect, it } from "vitest";
-import { useImageProcessLayoutState } from "../../../composables/useImageProcessLayoutState";
+import { getImageProcessExportSize, useImageProcessLayoutState } from "../../../composables/useImageProcessLayoutState";
 
 describe("image process layout state", () => {
+  it("scales export pixel dimensions with the canvas preview scale", () => {
+    expect(getImageProcessExportSize(1, 1)).toEqual({ width: 1800, height: 1800 });
+    expect(getImageProcessExportSize(1, 0.5)).toEqual({ width: 900, height: 900 });
+    expect(getImageProcessExportSize(16 / 9, 0.3)).toEqual({ width: 540, height: 304 });
+    expect(getImageProcessExportSize(9 / 16, 0.5)).toEqual({ width: 506, height: 900 });
+  });
+
   it("starts with the single-image layout", () => {
     const layoutState = useImageProcessLayoutState({
       activeSlotIndex: ref(0),
