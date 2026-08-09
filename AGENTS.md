@@ -19,7 +19,7 @@
 - 选图下载提交前会检测相同链接、输出目录、分类和图片比例的重复任务；确认覆盖后清理旧输出、移除旧任务并重新加入新任务。
 - 下载队列支持暂停、继续、重试、删除、清空、打开输出目录、显示实时进度。
 - Cookie 导入支持豆瓣登录窗口导入和手动字符串导入。
-- 图片处理弹窗默认单图布局，支持 1-9 张图片拼版、拖拽上传/换格、选中图片缩放取景、背景图、透明度、重叠效果、标注、导出 JPG/PNG。
+- 图片处理弹窗默认单图布局，支持 1-9 张图片批量拖入/换格、前景图缩放取景和旋转、背景图缩放/拖动、画布预览缩放、多行文字、标注撤销以及 JPG/PNG 导出。
 - 自定义裁剪弹窗支持点击上传和拖拽上传本地图片，拖拽上传不限制图片必须位于输出根目录。
 - 日志中心、SQLite 本地状态持久化、NSIS 安装包打包。
 
@@ -31,7 +31,7 @@
 
 - lib.rs 从 **3562 行减少到 857 行**（减少 76%）
 - 新增 **20 个模块文件**，清晰的职责分离
-- 所有 **40 个单元测试**保持通过
+- 所有 **41 个单元测试**保持通过
 - **Clippy 零警告**，符合 Rust 最佳实践
 - 修改 Rust 代码时，定位到对应模块文件，而非全部在 lib.rs 中查找
 
@@ -69,7 +69,6 @@
 - 搜索影视弹窗分页器在普通笔记本高度下使用更小尺寸，加载下一页时分页器位置不能上下跳。
 - 下载队列封面解析成功后要把 `coverUrl` / `coverDataUrl` 回写任务并调度持久化；创建任务匹配预览时要先规范化豆瓣详情 URL，避免同一 subject 的不同链接形式丢失封面。
 - 图片处理弹窗在普通笔记本宽度下仍应尽量保持横向三栏布局，左侧布局选择区域要能看清文字，中间预览区可适当缩窄。
-- 图片处理默认使用单图布局；图片始终以 cover 方式覆盖固定格子，缩放不得低于 100%，只有当前选中且高于 100% 的图片可拖动，偏移量必须限制在不露出格子的范围内。
 - 控制中心和弹窗都要避免横向滚动；不是隐藏内容，而是重新排版到当前屏幕宽度内，超出高度时用纵向滚动。
 - 自定义裁剪点击上传和拖拽上传权限应一致：拖拽本地图片读取使用 `readDroppedImageFile`，不要再绑定输出根目录。
 
@@ -79,6 +78,9 @@
 - 未缓存详情使用 500ms 防抖；同一 subject 在本次运行内复用内存缓存和在途请求，快速连续点击时只允许最后一次点击的结果生效。
 - 请求时有可用 Cookie 就通过环境变量传给 sidecar，没有 Cookie 时允许匿名尝试；Cookie 仍不得进入命令行或日志。
 - 详情 URL 只接受 `https://movie.douban.com/subject/<id>/`，API 重定向只允许同一 ID 在豆瓣 `movie` / `tv` 结构化接口间切换。
+- 影片详情优先使用结构化 API，并请求经最终 URL、HTML 类型和详情页结构校验的页面做字段补充；结构化 API 无权限时允许详情页完整兜底，两者都不可用时保留结构化请求的明确错误。
+- 详情页剧情简介应优先提取 `v:summary` 内展开区域 `.all` 的完整文本，不能只返回页面默认收起内容；演员列表解析应过滤“更多”。
+- sidecar 非零退出时，Rust `parse_sidecar_json_result` 会从 stderr、stdout 中优先提取最后一条结构化 `ERROR.message`，不要退回笼统的“sidecar 进程异常退出”。
 - 详情封面优先使用入口已经加载的 `coverDataUrl`，再退回远程 `coverUrl`；任务标题展示时要移除海报/剧照/壁纸和下载模式后缀。
 - 评分只显示数值和评价人数，不显示星级或 `/ 10`；无有效评分时只显示 `暂无评分`。主演默认前 6 位，可展开/收起，剧情简介默认完整展示并可复制。
 
@@ -121,6 +123,9 @@ movie-cover-downloader/
 - `apps/desktop/src/components/queue/TaskTable.vue`：下载队列表格、封面兜底、任务操作。
 - `apps/desktop/src/components/queue/CustomCropModal.vue`：自定义裁剪弹窗。
 - `apps/desktop/src/components/queue/ImageProcessModal.vue`：图片处理大弹窗。
+- `apps/desktop/src/components/composables/useImageProcessSlotImages.ts`：前景图批量拖入、缩放、旋转和受限平移。
+- `apps/desktop/src/components/composables/useImageProcessBackgroundPlacement.ts`：背景图等比完整显示、缩放和画布内拖动。
+- `apps/desktop/src/components/composables/useImageProcessAnnotations.ts`：标注创建/编辑、多行文字、对齐参考线和最多 50 步撤销历史。
 - `apps/desktop/src/components/common/MessageNotice.vue`：全局 Message 提示。
 - `apps/desktop/src/components/common/ToastNotice.vue`：全局 Toast 提示。
 
@@ -165,7 +170,7 @@ movie-cover-downloader/
 - `apps/sidecar/src/index.ts`：sidecar 入口，一次进程处理一个命令。
 - `apps/sidecar/src/adapters/douban.ts`：豆瓣详情页、搜索页、图片分类页解析。
 - `apps/sidecar/src/services/douban-title.ts`：豆瓣标题/封面预览解析。
-- `apps/sidecar/src/services/douban-details.ts`：豆瓣影片结构化详情和详情页补充字段解析。
+- `apps/sidecar/src/services/douban-details.ts`：豆瓣影片结构化详情优先、详情页补充/完整兜底及展开简介解析。
 - `apps/sidecar/src/services/downloader.ts`：下载、断点续传、sharp 转码/裁剪、保存文件、上报进度。
 - `apps/sidecar/src/services/scheduler.ts`：发现、下载、Cookie、任务控制编排。
 - `apps/sidecar/src/services/task-control.ts`：读取 pause/resume/cancel 控制文件。
@@ -290,7 +295,15 @@ CreateTaskModal
 
 图片处理弹窗：
 
-- 支持 1-9 张图片布局、拖拽上传、格子换位、背景图、背景图透明度、重叠效果、图片透明度、标注、导出。
+- 支持 1-9 张图片布局；浏览器 File 和 Tauri 路径一次拖入多图时从第一格开始按布局顺序填充，单图仍落到目标格。
+- Tauri 异步拖入使用 revision 淘汰旧批次，组件清理后忽略未完成结果；旧请求的成功或失败都不能覆盖当前状态或显示过期错误。
+- 前景图缩放范围为 `1-3`，只要当前选中图片存在溢出轴即可拖动；偏移按格子边界夹紧，不能露出空白。左/右旋转每次 90 度，只作用于对应前景图，预览与 Canvas 导出都严格裁剪在格子内。
+- 画布预览缩放范围为 `0.3-1`，还原回到 100%；导出长边以 1800 像素乘当前预览比例计算，不能再固定输出原尺寸。
+- `当前选择` 分为前景图/背景图。背景图保持原比例完整显示，缩放范围为 `0.3-1`，拖动不得超出画布；开启重叠自动选中背景图，取消重叠或移除背景图自动切回前景图。
+- 移除背景图时必须释放 object URL，并把背景图透明度和大小都重置为 100%。
+- 文字标注默认字号 30、颜色 `#fef730`，支持换行和左/中/右对齐；拖动文字时按中心位置显示水平/垂直参考线。
+- 标注撤销只覆盖文字、箭头、方框和圆圈，支持工具栏按钮及 `Ctrl+Z`，历史上限 50 步；普通输入框保留浏览器原生撤销。
+- `清除标注` 只移除标注；`清除全部` 清空全部前景图与标注，按钮 title 以“清除全部前景图与标注”为准。
 - 普通笔记本下仍优先保持横向布局，不要轻易回退成竖向布局。
 - 左侧布局选择区域要能显示文字；中间预览区可以在普通屏下适当缩窄。
 - 预览区应在没有当前分类图片时显示明确空状态；不要让空分类导致预览残留旧图片或布局塌陷。
@@ -405,7 +418,7 @@ Rust：
 
 ```bash
 cd apps/desktop/src-tauri
-cargo test      # 运行所有 40 个单元测试
+cargo test      # 运行所有 41 个单元测试
 cargo check     # 快速类型检查
 cargo clippy --all-targets  # Lint 检查，确保零警告
 cargo build     # 完整构建
@@ -416,7 +429,7 @@ cargo build     # 完整构建
 - 只改前端 SFC/CSS：至少跑 `pnpm --dir apps/desktop exec vue-tsc --noEmit`。
 - 改拆分后的 store：至少跑对应 `stores/__tests__/*.spec.ts`，再视影响范围跑 `pnpm --dir apps/desktop test`。
 - 改 sidecar：跑 `pnpm --dir apps/sidecar typecheck` 和相关测试。
-- 改 Rust/Tauri：跑 `cargo check` 和 `cargo test`，确保 40 个测试全部通过。
+- 改 Rust/Tauri：跑 `cargo check` 和 `cargo test`，确保 41 个测试全部通过。
 - 改 Rust 模块：运行 `cargo clippy --all-targets` 确保零警告。
 - 打包前建议跑 `pnpm test`、`pnpm typecheck`、`pnpm typecheck:sidecar`、`cargo test`。
 - 改打包脚本或 release 流程：重新运行 `scripts/build-with-msvc.ps1` 或等价构建，并检查 `resources/sidecar` 中没有 symlink/junction、`node.exe -e "require('sharp')"` 能成功。

@@ -97,7 +97,7 @@ flowchart TB
 | 下载队列、暂停/继续/重试/删除 | [runtime-flows.md](./runtime-flows.md#队列和任务控制链路) | `taskQueue.ts`、`taskActions.ts`、`TaskTable.vue`、`task-control.ts`、`commands/task.rs` |
 | Cookie 导入、冷却、失效处理 | [runtime-flows.md](./runtime-flows.md#cookie-链路) | `ImportCookieModal.vue`、`cookies.ts`、`cookie-pool.ts`、`commands/login.rs`、`commands/task.rs` |
 | SQLite 持久化、状态迁移 | [runtime-flows.md](./runtime-flows.md#持久化链路) | `app.ts`、`app-helpers.ts`、`types/app.ts`、`sqlite/state.rs`、相关 Rust/Store 测试 |
-| 图片处理或自定义裁剪 | [runtime-flows.md](./runtime-flows.md#图片处理和自定义裁剪链路) | `ImageProcessModal.vue`、`CustomCropModal.vue`、`runtime-bridge.ts`、`commands/image.rs` |
+| 图片处理或自定义裁剪 | [runtime-flows.md](./runtime-flows.md#图片处理和自定义裁剪链路) | `ImageProcessModal.vue`、`useImageProcessLayoutState.ts`、`useImageProcessSlotImages.ts`、`useImageProcessBackgroundPlacement.ts`、`useImageProcessAnnotations.ts`、`CustomCropModal.vue`、`commands/image.rs` |
 | 打包、sidecar resources、安装包 | [module-index.md](./module-index.md#构建和打包) | `package.json`、`apps/desktop/package.json`、`tauri.conf.json`、`scripts/prepare-sidecar-bundle.ps1` |
 
 ## 高风险边界
@@ -110,7 +110,10 @@ flowchart TB
 - 重复选图任务判定必须包含链接、输出根目录、分类和图片比例。
 - 影片详情只接受规范的豆瓣电影 `subject` HTTPS 链接；API 重定向只允许同一 subject ID 在 `m.douban.com/rexxar/api/v2/movie|tv/` 之间切换。
 - 影片详情缓存只存在于本次运行内；快速连续点击时必须保持 500ms 防抖、在途请求复用和最后请求生效，不能让旧响应覆盖新影片。
-- 图片拼版格子是固定裁剪窗口；缩放下限为覆盖格子的 100%，只有当前选中且高于 100% 的图片可拖动，不能通过偏移露出空白。
+- 影片详情结构化 API 失败时只能使用通过最终 URL、HTML 类型和详情结构校验的页面兜底；简介优先取 `v:summary` 内 `.all` 展开文本。sidecar 非零退出时应透传结构化错误，不能只显示笼统进程异常。
+- 图片拼版格子是固定裁剪窗口；前景图缩放范围为 100%-300%，当前选中图片只要存在溢出轴即可拖动，旋转后仍必须按格子圆角裁剪，不能通过偏移露出空白。
+- 背景图必须保持原比例完整位于画布内，缩放范围为 30%-100%；画布预览缩放为 30%-100%，并同步决定导出像素尺寸。
+- 多路径拖入使用 revision 保证最后批次生效；新拖入、清除或组件卸载后，旧请求不得写回结果或显示过期错误。
 - 下载队列异步解析出的封面要回写任务并持久化，优先保存 `coverDataUrl`，避免重启后重新依赖远程图片请求。
 - 自定义裁剪拖拽本地图片必须走 `readDroppedImageFile(filePath)`，不能重新绑定输出根目录。
 - Cookie 不得进入命令行参数或日志。

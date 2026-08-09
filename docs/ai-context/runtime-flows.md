@@ -79,7 +79,8 @@ sequenceDiagram
   participant RustSidecar as sidecar/douban.rs
   participant Sidecar as sidecar index.ts
   participant DetailService as douban-details.ts
-  participant Douban as 豆瓣 API / 详情页
+  participant Api as 豆瓣结构化 API
+  participant Html as 豆瓣详情页
 
   User->>Entry: 点击影片封面
   Entry->>Store: openDetails(seed)
@@ -91,7 +92,9 @@ sequenceDiagram
   Tauri->>RustSidecar: run_blocking_job
   RustSidecar->>Sidecar: MCD_COMMAND=douban-details + 环境变量
   Sidecar->>DetailService: resolveDoubanMovieDetails
-  DetailService->>Douban: 请求结构化 API 和详情页补充字段
+  DetailService->>Api: 请求 movie API，允许同 ID 跳转 tv API
+  DetailService->>Html: 请求并校验最终 URL、HTML 类型和详情结构
+  DetailService->>DetailService: API 优先，HTML 补充或完整兜底；简介优先展开文本
   DetailService-->>Sidecar: DoubanMovieDetails
   Sidecar-->>RustSidecar: douban-details-result
   RustSidecar-->>Bridge: JSON string
@@ -106,9 +109,10 @@ sequenceDiagram
 - `apps/desktop/src/lib/runtime-bridge.ts`：`resolveDoubanMovieDetails`。
 - `apps/desktop/src-tauri/src/commands/task.rs`：`resolve_douban_movie_details` 命令。
 - `apps/desktop/src-tauri/src/sidecar/douban.rs`：以隐藏窗口方式启动详情 sidecar，并透传可选 Cookie 环境变量。
-- `apps/sidecar/src/services/douban-details.ts`：校验豆瓣 subject URL，合并结构化 API 与 HTML 补充字段。
+- `apps/desktop/src-tauri/src/sidecar/parser.rs`：sidecar 非零退出时，从 stderr、stdout 中优先提取最后一条结构化 `ERROR.message`。
+- `apps/sidecar/src/services/douban-details.ts`：校验豆瓣 subject URL；结构化 API 优先，详情页补充或在 API 无权限时完整兜底，并优先提取 `v:summary` 内 `.all` 展开简介。
 
-注意：详情缓存不持久化。无 Cookie 时允许匿名尝试；URL 只允许 `https://movie.douban.com/subject/<id>/`，结构化 API 的手动重定向只允许同一 subject ID 从 movie 切换到 tv，不能放宽为任意跳转。
+注意：详情缓存不持久化。无 Cookie 时允许匿名尝试；URL 只允许 `https://movie.douban.com/subject/<id>/`，结构化 API 的手动重定向只允许同一 subject ID 从 movie 切换到 tv，不能放宽为任意跳转。详情页兜底也必须保持规范 URL、HTML 响应和详情结构；API 与页面都不可用时返回原始结构化请求错误。
 
 ## 自动下载链路
 
@@ -327,7 +331,13 @@ sequenceDiagram
 ```mermaid
 flowchart TB
   ImageProcess["ImageProcessModal.vue\n拼版 / 标注 / 导出"] --> Layout["useImageProcessLayoutState\n默认单图布局"]
-  ImageProcess --> Placement["useImageProcessSlotImages\ncover / 缩放 / 受限平移"]
+  ImageProcess --> Placement["useImageProcessSlotImages\n批量拖入 / 缩放 / 旋转 / 受限平移"]
+  ImageProcess --> Background["useImageProcessBackgroundPlacement\n等比完整显示 / 缩放 / 受限平移"]
+  ImageProcess --> Annotations["useImageProcessAnnotations\n多行文字 / 对齐参考线 / 撤销"]
+  Layout --> Canvas["Canvas 导出\n预览比例决定像素尺寸"]
+  Placement --> Canvas
+  Background --> Canvas
+  Annotations --> Canvas
   ImageProcess --> Bridge["runtime-bridge.ts"]
   CustomCrop["CustomCropModal.vue\n上传 / 拖拽 / 裁剪"] --> Bridge
   Bridge --> Tauri["commands/image.rs"]
@@ -344,8 +354,11 @@ flowchart TB
 - 自定义裁剪的 Tauri 拖拽读取必须走 `readDroppedImageFile(filePath)`，不绑定输出根目录。
 - `readLocalImageFile(filePath, outputRootDir)` 仍用于需要输出根目录边界校验的读取场景。
 - 保存裁剪结果固定写入输出根目录下的 `custom-crop-photo`。
-- `useImageProcessLayoutState.ts` 默认选择 `q1-full` 单图布局；格子固定，图片始终以 cover 基准覆盖格子。
-- `useImageProcessSlotImages.ts` 把缩放限制在 `1-3`，只有当前选中且 scale > 1 的图片可平移；偏移量按图片超出格子的范围归一化并夹紧，预览和 Canvas 导出共用同一 placement 计算。
+- `useImageProcessLayoutState.ts` 默认选择 `q1-full` 单图布局；画布预览缩放限制在 `0.3-1`，导出长边按 `1800 * previewScale` 计算。
+- `useImageProcessSlotImages.ts` 把前景图缩放限制在 `1-3`；当前选中图片只要存在溢出轴即可平移，偏移按格子范围夹紧。旋转按 90 度归一化，预览和 Canvas 导出共用 placement，并在每个格子内先做圆角裁剪。
+- 浏览器 File 和 Tauri 路径多图拖入都从第一格按布局顺序填充。Tauri 异步读取用 revision 保证最后批次生效，清除或卸载后旧成功结果和旧错误提示都必须被忽略。
+- `useImageProcessBackgroundPlacement.ts` 让背景图保持原比例完整位于画布内，缩放限制在 `0.3-1`，拖动偏移不会让任何部分超出画布；移除背景图时重置大小、透明度和当前选择。
+- `useImageProcessAnnotations.ts` 管理文字、箭头、方框和圆圈；文字支持多行、左/中/右对齐和中心吸附参考线，撤销历史最多 50 步。
 
 ## 打包和 sidecar resources 链路
 

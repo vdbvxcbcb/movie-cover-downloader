@@ -32,7 +32,7 @@
 | `apps/desktop/src/components/queue/SearchMovieModal.vue` | 豆瓣搜索影视弹窗；页级缓存、结果操作 | 搜索结果、分页器、添加链接、选图下载入口 |
 | `apps/desktop/src/components/queue/TaskTable.vue` | 下载队列表格、任务操作、输出目录入口 | 暂停、继续、重试、删除、打开目录、进度展示 |
 | `apps/desktop/src/components/queue/CustomCropModal.vue` | 自定义裁剪弹窗 | 上传/拖拽读取、本地图片裁剪、保存 |
-| `apps/desktop/src/components/queue/ImageProcessModal.vue` | 图片处理大弹窗 | 拼版、背景、透明度、标注、导出 |
+| `apps/desktop/src/components/queue/ImageProcessModal.vue` | 图片处理大弹窗；编排拼版、画布预览、前景/背景图层、标注和 Canvas 导出 | 拼版交互、旋转、图层选择、预览/导出一致性 |
 | `apps/desktop/src/components/queue/movie-details/MovieDetailModal.vue` | 共用影片详情弹窗；字段、评分、主演折叠、简介复制和错误状态 | 详情布局、字段顺序、封面兜底、复制简介、关闭/重试 |
 
 ## 前端工具和测试
@@ -51,7 +51,11 @@
 | `apps/desktop/src/composables/useTaskComparison.ts` | 任务重复和比较辅助 |
 | `apps/desktop/src/composables/useTaskOutputDirectory.ts` | 任务输出目录辅助 |
 | `apps/desktop/src/components/composables/useSelectedPhotoGridSelection.ts` | 选图网格选择/框选逻辑 |
-| `apps/desktop/src/components/composables/useImageProcess*.ts` | 图片处理弹窗布局、图片缩放/受限平移和标注逻辑 |
+| `apps/desktop/src/components/composables/useImageProcessLayoutState.ts` | 默认单图布局、可见格子和随画布预览比例变化的导出尺寸 |
+| `apps/desktop/src/components/composables/useImageProcessSlotImages.ts` | 前景图批量拖入、换格、缩放、90 度旋转、受限平移和异步拖入竞态保护 |
+| `apps/desktop/src/components/composables/useImageProcessBackgroundPlacement.ts` | 背景图等比完整显示、30%-100% 缩放和画布边界内拖动 |
+| `apps/desktop/src/components/composables/useImageProcessAnnotations.ts` | 文字/形状标注、多行文字、对齐参考线、清除和最多 50 步撤销历史 |
+| `apps/desktop/src/components/queue/image-process/__tests__/*.spec.ts` | 图片处理组件与 composable 回归测试 |
 | `apps/desktop/src/**/__tests__/*.spec.ts` | 当前主要前端 Vitest 测试，按源码目录就近放置 |
 | `apps/desktop/src/**/*.{test,spec}.ts` | Vitest 配置允许的补充测试入口 |
 
@@ -90,7 +94,7 @@
 | --- | --- |
 | `apps/desktop/src-tauri/src/sidecar/mod.rs` | 模块导出 |
 | `apps/desktop/src-tauri/src/sidecar/runtime.rs` | 运行时管理：sidecar 路径解析、请求间隔控制、错误格式化 |
-| `apps/desktop/src-tauri/src/sidecar/parser.rs` | 输出解析：stdout/stderr 解析、日志事件、进度事件、结果提取 |
+| `apps/desktop/src-tauri/src/sidecar/parser.rs` | 输出解析：stdout/stderr、日志/进度/结果提取；非零退出时优先透传 stderr 或 stdout 中最后一条结构化错误消息 |
 | `apps/desktop/src-tauri/src/sidecar/download.rs` | 下载执行：下载任务阻塞执行、豆瓣图片发现 |
 | `apps/desktop/src-tauri/src/sidecar/douban.rs` | 豆瓣操作：搜索、标题解析、预览解析、影片详情 sidecar 调用 |
 
@@ -136,7 +140,7 @@ Rust 测试主要在 `lib.rs` 底部，重点覆盖：
 | `apps/sidecar/src/services/downloader.ts` | 图片下载、断点续传、格式转换、裁剪、保存、进度上报 | 下载失败、图片格式、尺寸比例、续传 |
 | `apps/sidecar/src/services/douban-search.ts` | 豆瓣搜索页解析 | 搜索结果缺失、封面/简介解析 |
 | `apps/sidecar/src/services/douban-title.ts` | 豆瓣详情页标题和封面预览解析 | 手动粘贴链接后的标题/封面 |
-| `apps/sidecar/src/services/douban-details.ts` | 合并豆瓣结构化 API 和详情页字段，校验 subject URL、重定向和封面域名 | 影片字段缺失、评分、详情风控、movie/tv API 跳转 |
+| `apps/sidecar/src/services/douban-details.ts` | 结构化 API 优先，详情页补充或完整兜底；校验 subject URL、API 重定向、详情页最终 URL/类型/结构，并提取展开简介 | 影片字段缺失、完整简介、API 无权限、详情风控、movie/tv API 跳转 |
 | `apps/sidecar/src/services/cookie-pool.ts` | sidecar 内 Cookie 读取和站点分发 | Cookie 是否传入真实请求 |
 | `apps/sidecar/src/services/task-control.ts` | sidecar 安全点暂停/取消读取 | 暂停、继续、取消 |
 | `apps/sidecar/src/services/resume-store.ts` | 断点续传元数据 | `.part` 和 resume metadata |
@@ -199,7 +203,7 @@ cargo clippy --all-targets
 
 - **lib.rs**: 从 3562 行减少到 857 行（减少 76%）
 - **新增 20 个模块文件**：清晰的职责分离
-- **测试覆盖**: 40/40 单元测试全部通过
+- **测试覆盖**: 41/41 单元测试全部通过
 - **代码质量**: Clippy 零警告
 
 重构后的优势：

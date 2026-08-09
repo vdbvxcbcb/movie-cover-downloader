@@ -9,7 +9,8 @@
 - 新增、删除或重命名跨层入口，例如 Tauri command、runtimeBridge 方法、sidecar `MCD_COMMAND`。
 - 改变搜索、影片详情、自动下载、选图发现、选图下载、Cookie、持久化、图片处理任一主链路。
 - 改变选图下载约束，例如分类、分页/游标、选择/预览、重复任务检测。
-- 改变影片详情入口、字段、缓存/防抖/请求竞争规则、豆瓣 URL 或重定向白名单。
+- 改变影片详情入口、字段、缓存/防抖/请求竞争规则、豆瓣 URL、重定向白名单、API/HTML 回退优先级或 sidecar 错误提取。
+- 改变图片处理的前景/背景图层、批量拖入、缩放/旋转/平移边界、画布预览与导出尺寸关系、标注撤销规则。
 - 改变持久化字段、SQLite 表、状态快照结构。
 - 移动关键文件或拆分热点文件。
 - 改变前端 Store 边界，例如 `app.ts`、`taskQueue.ts`、`taskActions.ts`、`cookies.ts`、`logs.ts`、`ui.ts` 的职责迁移。
@@ -46,6 +47,8 @@
 - `runtime-flows.md` 的链路是否包含新的跨层入口或事件。
 - `module-index.md` 的文件路径是否真实存在。
 - 影片详情链路是否仍覆盖三个封面入口、`movieDetails.ts`、Tauri command 和 `douban-details.ts`。
+- 影片详情文档是否明确结构化 API 优先、有效详情页补充或完整兜底、展开简介优先和结构化错误透传。
+- 图片处理链路是否仍覆盖 `ImageProcessModal.vue`、布局/前景图/背景图/标注 composable、批量拖入竞态和 Canvas 导出。
 - `AGENTS.md` 是否仍指向正确的 AI 图谱入口。
 - Store 相关说明是否仍符合当前拆分后的真实职责。
 - 测试路径是否仍以当前配置实际包含的文件为准。
